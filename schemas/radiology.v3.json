@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cdi:radiology.v3",
+  "title": "Radiology / imaging report extraction (v3)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["patient", "modality", "extracted_at_confidence"],
+  "properties": {
+    "patient": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "name": {"type": ["string", "null"]}, "mrn": {"type": ["string", "null"]},
+        "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}
+      }
+    },
+    "study_date": {"type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial"},
+    "modality": {"type": "string", "description": "USG | X-RAY | CT | MRI | ECHO | MAMMOGRAPHY | OTHER"},
+    "study_name": {"type": ["string", "null"]},
+    "findings": {"type": ["string", "null"]},
+    "impression": {"type": ["string", "null"]},
+    "impression_concepts": {"type": "array", "items": {"$ref": "cdi:common.defs#/$defs/coded"}},
+    "reported_by": {"type": ["string", "null"]},
+    "extracted_at_confidence": {"$ref": "cdi:common.defs#/$defs/confidence"},
+    "notes_for_reviewer": {"type": ["string", "null"]}
+  }
+}

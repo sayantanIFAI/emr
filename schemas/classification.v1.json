@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cdi:classification.v1",
+  "title": "Document classification (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["doc_type", "is_handwritten", "languages", "confidence"],
+  "properties": {
+    "doc_type": {
+      "type": "string",
+      "enum": [
+        "prescription", "lab_report", "radiology_report", "discharge_summary",
+        "operative_note", "opd_note", "vitals_sheet", "referral", "consent_form",
+        "immunization_card", "other"
+      ]
+    },
+    "specialty": {
+      "type": ["string", "null"],
+      "description": "cardiology | orthopaedics | general_medicine | obgyn | paediatrics | ... | null"
+    },
+    "is_handwritten": { "type": "boolean" },
+    "languages": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["en", "bn", "hi", "ta", "te", "mr", "gu", "kn", "ml", "pa", "or", "ur", "other"] },
+      "minItems": 1
+    },
+    "page_spans": {
+      "type": "array",
+      "description": "for multi-document scans: which page ranges are which doc_type",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from_page", "to_page", "doc_type"],
+        "properties": {
+          "from_page": { "type": "integer", "minimum": 1 },
+          "to_page": { "type": "integer", "minimum": 1 },
+          "doc_type": { "type": "string" }
+        }
+      }
+    },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "rationale": { "type": ["string", "null"], "maxLength": 400 }
+  }
+}

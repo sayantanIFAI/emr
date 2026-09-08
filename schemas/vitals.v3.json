@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cdi:vitals.v3",
+  "title": "Vitals / nursing intake sheet extraction (v3)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["patient", "vitals", "extracted_at_confidence"],
+  "properties": {
+    "patient": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "mrn": { "type": ["string", "null"] },
+        "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
+      }
+    },
+    "recorded_at": { "type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial" },
+    "vitals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "evidence"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "one of: systolic_bp, diastolic_bp, heart_rate, resp_rate, temperature, spo2, weight, height, bmi, pain_score"
+          },
+          "value": { "$ref": "cdi:common.defs#/$defs/quantity" },
+          "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
+        }
+      }
+    },
+    "symptoms": {
+      "type": "array",
+      "items": { "$ref": "cdi:common.defs#/$defs/coded" }
+    },
+    "allergies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["substance_text", "evidence"],
+        "properties": {
+          "substance_text": { "type": "string" },
+          "reaction_text": { "type": ["string", "null"] },
+          "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
+        }
+      }
+    },
+    "extracted_at_confidence": { "$ref": "cdi:common.defs#/$defs/confidence" },
+    "notes_for_reviewer": { "type": ["string", "null"] }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cdi:lab_report.v3",
+  "title": "Laboratory report extraction (v3)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["patient", "results", "extracted_at_confidence"],
+  "properties": {
+    "patient": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "mrn": { "type": ["string", "null"] },
+        "age_text": { "type": ["string", "null"] },
+        "sex": { "type": ["string", "null"], "enum": ["M", "F", "O", null] },
+        "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
+      }
+    },
+    "lab_name": { "type": ["string", "null"] },
+    "panel": { "type": ["string", "null"], "description": "e.g. 'Biochemistry', 'CBC'" },
+    "collected_at": { "type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial" },
+    "reported_at": { "type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial" },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["analyte_text", "value", "evidence"],
+        "properties": {
+          "analyte_text": { "type": "string" },
+          "loinc_hint": { "type": ["string", "null"] },
+          "value": { "$ref": "cdi:common.defs#/$defs/quantity" },
+          "value_text": { "type": ["string", "null"], "description": "for non-numeric results e.g. 'Positive'" },
+          "ref_low": { "type": ["number", "null"] },
+          "ref_high": { "type": ["number", "null"] },
+          "ref_text": { "type": ["string", "null"] },
+          "flag": { "type": ["string", "null"], "enum": ["H", "L", "HH", "LL", "A", "N", null] },
+          "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
+        }
+      }
+    },
+    "verified_by": { "type": ["string", "null"] },
+    "impression": { "type": ["string", "null"] },
+    "extracted_at_confidence": { "$ref": "cdi:common.defs#/$defs/confidence" },
+    "notes_for_reviewer": { "type": ["string", "null"] }
+  }
+}

@@ -1,0 +1,141 @@
+name: cdi-adapter
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: cdi
+      POSTGRES_PASSWORD: cdi
+      POSTGRES_DB: cdi
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cdi"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: cdiadmin
+      MINIO_ROOT_PASSWORD: cdiadminsecret
+    ports: ["9000:9000", "9001:9001"]
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  createbuckets:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 cdiadmin cdiadminsecret &&
+      mc mb --ignore-existing local/cdi-documents &&
+      echo 'bucket ready'
+      "
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile
+    command: alembic upgrade head
+    environment:
+      CDI_DATABASE_URL: postgresql+psycopg://cdi:cdi@postgres:5432/cdi
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile
+    command: uvicorn cdi_adapter.api:app --host 0.0.0.0 --port 8080
+    environment:
+      CDI_DATABASE_URL: postgresql+psycopg://cdi:cdi@postgres:5432/cdi
+      CDI_REDIS_URL: redis://redis:6379/0
+      CDI_S3_ENDPOINT_URL: http://minio:9000
+      CDI_INBOX_DIR: /data/inbox
+      CDI_PROCESSED_DIR: /data/processed
+      CDI_FAILED_DIR: /data/failed
+    ports: ["8080:8080"]
+    volumes:
+      - inbox:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile
+    command: celery -A cdi_adapter.worker.celery_app worker -Q cdi -l info --concurrency 2
+    environment:
+      CDI_DATABASE_URL: postgresql+psycopg://cdi:cdi@postgres:5432/cdi
+      CDI_REDIS_URL: redis://redis:6379/0
+      CDI_S3_ENDPOINT_URL: http://minio:9000
+    volumes:
+      - inbox:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  watcher:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile
+    command: python -m cdi_adapter.ingest.watcher
+    environment:
+      CDI_DATABASE_URL: postgresql+psycopg://cdi:cdi@postgres:5432/cdi
+      CDI_REDIS_URL: redis://redis:6379/0
+      CDI_S3_ENDPOINT_URL: http://minio:9000
+      CDI_INBOX_DIR: /data/inbox
+      CDI_PROCESSED_DIR: /data/processed
+      CDI_FAILED_DIR: /data/failed
+    volumes:
+      - inbox:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+
+  # --- optional: local model gateway (needs an NVIDIA GPU + nvidia-container-toolkit) ---
+  # vllm:
+  #   image: vllm/vllm-openai:latest
+  #   command: >
+  #     --model Qwen/Qwen2.5-VL-7B-Instruct --port 8000
+  #     --max-model-len 16384 --gpu-memory-utilization 0.85
+  #   ports: ["8000:8000"]
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+
+volumes:
+  pgdata:
+  miniodata:
+  inbox:

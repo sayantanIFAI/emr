@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cdi:opd_note.v3",
+  "title": "OPD consultation / advice note extraction (v3)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["patient", "extracted_at_confidence"],
+  "properties": {
+    "patient": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "name": {"type": ["string", "null"]},
+        "mrn": {"type": ["string", "null"]},
+        "age_text": {"type": ["string", "null"]},
+        "sex": {"type": ["string", "null"], "enum": ["M", "F", "O", null]},
+        "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}
+      }
+    },
+    "encounter_date": {"type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial"},
+    "prescriber": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"name": {"type": ["string", "null"]}, "department": {"type": ["string", "null"]},
+                     "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}}
+    },
+    "chief_complaints": {"type": "array", "items": {"$ref": "cdi:common.defs#/$defs/coded"}},
+    "diagnoses": {"type": "array", "items": {"$ref": "cdi:common.defs#/$defs/coded"}},
+    "medications": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["drug_text", "evidence"],
+        "properties": {
+          "drug_text": {"type": "string"},
+          "strength": {"$ref": "cdi:common.defs#/$defs/quantity"},
+          "dose": {"$ref": "cdi:common.defs#/$defs/quantity"},
+          "route": {"type": ["string", "null"]},
+          "frequency_text": {"type": ["string", "null"]},
+          "duration_days": {"type": ["integer", "null"]},
+          "status": {"type": ["string", "null"], "enum": ["active", "stopped", "changed", null]},
+          "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}
+        }
+      }
+    },
+    "vitals": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["name", "evidence"],
+        "properties": {
+          "name": {"type": "string"},
+          "value": {"$ref": "cdi:common.defs#/$defs/quantity"},
+          "systolic": {"type": ["number", "null"]},
+          "diastolic": {"type": ["number", "null"]},
+          "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}
+        }
+      }
+    },
+    "advice": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": false, "required": ["text", "evidence"],
+                "properties": {"text": {"type": "string"},
+                               "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}}}
+    },
+    "follow_up": {"type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial"},
+    "extracted_at_confidence": {"$ref": "cdi:common.defs#/$defs/confidence"},
+    "notes_for_reviewer": {"type": ["string", "null"]}
+  }
+}
