@@ -38,7 +38,9 @@ fi
 curl -s "http://127.0.0.1:${MLP}/healthz"; echo
 
 echo "########## 3. web app  (:$WBP) ##########"
-pkill -f cdi_adapter.webapp 2>/dev/null || true; sleep 1
+# on these pods the only RunPod-edge-routed HTTP port is 8888 (Jupyter's) — take it
+pkill -f jupyter 2>/dev/null || true
+pkill -f cdi_adapter.webapp 2>/dev/null || true; sleep 3
 setsid nohup python -m cdi_adapter.webapp > /workspace/logs/webapp.log 2>&1 < /dev/null &
 echo "webapp pid $!"
 for _ in $(seq 1 30); do
@@ -50,6 +52,5 @@ curl -s "http://127.0.0.1:${WBP}/healthz"; echo
 POD=$(tr '\0' '\n' < /proc/1/environ | sed -n 's/^RUNPOD_POD_ID=//p')
 echo
 echo "======================================================================"
-echo " LIVE URL:  https://${POD}-8081.proxy.runpod.net"
-echo " (RunPod proxies external :8081 -> this pod's localhost:${WBP})"
+echo " LIVE URL:  https://${POD}-${WBP}.proxy.runpod.net"
 echo "======================================================================"
