@@ -354,6 +354,32 @@ persisted, exception re-raised.
   (idempotent re-run); bulk `insert_ocr_blocks`; `status='ocr_done'`; audit; enqueue S4.
 - Observed: printed lab report → 23–39 blocks, line confidences 0.94–1.00.
 
+### Identity — MPI, fetched from the documents · `cdi_adapter.mpi`
+
+The uploader supplies **only the files** (ABHA optional). Identity is read from the
+documents themselves:
+
+- `candidate_from_payload` pulls `name` / `sex` / `age_text` / `dob` from each
+  document's extracted `patient` block; `parse_name` strips titles
+  (`Dr`/`Mr`/`S/o`/…), `parse_sex` normalises to `M`/`F`/`O`, `parse_age` →
+  approximate birth year.
+- `resolve_identity` (called by S4 for the first document of a job):
+  1. **ABHA** match → existing patient;
+  2. else **fuzzy**: `SequenceMatcher` on the normalised name + birth-year within 1
+     → existing patient at ratio ≥ 0.90;
+  3. else **mint** a new record with `mpi_id = CFP-<YYYY>-<seq>` (Postgres
+     `patient_mpi_seq`).
+- Every document's raw reading is stored in `patient_identity_alias`.
+- After all of a job's documents: `merge_identity_evidence` picks the
+  most-supported name / sex / DOB (mode, longest on ties) and sets
+  `identity_confidence` from how strongly the documents agreed.
+- The FHIR `Patient` carries the CareFlow id as an identifier
+  (`system: https://careflow.clinic/mpi`, `use: usual`) alongside ABHA, plus
+  `gender` and `birthDate`.
+
+Verified: 3 sample documents, no manual entry → `CFP-2026-000001`, name "Anjali
+Das", sex M, DOB 1978-01-01, `identity_confidence 0.99`.
+
 ### S4 — Extract · `cdi_adapter.extract`
 
 - Schema by `doc_type` (`extract/prompt.SCHEMA_FOR_DOC_TYPE`): `prescription.v3`,
@@ -534,14 +560,22 @@ never silently becomes trusted clinical data").
 
 ## 7. Web application (`cdi_adapter.webapp`)
 
+Branded **CareFlow Polyclinic** — white + blue, inline-SVG logo, system fonts, no
+build step / no CDN. `theme.py` holds the palette tokens, type scale, spacing,
+component styles and the shared header; `page.py` (upload + results) and
+`review_page.py` (S8 console) render from it. The upload form has **no name/sex
+fields** — a drag-and-drop dropzone, an optional ABHA input, and a note that
+identity is read from the documents. After processing, a **patient banner** shows
+the generated `CFP-…` id, name, sex, DOB and identity confidence.
+
 ### 7.1 Endpoints
 
 | Method / path | Purpose |
 |---|---|
 | `GET /` | single-page upload UI (`page.py`, dark theme, no build step) |
 | `GET /healthz` | `{db, s3, mlserve}` checks |
-| `POST /api/jobs` | multipart: `patient_name`, `abha?`, `gender?`, `files[]` (≤10) → `{job_id}` (202) |
-| `GET /api/jobs/{id}` | job + per-document `{status, step, doc_type, facts, error}` |
+| `POST /api/jobs` | multipart: `abha?` + `files[]` (≤10) → `{job_id}` (202). No name/sex — read from the documents. |
+| `GET /api/jobs/{id}` | job + `patient` (`mpi_id`, name, sex, DOB, identity_confidence) + per-document `{status, step, doc_type, facts, accepted, in_review}` |
 | `GET /api/jobs/{id}/fhir` | `project_patient` result (all bundles) |
 | `GET /api/jobs/{id}/fhir/download` | same as a downloadable `fhir_<job>.json` |
 | `GET /api/patients/{id}/fhir` | bundles for an existing patient |
