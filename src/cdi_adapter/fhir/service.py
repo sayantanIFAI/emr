@@ -307,9 +307,17 @@ def project_patient(patient_id: str | UUID) -> dict[str, Any]:
     return {
         "patient": {
             "id": patient_id,
-            "name": " ".join(x for x in [prow.get("name_given"), prow.get("name_family")] if x),
+            "mpi_id": prow.get("mpi_id"),
+            "name": (prow.get("name_full")
+                     or " ".join(x for x in [prow.get("name_given"), prow.get("name_family")] if x)
+                     or None),
+            "sex": prow.get("gender"),
+            "birth_date": str(prow["birth_date"])[:10] if prow.get("birth_date") else None,
+            "age_years": prow.get("age_years"),
             "abha_number": prow.get("abha_number"),
             "abha_address": prow.get("abha_address"),
+            "identity_confidence": (float(prow["identity_confidence"])
+                                    if prow.get("identity_confidence") is not None else None),
         },
         "ig_package": settings.ig_package,
         "artifact_count": len(bundles),

@@ -104,16 +104,22 @@ CREATE INDEX IF NOT EXISTS ix_extraction_doc ON extraction (document_id);
 
 CREATE TABLE IF NOT EXISTS patient_identity (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  mpi_id        text,                                -- CareFlow patient id e.g. CFP-2026-000042
   legacy_mrn    text,
   abha_number   text, abha_address text,
-  name_given    text, name_family text,
+  name_given    text, name_family text, name_full text,
   gender        text, birth_date date, birth_date_est bool NOT NULL DEFAULT false,
+  age_years     int,
   phone_hash    text, address_hash text,
   match_status  text NOT NULL DEFAULT 'unlinked',   -- unlinked|auto|clerk_confirmed|abha_verified
   match_score   numeric(4,3),
+  identity_confidence numeric(4,3),
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now()
 );
+CREATE SEQUENCE IF NOT EXISTS patient_mpi_seq START 1;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_patient_mpi_id
+  ON patient_identity (mpi_id) WHERE mpi_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_patient_mrn  ON patient_identity (legacy_mrn);
 CREATE INDEX IF NOT EXISTS ix_patient_abha ON patient_identity (abha_number);
 

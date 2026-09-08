@@ -64,7 +64,9 @@ def _meta(profile: str) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------- #
 def patient(row: dict[str, Any], urn: str) -> dict[str, Any]:
-    name = " ".join(x for x in [row.get("name_given"), row.get("name_family")] if x) or "Unknown"
+    name = (row.get("name_full")
+            or " ".join(x for x in [row.get("name_given"), row.get("name_family")] if x)
+            or "Unknown")
     r: dict[str, Any] = {
         "resourceType": "Patient",
         "id": urn.split(":")[-1],
@@ -72,6 +74,9 @@ def patient(row: dict[str, Any], urn: str) -> dict[str, Any]:
         "name": [{"text": name}],
     }
     ids = []
+    if row.get("mpi_id"):
+        ids.append({"system": "https://careflow.clinic/mpi", "value": row["mpi_id"],
+                    "type": codeable(None, None, "CareFlow patient id"), "use": "usual"})
     if row.get("abha_number"):
         ids.append({"system": ABHA_SYS, "value": row["abha_number"],
                     "type": codeable(None, None, "ABHA Number")})

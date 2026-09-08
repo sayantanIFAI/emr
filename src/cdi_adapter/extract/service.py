@@ -91,6 +91,9 @@ class ExtractResult:
     schema: str
     n_facts: int
     skipped: bool = False
+    patient_id: str | None = None
+    mpi_id: str | None = None
+    identity: dict[str, Any] | None = None   # raw candidate read from THIS doc
 
 
 class _Ctx:
@@ -336,7 +339,8 @@ _HANDLERS = {
 
 # --------------------------------------------------------------------------- #
 def extract_document(document_id: str, *, patient_id: str | None = None,
-                     encounter_id: str | None = None) -> ExtractResult:
+                     encounter_id: str | None = None,
+                     abha_hint: str | None = None) -> ExtractResult:
     client = get_client()
     with session_scope() as sess:
         doc = repo.get_document(sess, document_id)
@@ -381,17 +385,30 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
     blocks_by_id = {str(b["id"]): b for b in blocks}
     handler = _HANDLERS.get(schema_id)
 
+    from ..mpi.service import (candidate_from_payload, merge_identity_evidence,
+                               record_alias, resolve_identity)
+
     with session_scope() as sess:
-        # patient + encounter
-        pid = patient_id
-        if not pid:
-            pat = (payload.get("patient") or {})
-            nm = (pat.get("name") or "").strip()
-            given, _, family = nm.partition(" ")
-            pid = str(repo.get_or_create_patient(
-                sess, name_given=given or nm or "Unknown", name_family=family or None,
-                legacy_mrn=pat.get("mrn") or doc.get("legacy_patient_ref"),
-            ))
+        # ---- identity: read name / sex / age from THIS document ----
+        cand = candidate_from_payload(payload, abha_hint=abha_hint, source_doc_id=document_id)
+        mpi_id = None
+        if patient_id:
+            pid = patient_id
+            record_alias(sess, pid, cand)
+            row = sess.execute(
+                __import__("sqlalchemy").text(
+                    "SELECT mpi_id FROM patient_identity WHERE id = :i"), {"i": pid}
+            ).first()
+            mpi_id = row[0] if row else None
+        else:
+            res = resolve_identity(sess, cand)
+            pid, mpi_id = res.patient_id, res.mpi_id
+            record_alias(sess, pid, cand)
+        identity_out = {
+            "name": cand.name_full, "sex": cand.sex, "age_years": cand.age_years,
+            "birth_date": cand.birth_date.isoformat() if cand.birth_date else None,
+            "source_document_id": document_id,
+        }
         eid = encounter_id
         if not eid:
             edate, eprec = _parse_date(
@@ -426,5 +443,7 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
                          entity_id=document_id, patient_id=pid,
                          detail={"facts": ctx.n, "doc_type": cls["doc_type"]})
 
-    log.info("extracted", document_id=document_id, doc_type=cls["doc_type"], facts=ctx.n)
-    return ExtractResult(document_id, cls["doc_type"], ctx.n)
+    log.info("extracted", document_id=document_id, doc_type=cls["doc_type"], facts=ctx.n,
+             patient=identity_out.get("name"), mpi_id=mpi_id)
+    return ExtractResult(document_id, cls["doc_type"], ctx.n, patient_id=pid,
+                         mpi_id=mpi_id, identity=identity_out)

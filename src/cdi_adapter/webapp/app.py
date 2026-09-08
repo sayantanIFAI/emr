@@ -44,11 +44,11 @@ def healthz() -> Any:
 
 @app.post("/api/jobs", status_code=202)
 async def submit_job(
-    patient_name: str = Form(...),
     abha: str | None = Form(default=None),
-    gender: str | None = Form(default=None),
     files: list[UploadFile] = File(...),
 ) -> dict[str, Any]:
+    """Patient name, sex and DOB are read from the documents; a CareFlow patient
+    id is generated. ABHA is optional and only helps de-duplicate."""
     if not files:
         raise HTTPException(422, "attach at least one document")
     if len(files) > 10:
@@ -60,7 +60,7 @@ async def submit_job(
             payload.append((f.filename or "document", data))
     if not payload:
         raise HTTPException(422, "all uploads were empty")
-    jid = create_job(patient_name, abha, gender, payload)
+    jid = create_job(abha, payload)
     return {"job_id": jid, "documents": len(payload)}
 
 
