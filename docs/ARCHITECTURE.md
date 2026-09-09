@@ -9,8 +9,10 @@ records into a structured EMR and **ABDM/ABHA FHIR R4** record bundles.
   `/review` the human adjudication queue.
 - **Last perf pass (2026-09-09):** heuristic classifier (no VLM for clean printed
   pages), OCR runs once (before classify, not twice), schema relaxation + one
-  retry, patient-mismatch guard. A 3-document job now completes in **~90 s wall**
-  (was ~140 s); see §7.3–§7.4 for the measured breakdown and the vLLM plan.
+  retry, patient-mismatch guard, and native thread-pool caps sized to the
+  container's real CPU quota. A 3-document job now completes in **~74 s wall**
+  (was ~140 s); extract is 86 % of that. See §7.3–§7.4 for the measured breakdown
+  and the vLLM/XGrammar plan for the rest.
 - **Companion docs:** [`DESIGN.md`](DESIGN.md) is the north-star design + 10-country
   research; this document is **what is actually built and running**.
 - **Governing principle** (adopted verbatim from external review):
@@ -705,17 +707,18 @@ reflects the latest review decisions.
 
 Same 3-document job (`prescription`, `angiogram`, `lab report`), one patient:
 
-| stage | before (2026-09-08) | after (2026-09-09) | change |
-|---|--:|--:|---|
-| ingest ×3 (parallel) | 9.2 / 0.3 / 0.9 | 1.4 / 16.4 / 16.4 | render contention, now that classify no longer blocks on the GPU (see §7.4 #4) |
-| **classify ×3** | 21.6 / 31.8 / 36.2 (VLM) | **0.0 / 0.0 / 0.0** (heuristic) | no VLM call |
-| **OCR ×3** | 9.8 / 4.6 / 23.1 **+ a hidden 2nd pass** | 10.4 / 8.8 / 7.0 (one pass) | page OCR'd once, before classify |
-| **extract ×3 (serial)** | 17.6 / 30.5 / 31.6 | 28.8 / 13.9 / 21.0 | angiogram 3 passes → **1** (schema fixes); no `"Male"` retry |
-| terminology + validate + project | < 0.1 | < 0.1 | — |
-| **total wall (3 docs)** | **~140 s** | **89.8 s** | **−36 %** |
+| stage | 2026-09-08 | + classifier / OCR-once | + CPU thread caps | change |
+|---|--:|--:|--:|---|
+| ingest ×3 (parallel) | 9.2 / 0.3 / 0.9 | 1.4 / 16.4 / 16.4 | **7.4 / 4.2 / 7.2** | thread caps kill the render/OCR thrash |
+| **classify ×3** | 21.6 / 31.8 / 36.2 (VLM) | 0.0 / 0.0 / 0.0 | **0.0 / 0.0 / 0.0** (heuristic) | no VLM call |
+| **OCR ×3** | 9.8 / 4.6 / 23.1 **+ hidden 2nd pass** | 10.4 / 8.8 / 7.0 | **2.1 / 2.6 / 1.8** | one pass; RapidOCR ~3× faster once it stops thrashing 128 threads on 13 cores |
+| **extract ×3 (serial, GPU)** | 17.6 / 30.5 / 31.6 | 28.8 / 13.9 / 21.0 | **28.8 / 13.8 / 21.0** | angiogram 3 passes → **1**; no `"Male"` retry; GPU-bound, unchanged by CPU work |
+| terminology + validate + project | < 0.1 | < 0.1 | < 0.1 | — |
+| **total wall (3 docs)** | **~140 s** | ~90 s | **74.2 s** | **−47 %** |
 
-Extraction facts are unchanged or higher (19 / 14 / 6). `_partial` and schema
-retries are gone. First job after a restart still pays a one-off ~35 s model load.
+Extraction facts unchanged (19 / 14 / 6); zero `_partial`, zero schema retries.
+**Extract is now 86 % of wall time** — the only remaining lever is the GPU
+(§7.4 #1–3). First job after a restart still pays a one-off ~35 s model load.
 
 ### 7.4 Performance plan & the latency floor
 
@@ -733,11 +736,11 @@ Planned changes and their honest effect:
 | 1 | **`hf` → `vllm` async engine** (`AsyncLLMEngine`, paged KV, continuous batching) | **2–3× throughput on Phase 2** — a 5-doc job's wall time, not one doc's latency | 32 GB ⇒ ~15 GB weights + ~12–14 GB KV ⇒ 3–4 concurrent page extractions, not 5 (large image prefill still serialises on compute). vLLM wheels for Blackwell sm_120 + torch 2.8/cu128 are new — budget a build; keep `hf` as rollback. |
 | 2 | **Remove the Phase-2 serialisation lock** in `webapp/jobs.py` | lets vLLM batch concurrent extracts | one-line change, **only after #1** — today it would OOM. Phase 1 is *already* parallel (`ThreadPoolExecutor`, 6 workers); the "`max_workers=1`" premise is not the current code. Celery for web uploads is a *scaling/durability* change (Roadmap #8), not a latency lever. |
 | 3 | **Grammar-locked decoding** (vLLM `guided_json` / XGrammar) | deletes the repair + retry path → ~1 fewer pass (~10–20 s) on docs that retry today | guarantees JSON *validity*, **not clinical fidelity** — the model can still mis-slot a value or hallucinate; S6 + human review stay load-bearing. Needs the v3 schemas *re-tightened* (they were loosened to stop retries) so the grammar actually constrains. Depends on #1. |
-| 4 | **CPU thread hygiene** — pin `OMP_NUM_THREADS` / ORT `intra_op_num_threads`, set `job_max_workers ≈ cores ÷ threads_per_task` | keeps RapidOCR at ~7 s and stops the ingest-render contention that spiked ingest to 16 s | config knobs, no redesign. RapidOCR already runs CPU-only, parallel to the GPU. |
+| 4 | **CPU thread hygiene** — *done (2026-09-09).* `cdi_adapter/_cpu.py` reads the cgroup CPU quota (pod: ~13.6, not the 128 the host reports) and caps `OMP`/`OPENBLAS`/`MKL`/`RAYON`/ORT threads to `(budget-1) ÷ job_max_workers` before NumPy/OpenCV/ONNXRuntime load; `cv2.setNumThreads` + `RapidOCR(intra_op_num_threads=…)`. | ingest 16 s → ~7 s, RapidOCR 7–23 s → ~2 s (it was thrashing 128 threads on 13 cores). 3-doc wall **90 s → 74 s**. | shipped. |
 
-**Realistic target with all four:** a 5-document job in **~20–35 s wall**,
-~12–18 s perceived per document, `_partial` effectively gone — a solid **3–4×**,
-"review starts in well under a minute". Not "almost zero".
+**Realistic target with #1–3 also done:** a 5-document job in **~20–35 s wall**,
+~12–18 s perceived per document, `_partial` effectively gone — a solid **3–4×**
+on top of today's 74 s, "review starts in well under a minute". Not "almost zero".
 
 ---
 
