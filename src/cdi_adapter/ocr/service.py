@@ -18,7 +18,14 @@ class OcrResult:
     n_pages: int
 
 
-def ocr_document(document_id: str) -> OcrResult:
+def ocr_document(document_id: str, *, force_engine: str | None = None) -> OcrResult:
+    """OCR every page and persist the blocks (replacing any previous ones).
+
+    ``force_engine`` pins the engine ("rapidocr" | "vlm"); without it the engine
+    is chosen from the classification (VLM for handwriting). The pipeline runs a
+    fast ``rapidocr`` pass before classification and, only for a page the
+    classifier calls handwritten, a second ``vlm`` pass that supersedes it.
+    """
     with session_scope() as sess:
         doc = repo.get_document(sess, document_id)
         if not doc:
@@ -30,11 +37,16 @@ def ocr_document(document_id: str) -> OcrResult:
         run_id = repo.start_pipeline_run(
             sess, document_id=document_id, stage="ocr",
             model_name="rapidocr+vlm",
-            params={"handwritten": bool(cls and cls["is_handwritten"])},
+            params={"handwritten": bool(cls and cls["is_handwritten"]),
+                    "forced": force_engine},
         )
 
-    handwritten = bool(cls and cls["is_handwritten"])
-    use_vlm = handwritten and settings.handwritten_uses_vlm
+    if force_engine == "vlm":
+        use_vlm = True
+    elif force_engine == "rapidocr":
+        use_vlm = False
+    else:
+        use_vlm = bool(cls and cls["is_handwritten"]) and settings.handwritten_uses_vlm
     engine = "vlm" if use_vlm else settings.ocr_engine
 
     all_blocks: list[dict] = []

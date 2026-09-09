@@ -143,14 +143,22 @@ def _stage1(prog: DocProg, fn: str, raw: bytes, abha: str | None) -> None:
         prog.document_id = res.document_id
         prog.stage("ingest", "done")
 
+        # fast text first: a rapidocr pass the classifier reads directly, so the
+        # same page is not OCR'd twice (classifier hint + real stage)
+        prog.stage("ocr", "running")
+        ocr_document(res.document_id, force_engine="rapidocr")
+        prog.stage("ocr", "done")
+
         prog.stage("classify", "running")
         c = classify_document(res.document_id)
         prog.doc_type = c.doc_type
         prog.stage("classify", "done")
 
-        prog.stage("ocr", "running")
-        ocr_document(res.document_id)
-        prog.stage("ocr", "done")
+        # only a page the classifier calls handwritten needs the slow VLM OCR
+        if c.is_handwritten and settings.handwritten_uses_vlm:
+            prog.stage("ocr", "running")
+            ocr_document(res.document_id, force_engine="vlm")
+            prog.stage("ocr", "done")
     except Exception as exc:  # noqa: BLE001
         prog.status = "error"
         prog.error = str(exc)[:400]

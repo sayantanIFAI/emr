@@ -123,8 +123,15 @@ def classify_document(document_id: str) -> ClassifyResult:
             sess, document_id=document_id, stage="classify",
             model_name="mlserve/vlm", params={"schema": "classification.v1"},
         )
+        # the pipeline OCRs before classifying - reuse those blocks so the page
+        # is not OCR'd a second time just for a hint
+        blocks = repo.list_ocr_blocks(sess, document_id)
 
-    hint = _ocr_hint(pages[0])
+    hint = None
+    if blocks:
+        hint = "\n".join(b["text"] for b in blocks[:80] if b.get("text")) or None
+    if not hint:
+        hint = _ocr_hint(pages[0])
     prompt = build_classification_prompt(n_pages=len(pages), page_hint=hint)
     used_model = "mlserve/vlm"
 
