@@ -52,12 +52,17 @@ class Settings(BaseSettings):
     # --- model gateway (cdi_adapter.mlserve) ---
     mlserve_url: str = "http://127.0.0.1:8077"
     mlserve_port: int = 8077
-    mlserve_backend: str = "stub"          # stub | hf   (hf = transformers Qwen2.5-VL)
+    mlserve_backend: str = "stub"          # stub | hf | vllm
     vlm_model_id: str = "Qwen/Qwen2.5-VL-7B-Instruct"
     vlm_fallback_model_id: str = "Qwen/Qwen2.5-VL-3B-Instruct"
     vlm_max_pixels_classify: int = 1_000_000
     vlm_max_pixels_ocr: int = 2_000_000   # keep activations modest on a 24 GB card
     vlm_dtype: str = "bfloat16"
+    # --- vllm backend (separate `vllm serve` process, OpenAI-compatible) ---
+    vllm_url: str = "http://127.0.0.1:8078/v1"
+    vllm_model: str = ""                    # blank -> use vlm_model_id
+    vllm_timeout_s: float = 240.0
+    vllm_guided_backend: str = "xgrammar"   # token-level JSON-schema decoding
 
     # --- future: vLLM OpenAI endpoint for the DSLM / guided decoding ---
     llm_base_url: str = "http://127.0.0.1:8000/v1"

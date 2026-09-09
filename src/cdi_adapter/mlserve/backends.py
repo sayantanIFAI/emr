@@ -1,16 +1,63 @@
 from __future__ import annotations
 
 import base64
+import copy
 import io
 import json
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from ..config import settings
 from ..logging import get_logger
 
 log = get_logger(__name__)
+
+_SCHEMA_DIR = Path(__file__).resolve().parents[3] / "schemas"
+
+try:
+    _COMMON_DEFS: dict[str, Any] = json.loads(
+        (_SCHEMA_DIR / "common.defs.json").read_text(encoding="utf-8")
+    ).get("$defs", {})
+except Exception:  # noqa: BLE001
+    _COMMON_DEFS = {}
+
+
+def bundle_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Return a self-contained JSON Schema: every ``cdi:common.defs#/$defs/X`` $ref
+    is rewritten to a local ``#/$defs/X`` and the referenced definitions (plus their
+    transitive deps) are embedded on the root. XGrammar / vLLM guided decoding needs
+    a single document with no external refs."""
+    out = copy.deepcopy(schema)
+    local_defs: dict[str, Any] = dict(out.get("$defs", {}))
+    pending: list[str] = []
+
+    def rewrite(node: Any) -> None:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str) and "common.defs" in ref:
+                name = ref.rsplit("/", 1)[-1]
+                node["$ref"] = f"#/$defs/{name}"
+                if name not in local_defs:
+                    pending.append(name)
+            for v in node.values():
+                rewrite(v)
+        elif isinstance(node, list):
+            for v in node:
+                rewrite(v)
+
+    rewrite(out)
+    while pending:
+        name = pending.pop()
+        if name in local_defs or name not in _COMMON_DEFS:
+            continue
+        d = copy.deepcopy(_COMMON_DEFS[name])
+        rewrite(d)
+        local_defs[name] = d
+    if local_defs:
+        out["$defs"] = local_defs
+    return out
 
 
 class Backend:
@@ -143,5 +190,84 @@ class HFQwenVLBackend(Backend):
         }
 
 
+class VLLMBackend(Backend):
+    """Thin OpenAI-compatible client for a separate ``vllm serve`` process.
+
+    vLLM holds the model with a paged KV cache and does continuous batching, so
+    many ``/vlm/generate`` calls in flight share the GPU. ``json_schema`` is sent
+    as ``guided_json`` (XGrammar) → the output is schema-valid by construction,
+    which removes the repair / retry / ``_partial`` path on the client side.
+    """
+
+    name = "vllm"
+
+    def __init__(self) -> None:
+        import httpx
+
+        self._base = settings.vllm_url.rstrip("/")
+        self._model = settings.vllm_model or settings.vlm_model_id
+        self._c = httpx.Client(timeout=settings.vllm_timeout_s)
+
+    def info(self) -> dict[str, Any]:
+        loaded = False
+        served = None
+        try:
+            r = self._c.get(f"{self._base}/models", timeout=5.0)
+            if r.status_code == 200:
+                served = [m["id"] for m in r.json().get("data", [])]
+                loaded = bool(served)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("vllm_probe_failed", error=str(exc)[:200])
+        return {"backend": self.name, "model": self._model, "device": "cuda",
+                "loaded": loaded, "served": served, "guided_backend": settings.vllm_guided_backend}
+
+    def generate(self, image_b64, prompt, *, max_tokens=512, json_schema=None):  # noqa: ANN001
+        sys_txt = (
+            "You are a meticulous clinical document analyst. Transcribe and report "
+            "only what is visibly present. Never invent values."
+        )
+        body: dict[str, Any] = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": sys_txt},
+                {"role": "user", "content": [
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+                    {"type": "text", "text": prompt},
+                ]},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": 0.0,
+        }
+        if json_schema is not None:
+            body["extra_body"] = {
+                "guided_json": bundle_schema(json_schema),
+                "guided_decoding_backend": settings.vllm_guided_backend,
+            }
+            # some vllm builds read these at the top level rather than extra_body
+            body["guided_json"] = body["extra_body"]["guided_json"]
+            body["guided_decoding_backend"] = settings.vllm_guided_backend
+
+        t0 = time.time()
+        r = self._c.post(f"{self._base}/chat/completions", json=body)
+        r.raise_for_status()
+        data = r.json()
+        text = (data["choices"][0]["message"]["content"] or "").strip()
+        usage = data.get("usage", {}) or {}
+        return {
+            "text": text,
+            "backend": self.name,
+            "model": data.get("model", self._model),
+            "usage": {"prompt_tokens": usage.get("prompt_tokens"),
+                      "completion_tokens": usage.get("completion_tokens"),
+                      "latency_s": round(time.time() - t0, 2)},
+        }
+
+
 def make_backend() -> Backend:
-    return StubBackend() if settings.mlserve_backend == "stub" else HFQwenVLBackend()
+    b = settings.mlserve_backend
+    if b == "stub":
+        return StubBackend()
+    if b == "vllm":
+        return VLLMBackend()
+    return HFQwenVLBackend()
