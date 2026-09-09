@@ -352,7 +352,7 @@ def c360(mpi: str) -> dict[str, Any]:
                 "conditions": q("SELECT category, display, code_system, code, clinical_status FROM cn_condition WHERE patient_id = :p"),
                 "observations": q("SELECT category, display, code, value_num, value_unit_ucum, value_string, effective_time FROM cn_observation WHERE patient_id = :p ORDER BY effective_time DESC"),
                 "medication_orders": q("SELECT drug_text, dose_num, dose_unit_ucum, frequency_code, duration_days, instructions FROM cn_medication_order WHERE patient_id = :p"),
-                "lab_results": q("SELECT test_name, code, value_num, value_unit_ucum, ref_range_text, abnormal_flag FROM cn_lab_result WHERE patient_id = :p"),
+                "lab_results": q("SELECT test_name, test_code AS code, value_num, value_unit_ucum, ref_range_text, abnormal_flag FROM cn_lab_result WHERE patient_id = :p"),
                 "diagnostic_reports": q("SELECT category, display, status, conclusion FROM cn_diagnostic_report WHERE patient_id = :p"),
                 "procedures": q("SELECT display, code, status, performed_time FROM cn_procedure WHERE patient_id = :p"),
                 "allergies": q("SELECT substance_display, category, criticality, clinical_status FROM cn_allergy WHERE patient_id = :p"),
