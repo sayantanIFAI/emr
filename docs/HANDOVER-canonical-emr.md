@@ -7,6 +7,57 @@ need to pick it up cold.
 
 ---
 
+## STATUS — a first working vertical slice is BUILT (2026-09-09, commit 4924459)
+
+Done and verified end-to-end on the pod:
+
+- **Migration `0004_canonical_emr`** — the canonical model: 39 tables across
+  `cn_*` (Layer 1 clinical, the 50-domain model), `ops_*` / `fin_*` (Layer 2,
+  skeletal), `ai_*` (AI provenance layer), `rv_*` (workbasket/worklist), plus
+  `cn_fhir_bundle`.
+- **`src/cdi_adapter/canon/promote.py`** — APPROVED `rv_item` → `cn_*` rows +
+  one `cn_provenance` row per resource + the `ai_event → ai_suggestion →
+  ai_clinical_verification` chain + `cn_audit_event`. Idempotent per item.
+- **`src/cdi_adapter/webapp/reviewer.py` + `reviewer_page.py`** — the reviewer
+  app at **`/reviewer`** (own route tree, `/api/reviewer/*`): workbasket → claim
+  into worklist → per-element accept/correct/reject → approve → promote → build
+  bundle → validate. `rv_item` rows are seeded when a job reaches `review`.
+- **`src/cdi_adapter/fhir/canonical.py`** — ABDM `Bundle(type=document)` from
+  canonical rows: Composition first with profile sections, Patient carrying ABHA
+  **and** a distinct MRN identifier, INPS dedicated vital-sign profiles
+  (`ObservationBP`, `ObservationBodyWeight`, …), MedicationRequest / Condition /
+  Observation / DiagnosticReport / Procedure / AllergyIntolerance.
+- **`src/cdi_adapter/fhir/validate_abdm.py`** — HL7 `org.hl7.fhir` validator CLI
+  with the `nrces.fhir.r4.ndhm` IG **if `java` + `CDI_FHIR_VALIDATOR_JAR` are
+  present** (they are not on the pod yet), else a Python conformance checker
+  (Bundle.type, Composition-first, reference resolution, ABHA + MRN identifier
+  rule, required resources per artifact, profile assertion, Observation value).
+
+Verified runs: a 3-drug prescription for an existing registry patient (has ABHA)
+→ promote (3 MedicationRequest + 1 Condition + 3 Observation) → PrescriptionRecord
+bundle with **both** ABHA + MRN identifiers → `python-conformance` **ok, zero
+issues, ready_to_share**. A lab report → DiagnosticReportRecord (6 lab_result +
+1 diagnostic_report + 6 Observations) → **ok, ready_to_share**.
+
+### Still to do (the rest of the milestone)
+
+1. **Real HL7 validation** — put a JRE + `validator_cli.jar` on the pod
+   (`/workspace/tools/validator_cli.jar`, `CDI_FHIR_VALIDATOR_JAR` env) and the
+   `nrces.fhir.r4.ndhm#7.x` package; `validate_abdm.validate()` already prefers it.
+2. **Composition sections per artifact** — `fhir/canonical._SECTIONS` covers the
+   common artifacts but PrescriptionRecord currently only emits a Medications
+   section, so Condition/Observation ride along unreferenced. Flesh out the
+   section maps against the live v7 profiles (and INPS).
+3. **Terminology** — promote copies the seed-map codes onto `cn_*` rows; wire the
+   real SNOMED/LOINC/ICD service (gap #2) so codes are bound, not just carried.
+4. **Encounter richness, auth, INPS profiles, ops/finance wiring** — see §6.
+5. **Voice→EMR** — the structured `cn_clinical_note` (SOAP) is modelled but not
+   yet fed; the Bengali/Hindi voice path writes here.
+
+The rest of this document is the original spec — still the reference for #1–#5.
+
+---
+
 ## 0. TL;DR of the ask
 
 Build a **production-grade canonical longitudinal clinical data model** as the
