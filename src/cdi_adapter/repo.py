@@ -417,6 +417,18 @@ def insert_fact_provenance(
     )
 
 
+def purge_document_facts(sess: Session, document_id: UUID | str) -> None:
+    """Undo an extraction: remove every clinical_fact/encounter/extraction this
+    document produced (used when a document turns out to be for the wrong patient)."""
+    d = str(document_id)
+    sess.execute(text("DELETE FROM clinical_fact WHERE :d = ANY(source_doc_ids)"), {"d": d})
+    sess.execute(text("DELETE FROM extraction WHERE document_id = :d"), {"d": d})
+    sess.execute(text("DELETE FROM encounter WHERE :d = ANY(derived_from)"), {"d": d})
+    sess.execute(text("DELETE FROM patient_identity_alias WHERE document_id = :d"), {"d": d})
+    sess.execute(
+        text("UPDATE source_document SET status = 'pages_rendered' WHERE id = :d"), {"d": d})
+
+
 def list_clinical_facts(sess: Session, *, patient_id: UUID | str | None = None,
                         document_id: UUID | str | None = None) -> list[dict[str, Any]]:
     if document_id:
@@ -481,10 +493,33 @@ def set_fact_review(
 
 def apply_fact_correction(sess: Session, fact_id: UUID | str, fields: dict[str, Any],
                           reviewed_by: str, note: str | None) -> None:
+    ftype = sess.execute(text("SELECT fact_type FROM clinical_fact WHERE id = :i"),
+                         {"i": str(fact_id)}).scalar_one_or_none()
     allowed = {"local_text", "code_system", "code", "code_display", "code_status",
                "value_num", "value_unit_ucum", "value_text", "abnormal_flag",
                "clinical_status", "verification", "ref_range_low", "ref_range_high"}
     sets = {k: v for k, v in fields.items() if k in allowed}
+
+    # medication: 'value_num'/'value_unit_ucum'/'freq_text' edit the dose row, not clinical_fact
+    if ftype == "medication":
+        md_sets: dict[str, Any] = {}
+        if "value_num" in fields:
+            md_sets["dose_num"] = fields["value_num"]
+        if "value_unit_ucum" in fields:
+            md_sets["dose_unit_ucum"] = fields["value_unit_ucum"]
+        if fields.get("freq_text") is not None:
+            md_sets["frequency_code"] = fields["freq_text"]
+        if "local_text" in fields:
+            md_sets["drug_text"] = fields["local_text"]
+        if md_sets:
+            assigns = ", ".join(f"{k} = :{k}" for k in md_sets)
+            sess.execute(
+                text(f"UPDATE medication_detail SET {assigns} WHERE fact_id = :id"),
+                {**md_sets, "id": str(fact_id)},
+            )
+        sets.pop("value_num", None)
+        sets.pop("value_unit_ucum", None)
+
     if sets:
         assigns = ", ".join(f"{k} = :{k}" for k in sets)
         sess.execute(

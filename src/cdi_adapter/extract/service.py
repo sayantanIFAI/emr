@@ -242,18 +242,52 @@ def _facts_discharge(c: _Ctx, p: dict[str, Any]) -> None:
 
 def _facts_radiology(c: _Ctx, p: dict[str, Any]) -> None:
     sd, prec = _parse_date(p.get("study_date"))
-    concl = p.get("impression") or p.get("findings") or ""
-    concepts = p.get("impression_concepts") or []
-    first_ev = concepts[0].get("evidence") if concepts and isinstance(concepts[0], dict) else None
-    c.add(fact_type="diagnostic_report",
-          local_text=(p.get("study_name") or p.get("modality") or "Imaging study"),
-          value_text=concl if isinstance(concl, str) else str(concl),
-          effective_time=sd, effective_precision=prec, evidence=first_ev)
-    for concept in concepts:
+    title = (p.get("study_name") or p.get("procedure_name") or p.get("modality")
+             or "Imaging study")
+    findings = p.get("findings")
+    impression = p.get("impression")
+    concl = " | ".join(str(x) for x in (impression, findings) if isinstance(x, str) and x.strip())
+
+    # the report itself
+    c.add(fact_type="diagnostic_report", local_text=title,
+          value_text=concl or (str(findings) if findings else None),
+          effective_time=sd, effective_precision=prec)
+
+    # the procedure, if named
+    if p.get("procedure_name"):
+        c.add(fact_type="procedure", local_text=p["procedure_name"],
+              value_code_display=p["procedure_name"], effective_time=sd,
+              effective_precision=prec, clinical_status="completed",
+              value_text=findings if isinstance(findings, str) else None)
+
+    # individual findings (both the structured list and the impression concepts)
+    for concept in (p.get("findings_list") or []) + (p.get("impression_concepts") or []):
         t, ev = _coded_text(concept)
         if t:
             c.add(fact_type="finding", local_text=t, value_code_display=t,
                   evidence=ev, effective_time=sd)
+    # if the model only gave prose, split it into findings by line/semicolon
+    if not (p.get("findings_list") or p.get("impression_concepts")) and isinstance(findings, str):
+        for line in re.split(r"[\n;]+", findings):
+            line = line.strip(" -•\t")
+            if len(line) > 3:
+                c.add(fact_type="finding", local_text=line[:200], value_code_display=line[:200],
+                      effective_time=sd)
+
+    # diagnoses
+    for dx in p.get("diagnoses") or []:
+        t, ev = _coded_text(dx)
+        if t:
+            c.add(fact_type="condition", local_text=t, value_code_display=t, evidence=ev,
+                  clinical_status="active", verification="provisional", onset=sd)
+    if isinstance(impression, str) and "diagnos" in impression.lower() and not (p.get("diagnoses")):
+        m = re.search(r"diagnos\w*[:\-]\s*(.+)", impression, re.I)
+        if m:
+            c.add(fact_type="condition", local_text=m.group(1).strip()[:200],
+                  value_code_display=m.group(1).strip()[:200], verification="provisional")
+
+    if isinstance(p.get("advice"), str) and p["advice"].strip():
+        c.add(fact_type="advice", local_text=p["advice"][:300], value_text=p["advice"])
 
 
 _VITAL_ALIAS = {
@@ -297,32 +331,106 @@ def _add_vitals(c: _Ctx, vitals: list[Any]) -> None:
         put(name or "vital", val, unit, ev)
 
 
+_STRENGTH_RE = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s*(mcg|µg|ug|mg|gm|g|ml|iu|units?|u/ml|iu/ml|%)\b", re.I)
+_UCUM_MAP = {"mcg": "ug", "µg": "ug", "ug": "ug", "mg": "mg", "gm": "g", "g": "g",
+             "ml": "mL", "iu": "[IU]", "u": "[IU]", "unit": "[IU]", "units": "[IU]",
+             "iu/ml": "[IU]/mL", "u/ml": "[IU]/mL", "%": "%"}
+_FREQ_TOKENS = {
+    "od": 1, "qd": 1, "hs": 1, "once daily": 1, "once a day": 1, "at night": 1,
+    "morning": 1, "before breakfast": 1, "after breakfast": 1, "after food daily": 1,
+    "before food daily": 1, "after dinner daily": 1, "daily": 1,
+    "bd": 2, "bid": 2, "twice daily": 2, "twice a day": 2,
+    "tds": 3, "tid": 3, "thrice daily": 3,
+    "qid": 4, "qds": 4,
+    "sos": 0, "prn": 0, "stat": 0,
+    "weekly": 0.143, "once a week": 0.143,
+    "once in a year": 0.003, "twice in a year": 0.006, "once in 6 months": 0.006,
+    "once in 3 months": 0.011,
+}
+
+
+def _parse_strength_from_name(drug: str) -> tuple[str, float | None, str | None]:
+    """'METPURE XL 50 MG' -> ('Metpure XL', 50, 'mg').  'RYZODEG PENFILL 100IU/ML 3ML INJ' -> (..., 100, '[IU]/mL')."""
+    m = _STRENGTH_RE.search(drug or "")
+    if not m:
+        return drug, None, None
+    num = float(m.group(1))
+    unit = _UCUM_MAP.get(m.group(2).lower(), m.group(2).lower())
+    clean = (drug[:m.start()] + drug[m.end():]).strip(" -,/")
+    clean = re.sub(r"\s{2,}", " ", clean) or drug
+    return clean, num, unit
+
+
+def _freq_per_day(text_: str | None) -> float | None:
+    if not text_:
+        return None
+    t = str(text_).strip().lower()
+    m = re.search(r"(\d)\s*-\s*(\d)\s*-\s*(\d)(?:\s*-\s*(\d))?", t)
+    if m:
+        return float(sum(int(x) for x in m.groups() if x))
+    for k, v in sorted(_FREQ_TOKENS.items(), key=lambda kv: -len(kv[0])):
+        if k in t:
+            return float(v)
+    m = re.search(r"x\s*(\d+)\s*(?:times?)?\s*(?:/|per)?\s*day", t)
+    if m:
+        return float(m.group(1))
+    return None
+
+
+def _duration_days(text_: str | None, dur: Any) -> int | None:
+    if isinstance(dur, (int, float)):
+        return int(dur)
+    n = _num(dur)
+    if n:
+        return int(n)
+    if text_:
+        m = re.search(r"x?\s*(\d+)\s*days?", str(text_).lower())
+        if m:
+            return int(m.group(1))
+        if re.search(r"\bmonth\b", str(text_).lower()):
+            mm = re.search(r"(\d+)\s*month", str(text_).lower())
+            return int(mm.group(1)) * 30 if mm else 30
+    return None
+
+
 def _add_medication(c: _Ctx, m: Any, *, intent: str, status: str | None = None) -> None:
     if not isinstance(m, dict):
         if isinstance(m, str):
             m = {"drug_text": m, "evidence": []}
         else:
             return
-    drug = m.get("drug_text") or m.get("text") or m.get("name") or ""
+    raw_drug = m.get("drug_text") or m.get("text") or m.get("name") or ""
+    drug, name_str, name_unit = _parse_strength_from_name(raw_drug)
     s_val, s_unit, _ = _qty(m.get("strength"))
     d_val, d_unit, _ = _qty(m.get("dose"))
-    dur = m.get("duration_days")
+    if s_val is None:
+        s_val, s_unit = name_str, name_unit
+    freq_text = m.get("frequency_text") or m.get("frequency") or m.get("timing") or m.get("dosage")
+    instr = " ".join(str(x) for x in (m.get("instructions"), m.get("notes"), m.get("composition"))
+                     if isinstance(x, str) and x.strip()) or None
+    fpd = _freq_per_day(freq_text) if _freq_per_day(freq_text) is not None else _freq_per_day(instr)
+    dur = _duration_days(freq_text or instr, m.get("duration_days"))
+    route = m.get("route") if isinstance(m.get("route"), str) else None
+    if not route and re.search(r"\binj|injection|penfill|s/?c\b|subcut", raw_drug.lower()):
+        route = "subcutaneous" if "s/c" in raw_drug.lower() or "subcut" in raw_drug.lower() else "injection"
     cs = {"stopped": "stopped", "changed": "active"}.get(status or "", "active")
     fid = c.add(
-        fact_type="medication", local_text=drug, value_code_display=drug,
+        fact_type="medication", local_text=drug or raw_drug, value_code_display=drug or raw_drug,
         evidence=m.get("evidence"), clinical_status=cs, verification="confirmed",
     )
     repo.insert_medication_detail(
         c.sess, fid,
-        drug_text=drug,
+        drug_text=drug or raw_drug,
         form=m.get("form") if isinstance(m.get("form"), str) else None,
         strength_num=s_val, strength_unit=s_unit,
         dose_num=d_val, dose_unit_ucum=d_unit,
-        route=m.get("route") if isinstance(m.get("route"), str) else None,
-        frequency_code=m.get("frequency_text") or m.get("frequency"),
-        duration_days=int(dur) if isinstance(dur, (int, float)) else _num(dur) and int(_num(dur)),
+        route=route,
+        frequency_code=str(freq_text) if freq_text else None,
+        frequency_per_day=fpd,
+        duration_days=dur,
         prn=m.get("prn") if isinstance(m.get("prn"), bool) else None,
-        instructions=m.get("instructions") if isinstance(m.get("instructions"), str) else None,
+        instructions=instr,
         intent=intent,
     )
 

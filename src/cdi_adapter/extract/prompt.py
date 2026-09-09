@@ -28,7 +28,7 @@ MAX_TOKENS_BY_DOC_TYPE = {
     "discharge_summary": 2600,
     "operative_note": 2400,
     "lab_report": 2000,
-    "radiology_report": 1600,
+    "radiology_report": 2400,
     "vitals_sheet": 1400,
 }
 
@@ -47,6 +47,19 @@ _EXTRA = {
         "\nThis is a LAB REPORT. Put every analyte row in `results` with its numeric "
         "`value`, `unit`, reference range and flag. `value` is an object "
         "{value, unit_text, evidence}."
+    ),
+    "radiology_report": (
+        "\nThis is an IMAGING / PROCEDURE report (e.g. USG, CT, MRI, ECHO, "
+        "ANGIOGRAM, ENDOSCOPY). Copy the WHOLE `findings` section verbatim; also "
+        "split it into `findings_list` (one item per finding, e.g. 'LAD 100% ISR', "
+        "'LCX proximally 90% lesion'). Copy `impression` verbatim, set "
+        "`procedure_name` if a procedure was done, and list any stated diagnosis "
+        "in `diagnoses`. Do not summarise - capture every line."
+    ),
+    "discharge_summary": (
+        "\nThis is a DISCHARGE SUMMARY. Capture every discharge diagnosis, every "
+        "procedure with its date, and every discharge medication with dose and "
+        "frequency. Put the hospital course narrative in `course_summary`."
     ),
 }
 

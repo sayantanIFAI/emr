@@ -16,7 +16,8 @@ from ..extract.service import extract_document
 from ..fhir.service import project_patient
 from ..ingest.service import ingest_bytes
 from ..logging import get_logger
-from ..mpi.service import IdentityCandidate, merge_identity_evidence, parse_age, parse_dob
+from ..mpi.service import (IdentityCandidate, dob_match, merge_identity_evidence,
+                           names_match, parse_age, parse_dob)
 from ..ocr.service import ocr_document
 from ..terminology.service import bind_document
 from ..validate.service import validate_document
@@ -59,22 +60,26 @@ class Job:
     patient_id: str | None = None
     patient: dict[str, Any] | None = None
     existing: bool = False         # matched an existing registry patient
-    state: str = "queued"          # queued|running|review|generating|done|error
+    state: str = "queued"          # queued|running|review|generating|done|error|mismatch
     created: float = field(default_factory=time.time)
     docs: list[DocProg] = field(default_factory=list)
     error: str | None = None
+    mismatch: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
 
     def public(self) -> dict[str, Any]:
         pat = self.patient or (self.result or {}).get("patient")
         if pat is not None:
             pat = {**pat, "is_new": not self.existing}
+        # hide the patient identity block until documents have actually been read
+        show_patient = self.state in ("review", "done") or self.state == "mismatch"
         return {
             "job_id": self.id,
             "state": self.state,
-            "patient_id": self.patient_id,
+            "patient_id": self.patient_id if show_patient else None,
             "existing_patient": self.existing,
-            "patient": pat,
+            "patient": pat if show_patient else None,
+            "mismatch": self.mismatch,
             "error": self.error,
             "stages": STAGES,
             "documents": [
@@ -165,6 +170,35 @@ def _stage2(job: "Job", prog: DocProg,
         prog.facts = ex.n_facts
         if ex.patient_id and not job.patient_id:
             job.patient_id = ex.patient_id
+
+        # existing patient selected -> the document must belong to that person
+        if job.existing and ex.identity and (ex.identity.get("name") or "").strip():
+            reg = job.patient or {}
+            doc_name = ex.identity["name"]
+            doc_dob = parse_dob(ex.identity.get("birth_date"))
+            reg_dob = parse_dob(reg.get("birth_date"))
+            if not names_match(doc_name, reg.get("name")) or not dob_match(doc_dob, reg_dob):
+                job.mismatch = {
+                    "selected_name": reg.get("name"), "selected_id": reg.get("mpi_id"),
+                    "selected_dob": reg.get("birth_date"),
+                    "document": prog.filename,
+                    "document_name": doc_name,
+                    "document_dob": ex.identity.get("birth_date"),
+                }
+                job.state = "mismatch"
+                prog.status = "error"
+                prog.error = f"document is for {doc_name}, not {reg.get('name')}"
+                prog.stage("extract", "error")
+                # undo what this document just wrote against the wrong patient
+                try:
+                    with session_scope() as s:
+                        repo.purge_document_facts(s, prog.document_id)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("mismatch_purge_failed", error=str(exc)[:150])
+                log.warning("patient_mismatch", job=job.id, selected=reg.get("name"),
+                            found=doc_name)
+                return
+
         if ex.identity:
             i = ex.identity
             _age_y, bd_age = parse_age(i.get("age_years"))
@@ -215,6 +249,16 @@ def _run_job(jid: str, files: list[tuple[str, bytes]]) -> None:
         # --- phase 2: extract + terminology + validate, serial on the single GPU ---
         for prog in job.docs:
             _stage2(job, prog, candidates)
+            if job.state == "mismatch":
+                break
+
+        if job.state == "mismatch":
+            job.error = (f"Uploaded document is for {job.mismatch['document_name']}"
+                         f" but you selected {job.mismatch['selected_name']}"
+                         f" ({job.mismatch['selected_id']}). Processing stopped -"
+                         f" nothing was written for the wrong patient.")
+            log.warning("job_stopped_mismatch", job=jid)
+            return
 
         # --- phase 3: finalise identity (skip for an existing registry patient) ---
         if job.patient_id and candidates and not job.existing:
@@ -280,20 +324,28 @@ def job_facts(jid: str) -> dict[str, Any]:
                 bbox = next((list(p["bbox_union"]) for p in prov if p.get("bbox_union")), None)
                 md = (repo.get_medication_detail(sess, f["id"])
                       if f["fact_type"] == "medication" else None)
-                rows.append({
+                mv = _med(md) if md else None
+                row = {
                     "fact_id": str(f["id"]), "fact_type": f["fact_type"],
                     "text": f["local_text"],
                     "value_num": float(f["value_num"]) if f["value_num"] is not None else None,
                     "value_unit_ucum": f["value_unit_ucum"], "value_text": f["value_text"],
+                    "freq_text": None,
                     "code_system": f["code_system"], "code": f["code"],
                     "code_display": f["code_display"], "code_status": f["code_status"],
                     "abnormal_flag": f["abnormal_flag"],
                     "confidence": float(f["confidence_overall"] or 0),
                     "review_state": f["review_state"],
-                    "medication": (_med(md) if md else None),
+                    "medication": mv,
                     "bbox": bbox, "page_width": pages[0]["width_px"] if pages else None,
                     "page_height": pages[0]["height_px"] if pages else None,
-                })
+                }
+                if mv:  # surface dose / frequency into the editable columns
+                    row["value_num"] = mv.get("dose")
+                    row["value_unit_ucum"] = mv.get("unit")
+                    row["freq_text"] = mv.get("freq") or (
+                        f"{mv['freq_per_day']:g}/day" if mv.get("freq_per_day") else None)
+                rows.append(row)
             out_docs.append({"document_id": prog.document_id, "filename": prog.filename,
                              "doc_type": prog.doc_type, "page_image_url": img,
                              "seconds": round(prog.seconds, 1) if prog.seconds else None,

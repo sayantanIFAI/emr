@@ -216,8 +216,19 @@ pre.json{background:#0d1836;color:#dce7ff;border-radius:10px;padding:12px;overfl
 .ftable tr.drop{opacity:.4;text-decoration:line-through}
 .ftable tr:hover td{background:var(--blue-tint)}
 .ftable input[type=text]{padding:5px 7px;font-size:var(--fs-13);border-radius:7px}
-.ftable input.sm{width:70px}
-.ftable .conf{font-size:var(--fs-12);color:var(--muted)}
+.ftable input.sm{width:78px}
+.ftable textarea{width:100%;min-width:220px;padding:6px 8px;font-size:var(--fs-13);
+  line-height:1.4;border:1px solid var(--line-strong);border-radius:8px;resize:vertical;
+  font-family:var(--font);white-space:pre-wrap}
+.ftable textarea:focus-visible{outline:none;border-color:var(--blue-500);box-shadow:var(--ring)}
+.ftable td.txt{min-width:260px;max-width:420px}
+.ftable .conf{font-size:var(--fs-12);color:var(--muted);text-align:right}
+
+/* danger / mismatch card */
+.card.danger{border-color:var(--err-line);background:var(--err-bg)}
+.card.danger h2{color:var(--err)}
+.card.danger .mm-detail{background:var(--surface);border:1px solid var(--err-line);
+  border-radius:10px;padding:12px 14px;margin-top:8px;font-size:var(--fs-13)}
 .chk{width:16px;height:16px;accent-color:var(--blue-600);cursor:pointer}
 @media (max-width:860px){.editor{grid-template-columns:1fr}.editor .scan{position:static}}
 

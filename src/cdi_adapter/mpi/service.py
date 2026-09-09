@@ -59,6 +59,29 @@ def name_key(full: str | None) -> str:
     return _WS.sub(" ", _NONNAME.sub(" ", full.lower())).strip()
 
 
+def names_match(a: str | None, b: str | None, cutoff: float = 0.72) -> bool:
+    """Loose match: same person written slightly differently. Also treats one name
+    as a subset of the other (e.g. 'Onkar Choudhury' vs 'Mr Onkar Choudhury')."""
+    ka, kb = name_key(a), name_key(b)
+    if not ka or not kb:
+        return True  # nothing to compare -> don't block
+    if ka == kb:
+        return True
+    sa, sb = set(ka.split()), set(kb.split())
+    if sa and sb and (sa <= sb or sb <= sa):
+        return True
+    common = sa & sb
+    if len(common) >= 2:
+        return True
+    return difflib.SequenceMatcher(None, ka, kb).ratio() >= cutoff
+
+
+def dob_match(a: date | None, b: date | None) -> bool:
+    if not a or not b:
+        return True
+    return abs((a - b).days) <= 366  # within a year (age-derived DOBs are approximate)
+
+
 def parse_age(age_text: Any, ref: datetime | None = None) -> tuple[int | None, date | None]:
     """('45 Y' | '45' | '6 M' | '45yrs') -> (age_years, approx birth_date)."""
     if age_text is None:

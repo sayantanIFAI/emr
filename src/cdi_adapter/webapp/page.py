@@ -42,6 +42,11 @@ _HTML = r"""<!doctype html>
     </div>
   </div>
 
+  <div class="card danger" id="mismatch-card" hidden>
+    <h2>⚠ Patient mismatch — processing stopped</h2>
+    <div id="mismatch"></div>
+  </div>
+
   <div class="card" id="emr-card" hidden>
     <h2>Generate EMR</h2>
     <div class="emr-tabs" id="emrtabs"></div>
@@ -156,12 +161,16 @@ function poll(){
   TIMER=setTimeout(async()=>{
     const j=await (await fetch("api/jobs/"+JOB)).json();
     renderGrid(j);
-    if(j.patient){ $("#patient-card").hidden=false; renderPatient(j.patient); }
+    if(j.state==="mismatch"){ showMismatch(j); $("#hint").textContent=""; $("#go").disabled=false; return; }
+    // the patient card only appears once documents have actually been read
+    if(j.patient && (j.state==="review"||j.state==="done")){
+      $("#patient-card").hidden=false; renderPatient(j.patient);
+    }
     if(j.state==="review"||j.state==="done"){
       $("#hint").textContent="";
       if(j.patient && j.patient.is_new) showDetails(j.patient);
       loadFacts();
-    } else if(j.state==="error"){ $("#hint").textContent="job error: "+(j.error||""); }
+    } else if(j.state==="error"){ $("#hint").textContent="job error: "+(j.error||""); $("#go").disabled=false; }
     else poll();
   }, 1200);
 }
@@ -186,6 +195,23 @@ function renderGrid(j){
       +cells+'<td>'+(done?'<span class="cell done">'+TICK+'</span>':d.status==="error"?'<span class="cell error">✕</span>':'<span class="cell running"><span class="spin"></span></span>')+'</td></tr>';
   }).join("");
   $("#emrgrid").innerHTML=h;
+}
+
+function showMismatch(j){
+  const m=j.mismatch||{};
+  $("#mismatch-card").hidden=false;
+  $("#emr-card").hidden=true; $("#patient-card").hidden=true;
+  $("#editor-card").hidden=true; $("#result-card").hidden=true; $("#details-card").hidden=true;
+  $("#mismatch").innerHTML=
+    '<p>'+esc(j.error||"The uploaded document does not belong to the selected patient.")+'</p>'
+    +'<div class="mm-detail"><b>You selected:</b> '+esc(m.selected_name||"?")+' ('+esc(m.selected_id||"?")+')'
+    +(m.selected_dob?' · DOB '+esc(m.selected_dob):'')+'<br>'
+    +'<b>Document is for:</b> '+esc(m.document_name||"?")+(m.document_dob?' · DOB '+esc(m.document_dob):'')
+    +' <span class="muted">('+esc(m.document||"")+')</span></div>'
+    +'<p style="margin-top:10px">Nothing was written for '+esc(m.selected_name||"the selected patient")
+    +'. Clear the look-up to create a new patient, or upload the correct patient\'s documents.</p>'
+    +'<button class="btn btn-primary" onclick="location.reload()">Start over</button>';
+  $("#mismatch-card").scrollIntoView({behavior:"smooth"});
 }
 
 function renderPatient(p){
@@ -235,16 +261,19 @@ function renderEditor(){
   $("#scanwrap").innerHTML=(d.page_image_url
     ? '<img id="scanimg" src="'+d.page_image_url+'" alt="scanned document"/>'
     : '<p class="empty">no page image</p>')+'<div id="scanbox"></div>';
-  let h='<tr><th style="width:26px"></th><th>Type</th><th>Text</th><th>Value</th><th>Unit</th><th>Code</th><th>Conf</th></tr>';
-  h+=d.facts.map(f=>
-    '<tr id="row_'+f.fact_id+'" onmouseenter="hi('+JSON.stringify(f.bbox||null)+','+(f.page_width||0)+')" onmouseleave="hi(null,0)">'
+  let h='<tr><th style="width:26px"></th><th>Type</th><th>Text</th><th>Value</th><th>Unit</th><th>Frequency</th><th>Code</th><th>Conf</th></tr>';
+  h+=d.facts.map(f=>{
+    const rows=(String(f.text||"").length/40)+1;
+    return '<tr id="row_'+f.fact_id+'" onmouseenter="hi('+JSON.stringify(f.bbox||null)+','+(f.page_width||0)+')" onmouseleave="hi(null,0)">'
     +'<td><input class="chk" type="checkbox" id="k_'+f.fact_id+'" checked onchange="toggleDrop(\''+f.fact_id+'\')"/></td>'
     +'<td><span class="pill">'+esc(f.fact_type)+'</span></td>'
-    +'<td><input type="text" data-f="'+f.fact_id+'" data-k="local_text" value="'+esc(f.text||"")+'" style="width:100%"/></td>'
+    +'<td class="txt"><textarea rows="'+Math.min(6,Math.max(1,Math.ceil(rows)))+'" data-f="'+f.fact_id+'" data-k="local_text">'+esc(f.text||"")+'</textarea></td>'
     +'<td><input class="sm" type="text" data-f="'+f.fact_id+'" data-k="value_num" value="'+(f.value_num!=null?f.value_num:"")+'"/></td>'
     +'<td><input class="sm" type="text" data-f="'+f.fact_id+'" data-k="value_unit_ucum" value="'+esc(f.value_unit_ucum||"")+'"/></td>'
+    +'<td><input type="text" style="width:150px" data-f="'+f.fact_id+'" data-k="freq_text" value="'+esc(f.freq_text||"")+'"'+(f.fact_type==="medication"?'':' disabled')+'/></td>'
     +'<td><input class="sm" type="text" data-f="'+f.fact_id+'" data-k="code" value="'+esc(f.code||"")+'" title="'+esc((f.code_system||"")+" "+(f.code_display||""))+'"/></td>'
-    +'<td class="conf">'+(f.confidence*100).toFixed(0)+'%</td></tr>').join("");
+    +'<td class="conf">'+(f.confidence*100).toFixed(0)+'%</td></tr>';
+  }).join("");
   $("#ftable").innerHTML=h;
 }
 function toggleDrop(fid){ $("#row_"+fid).classList.toggle("drop", !$("#k_"+fid).checked); }
@@ -263,8 +292,8 @@ $("#gen").onclick=async()=>{
       const chk=$("#k_"+f.fact_id);
       if(chk && !chk.checked){ edits.push({fact_id:f.fact_id,action:"drop"}); continue; }
       const corr={};
-      document.querySelectorAll('input[data-f="'+f.fact_id+'"]').forEach(inp=>{
-        const k=inp.dataset.k; let v=inp.value.trim();
+      document.querySelectorAll('[data-f="'+f.fact_id+'"]').forEach(inp=>{
+        const k=inp.dataset.k; let v=(inp.value||"").trim();
         if(k==="value_num"){ if(v==="") return; v=Number(v); if(isNaN(v)) return; if(v!==f.value_num) corr[k]=v; }
         else if(v!==(f[k]||"")){ corr[k]=v; if(k==="code"&&v) corr.code_status="bound"; }
       });
