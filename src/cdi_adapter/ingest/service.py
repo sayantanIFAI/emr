@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 from .. import repo, storage
 from ..config import settings
 from ..db import session_scope
@@ -91,18 +93,30 @@ def ingest_bytes(
         storage.put_bytes(object_key, raw, content_type=mime)
         object_uri = storage.object_uri(object_key)
 
-        document_id = repo.insert_source_document(
-            sess,
-            sha256=sha256,
-            mime_type=mime,
-            object_uri=object_uri,
-            byte_size=len(raw),
-            source_channel=source_channel,
-            original_filename=filename,
-            legacy_ref=legacy_ref,
-            legacy_patient_ref=legacy_patient_ref,
-            captured_at=captured_at,
-        )
+        try:
+            document_id = repo.insert_source_document(
+                sess,
+                sha256=sha256,
+                mime_type=mime,
+                object_uri=object_uri,
+                byte_size=len(raw),
+                source_channel=source_channel,
+                original_filename=filename,
+                legacy_ref=legacy_ref,
+                legacy_patient_ref=legacy_patient_ref,
+                captured_at=captured_at,
+            )
+        except IntegrityError:
+            # a concurrent upload of the identical bytes won the race - reuse its row
+            sess.rollback()
+            dup = repo.get_document_by_sha(sess, sha256)
+            if not dup:
+                raise
+            log.info("ingest_dedup_race", sha256=sha256, document_id=str(dup["id"]))
+            return IngestResult(
+                document_id=str(dup["id"]), sha256=sha256, deduplicated=True,
+                page_count=dup["page_count"], status=dup["status"],
+            )
         repo.write_audit(
             sess, actor=source_channel, action="create", entity="source_document",
             entity_id=str(document_id),
