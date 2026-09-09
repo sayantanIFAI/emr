@@ -366,15 +366,20 @@ def _freq_per_day(text_: str | None) -> float | None:
     if not text_:
         return None
     t = str(text_).strip().lower()
-    m = re.search(r"(\d)\s*-\s*(\d)\s*-\s*(\d)(?:\s*-\s*(\d))?", t)
+    # dose-timing pattern "1-0-1" / "1-0-0-1" -> sum of the slots
+    m = re.search(r"(?<![\d.])(\d)\s*-\s*(\d)\s*-\s*(\d)(?:\s*-\s*(\d))?(?![\d.])", t)
     if m:
         return float(sum(int(x) for x in m.groups() if x))
     for k, v in sorted(_FREQ_TOKENS.items(), key=lambda kv: -len(kv[0])):
         if k in t:
             return float(v)
-    m = re.search(r"x\s*(\d+)\s*(?:times?)?\s*(?:/|per)?\s*day", t)
+    # "3 times a day", "2x/day", "twice per day" - digits must precede times/x
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:times|x)\s*(?:/|per|a|an|each)?\s*day\b", t)
     if m:
         return float(m.group(1))
+    m = re.search(r"\bq\s*(\d+)\s*h(?:rs?|ours?)?\b", t)   # q8h -> 3/day
+    if m and float(m.group(1)) > 0:
+        return round(24.0 / float(m.group(1)), 2)
     return None
 
 
@@ -406,11 +411,19 @@ def _add_medication(c: _Ctx, m: Any, *, intent: str, status: str | None = None) 
     d_val, d_unit, _ = _qty(m.get("dose"))
     if s_val is None:
         s_val, s_unit = name_str, name_unit
-    freq_text = m.get("frequency_text") or m.get("frequency") or m.get("timing") or m.get("dosage")
+    # keep every frequency-bearing field the model may have used (dedup, order-preserving)
+    _fbits = [str(x).strip() for x in (m.get("frequency_text"), m.get("frequency"),
+                                       m.get("timing"), m.get("dosage"), m.get("sig"),
+                                       m.get("schedule"), m.get("dose_pattern"))
+              if isinstance(x, str) and x.strip()]
+    freq_text = " ".join(dict.fromkeys(_fbits)) or None
     instr = " ".join(str(x) for x in (m.get("instructions"), m.get("notes"), m.get("composition"))
                      if isinstance(x, str) and x.strip()) or None
-    fpd = _freq_per_day(freq_text) if _freq_per_day(freq_text) is not None else _freq_per_day(instr)
-    dur = _duration_days(freq_text or instr, m.get("duration_days"))
+    _combined = " ".join(x for x in (freq_text, instr) if x) or None
+    fpd = _freq_per_day(freq_text)
+    if fpd is None:
+        fpd = _freq_per_day(_combined)
+    dur = _duration_days(_combined, m.get("duration_days"))
     route = m.get("route") if isinstance(m.get("route"), str) else None
     if not route and re.search(r"\binj|injection|penfill|s/?c\b|subcut", raw_drug.lower()):
         route = "subcutaneous" if "s/c" in raw_drug.lower() or "subcut" in raw_drug.lower() else "injection"

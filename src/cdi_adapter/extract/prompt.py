@@ -38,9 +38,13 @@ _EXTRA = {
         "\nThis is a PRESCRIPTION. List EVERY medication line in `medications` - a "
         "typical prescription has 5-15 drugs. For each: `drug_text` = the full drug "
         "name as printed (brand or generic), `strength` = the numeric strength if "
-        "shown, `frequency_text` = the timing/frequency notation verbatim (e.g. "
-        "'1-0-1', 'BD', 'After Food - Daily', 'TWICE IN A YEAR'), `instructions` = "
-        "any 'Notes'/'Composition' text. Do NOT stop after the first few - include "
+        "shown, `frequency_text` = the timing/frequency notation verbatim - it MUST "
+        "begin with the dose-slot pattern EXACTLY as printed if one is shown (e.g. "
+        "'1-0-1', '0-0-1', '1-0-0'), then any words ('1-0-1 After Food Daily', "
+        "'0-1-0 Before Food', 'BD x5days', 'TWICE IN A YEAR'). The dose-slot pattern "
+        "sits in its own column next to the drug - never drop it. `duration` = the "
+        "'x N days' / 'x 1 month' text. `instructions` = any 'Notes'/'Composition' "
+        "text. Do NOT stop after the first few - include "
         "the last drug on the page. Put diagnoses in `diagnoses`, BP/weight in `vitals`."
     ),
     "lab_report": (

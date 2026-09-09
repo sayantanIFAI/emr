@@ -71,8 +71,9 @@ class Job:
         pat = self.patient or (self.result or {}).get("patient")
         if pat is not None:
             pat = {**pat, "is_new": not self.existing}
-        # hide the patient identity block until documents have actually been read
-        show_patient = self.state in ("review", "done") or self.state == "mismatch"
+        # hide the patient identity block until documents have actually been read;
+        # on a mismatch nothing is attached, so no id/identity is surfaced either
+        show_patient = self.state in ("review", "done")
         return {
             "job_id": self.id,
             "state": self.state,
