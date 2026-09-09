@@ -352,9 +352,14 @@ _FREQ_TOKENS = {
 
 def _parse_strength_from_name(drug: str) -> tuple[str, float | None, str | None]:
     """'METPURE XL 50 MG' -> ('Metpure XL', 50, 'mg').  'RYZODEG PENFILL 100IU/ML 3ML INJ' -> (..., 100, '[IU]/mL')."""
-    m = _STRENGTH_RE.search(drug or "")
-    if not m:
+    matches = list(_STRENGTH_RE.finditer(drug or ""))
+    if not matches:
         return drug, None, None
+    # a pen/vial often prints its fill volume ("3ML") next to the real strength
+    # ("100IU/ML") - prefer a dose-like unit over a bare volume when both appear
+    m = next((x for x in matches
+              if _UCUM_MAP.get(x.group(2).lower(), x.group(2).lower()) not in ("mL", "g")),
+             matches[0])
     num = float(m.group(1))
     unit = _UCUM_MAP.get(m.group(2).lower(), m.group(2).lower())
     clean = (drug[:m.start()] + drug[m.end():]).strip(" -,/")
@@ -512,6 +517,9 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
                                record_alias, resolve_identity)
 
     with session_scope() as sess:
+        # re-extracting a document supersedes the previous attempt - clear the
+        # facts / extraction / encounter / aliases it wrote so they are not doubled
+        repo.purge_document_facts(sess, document_id)
         # ---- identity: read name / sex / age from THIS document ----
         cand = candidate_from_payload(payload, abha_hint=abha_hint, source_doc_id=document_id)
         mpi_id = None
