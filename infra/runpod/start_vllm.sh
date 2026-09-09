@@ -13,7 +13,10 @@ VENV=/workspace/vllm-venv
 LOG=/workspace/logs/vllm.log
 PORT="${CDI_VLLM_PORT:-8078}"
 MODEL="${CDI_VLM_MODEL_ID:-Qwen/Qwen2.5-VL-7B-Instruct}"
-export HF_HOME=/workspace/hf-cache
+export HF_HOME=/workspace/hf-cache PYTHONUNBUFFERED=1 VLLM_LOGGING_LEVEL=INFO
+# Blackwell (sm_120): vLLM 0.28's FlashInfer sampler misfires a stale CUDA-version
+# check and aborts engine init - use the native sampler + FlashAttention.
+export VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_ATTENTION_BACKEND=FLASH_ATTN
 mkdir -p /workspace/logs
 
 echo "########## 0. free the GPU (stop the hf gateway) ##########"
@@ -41,7 +44,7 @@ setsid nohup "$VENV/bin/vllm" serve "$MODEL" \
   --gpu-memory-utilization 0.90 \
   --max-model-len 16384 \
   --max-num-seqs 8 \
-  --limit-mm-per-prompt image=2 \
+  --limit-mm-per-prompt '{"image": 2}' \
   --mm-processor-kwargs '{"max_pixels": 2000000, "min_pixels": 3136}' \
   --enable-prefix-caching \
   > "$LOG" 2>&1 < /dev/null &   # xgrammar is the default structured-output backend

@@ -83,6 +83,8 @@ class Settings(BaseSettings):
                                          # OCR'd page - everything else still goes to the VLM
     extract_retries: int = 1             # VLM extraction re-tries on schema failure (schemas
                                          # were relaxed so a first-pass slip is now rare)
+    extract_concurrency: int = 4         # concurrent VLM extract calls in flight (vllm backend
+                                         # batches them; 1 = the old serial behaviour for `hf`)
     extract_max_tokens: int = 1400       # base; long doc types get more (see extract/prompt.py)
 
     # --- S6 governance gate (fact -> auto_accepted | in_review) ---

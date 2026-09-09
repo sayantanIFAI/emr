@@ -26,10 +26,18 @@ log = get_logger(__name__)
 
 STAGES = ["ingest", "classify", "ocr", "extract", "terminology", "validate"]
 
-# CPU-bound stages (ingest / fast-classify / OCR) run for every document at once;
-# the GPU extract stage is serialised (single VLM), so no document sits "queued".
+# CPU-bound stages (ingest / heuristic classify / OCR) run for every document at
+# once. The GPU extract stage fans out too, bounded by _extract_sem: with the
+# vllm backend those calls batch on one GPU; with `hf` set extract_concurrency=1
+# to keep the old serial behaviour.
 _pool = ThreadPoolExecutor(max_workers=max(2, settings.job_max_workers),
                            thread_name_prefix="cdi-job")
+# separate pool for the phase-2 fan-out so a _run_job thread waiting on its
+# children can never starve _pool (which also hosts _run_job itself)
+_stage2_pool = ThreadPoolExecutor(max_workers=max(2, settings.job_max_workers),
+                                  thread_name_prefix="cdi-s2")
+_extract_sem = threading.Semaphore(max(1, settings.extract_concurrency))
+_cand_lock = threading.Lock()
 _jobs: dict[str, "Job"] = {}
 _lock = threading.Lock()
 
@@ -170,12 +178,15 @@ def _stage1(prog: DocProg, fn: str, raw: bytes, abha: str | None) -> None:
 
 def _stage2(job: "Job", prog: DocProg,
             candidates: list[IdentityCandidate]) -> None:
-    """extract (GPU) -> terminology -> validate.  Serialised across documents."""
-    if prog.status == "error" or not prog.document_id:
+    """extract (GPU) -> terminology -> validate.  May run concurrently across
+    documents; the extract call itself is bounded by _extract_sem."""
+    if prog.status == "error" or not prog.document_id or job.state == "mismatch":
         return
     try:
         prog.stage("extract", "running")
-        ex = extract_document(prog.document_id, patient_id=job.patient_id, abha_hint=job.abha)
+        with _extract_sem:
+            ex = extract_document(prog.document_id, patient_id=job.patient_id,
+                                  abha_hint=job.abha)
         prog.facts = ex.n_facts
         if ex.patient_id and not job.patient_id:
             job.patient_id = ex.patient_id
@@ -211,10 +222,11 @@ def _stage2(job: "Job", prog: DocProg,
         if ex.identity:
             i = ex.identity
             _age_y, bd_age = parse_age(i.get("age_years"))
-            candidates.append(IdentityCandidate(
-                name_full=i.get("name"), sex=i.get("sex"), age_years=i.get("age_years"),
-                birth_date=parse_dob(i.get("birth_date")) or bd_age,
-                abha=job.abha, source_doc_id=prog.document_id))
+            with _cand_lock:
+                candidates.append(IdentityCandidate(
+                    name_full=i.get("name"), sex=i.get("sex"), age_years=i.get("age_years"),
+                    birth_date=parse_dob(i.get("birth_date")) or bd_age,
+                    abha=job.abha, source_doc_id=prog.document_id))
             job.patient = {"mpi_id": ex.mpi_id, "name": i.get("name"), "sex": i.get("sex"),
                            "birth_date": i.get("birth_date"), "age_years": i.get("age_years"),
                            "abha_number": job.abha, "provisional": True}
@@ -255,11 +267,25 @@ def _run_job(jid: str, files: list[tuple[str, bytes]]) -> None:
             except Exception:  # noqa: BLE001  (already recorded on the DocProg)
                 pass
 
-        # --- phase 2: extract + terminology + validate, serial on the single GPU ---
-        for prog in job.docs:
-            _stage2(job, prog, candidates)
-            if job.state == "mismatch":
-                break
+        # --- phase 2: extract + terminology + validate ---
+        # existing-patient jobs stay serial (per-doc mismatch guard must stop the
+        # run before later docs write). a new patient with several docs fans out:
+        # doc 1 first (it pins the new identity so 2..N don't race to create it),
+        # then the rest concurrently - vllm batches the extract calls.
+        ready = [p for p in job.docs if p.status != "error" and p.document_id]
+        if job.existing or len(ready) <= 1:
+            for prog in ready:
+                _stage2(job, prog, candidates)
+                if job.state == "mismatch":
+                    break
+        else:
+            _stage2(job, ready[0], candidates)
+            futs2 = [_stage2_pool.submit(_stage2, job, prog, candidates) for prog in ready[1:]]
+            for f in as_completed(futs2):
+                try:
+                    f.result()
+                except Exception:  # noqa: BLE001  (recorded on the DocProg)
+                    pass
 
         if job.state == "mismatch":
             job.error = (f"Uploaded document is for {job.mismatch['document_name']}"
