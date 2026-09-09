@@ -20,10 +20,13 @@ from .page import PAGE
 from .review_page import REVIEW_PAGE
 from .reviewer import router as reviewer_router
 from .reviewer_page import REVIEWER_PAGE
+from .admin import router as admin_router
+from .admin_page import ADMIN_PAGE
 
 log = get_logger(__name__)
 app = FastAPI(title="CDI-Adapter - scanned docs -> ABDM FHIR", version=__version__)
 app.include_router(reviewer_router)
+app.include_router(admin_router)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -153,6 +156,11 @@ def review_index() -> str:
 @app.get("/reviewer", response_class=HTMLResponse)
 def reviewer_index() -> str:
     return REVIEWER_PAGE
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_index() -> str:
+    return ADMIN_PAGE
 
 
 @app.get("/api/review/tasks")

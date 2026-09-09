@@ -69,12 +69,20 @@ function show(v){ VIEW=v; ITEM=null;
   $("#t-wb").classList.toggle("on",v==="wb"); $("#t-wl").classList.toggle("on",v==="wl");
   $("#wsview").hidden=true; $("#listview").hidden=false; loadList(); }
 
+async function refreshCounts(){
+  const [wb, wl] = await Promise.all([
+    fetch("api/reviewer/workbasket").then(r=>r.json()),
+    fetch("api/reviewer/worklist?assignee="+ME).then(r=>r.json()),
+  ]);
+  const open = (wl.items||[]).filter(i=>i.state==="in_progress"||i.state==="claimed").length;
+  $("#c-wb").textContent = "("+(wb.count||0)+")";
+  $("#c-wl").textContent = "("+open+")";
+}
+
 async function loadList(){
+  await refreshCounts();
   const url = VIEW==="wb" ? "api/reviewer/workbasket" : "api/reviewer/worklist?assignee="+ME;
   const j = await (await fetch(url)).json();
-  const st = await (await fetch("api/reviewer/stats")).json();
-  $("#c-wb").textContent = "("+(st.by_state.open||0)+")";
-  $("#c-wl").textContent = "("+((st.by_state.in_progress||0)+(st.by_state.claimed||0))+")";
   const rows = (j.items||[]).map(it=>`
     <tr onclick="open_item('${it.id}')">
       <td><span class="pill ${it.priority}">${it.priority}</span></td>
@@ -162,12 +170,14 @@ document.addEventListener('input',e=>{ if(e.target.closest('.el')) save(); });
 async function claim(id){
   await fetch("api/reviewer/items/"+id+"/claim",{method:"POST",
     headers:{'content-type':'application/json'},body:JSON.stringify({assignee:ME})});
+  await refreshCounts();          // moved workbasket -> my worklist
   open_item(id);
 }
 async function reject(id){
   if(!confirm("Reject this whole item?")) return;
   await fetch("api/reviewer/items/"+id+"/reject",{method:"POST",
     headers:{'content-type':'application/json'},body:JSON.stringify({reviewer:ME})});
+  await refreshCounts();
   show(VIEW);
 }
 async function approve(id){
@@ -179,6 +189,7 @@ async function approve(id){
   const j = await r.json();
   if(!r.ok){ alert(j.detail||"approve failed"); btn.disabled=false; btn.textContent="Approve → promote → generate bundle"; return; }
   btn.textContent="approved";
+  await refreshCounts();          // left my worklist
   renderValidation(j.validation, j.bundle_status, id, j.promoted);
 }
 

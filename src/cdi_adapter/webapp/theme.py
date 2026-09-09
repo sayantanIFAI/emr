@@ -28,7 +28,8 @@ HEADER_HTML = f"""
   </a>
   <nav class="cf-nav">
     <a href="/">Upload</a>
-    <a href="/review">Review queue</a>
+    <a href="/reviewer">Reviewer</a>
+    <a href="/admin">Admin</a>
   </nav>
 </header>
 """
