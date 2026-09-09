@@ -240,15 +240,12 @@ class VLLMBackend(Backend):
             "temperature": 0.0,
         }
         if json_schema is not None:
-            bundled = bundle_schema(json_schema)
-            # raw HTTP (no openai client), so these go at the top level of the body.
-            # vLLM accepts either the legacy `guided_json` or `response_format`;
-            # send both so we don't depend on the server version.
-            body["guided_json"] = bundled
-            body["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {"name": "extraction", "schema": bundled, "strict": True},
-            }
+            # xgrammar enforces schema-VALIDITY at the token level. We deliberately
+            # do NOT send a `strict` response_format: with our permissive schemas
+            # (optional arrays, anyOf) strict mode makes the model terminate
+            # list-heavy sections early. `guided_json` keeps output valid without
+            # that pressure; the prompt still asks for completeness.
+            body["guided_json"] = bundle_schema(json_schema)
             if settings.vllm_guided_backend:
                 body["guided_decoding_backend"] = settings.vllm_guided_backend
 
