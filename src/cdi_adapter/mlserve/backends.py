@@ -239,7 +239,7 @@ class VLLMBackend(Backend):
             "max_tokens": max_tokens,
             "temperature": 0.0,
         }
-        if json_schema is not None:
+        if json_schema is not None and settings.vllm_guided:
             # xgrammar enforces schema-VALIDITY at the token level. We deliberately
             # do NOT send a `strict` response_format: with our permissive schemas
             # (optional arrays, anyOf) strict mode makes the model terminate

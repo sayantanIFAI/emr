@@ -62,7 +62,10 @@ class Settings(BaseSettings):
     vllm_url: str = "http://127.0.0.1:8078/v1"
     vllm_model: str = ""                    # blank -> use vlm_model_id
     vllm_timeout_s: float = 240.0
-    vllm_guided_backend: str = "xgrammar"   # token-level JSON-schema decoding
+    vllm_guided: bool = True                # token-level JSON-schema decoding (xgrammar).
+                                            # adds grammar-mask cost per token; turn off to
+                                            # rely on client-side repair + retry instead.
+    vllm_guided_backend: str = "xgrammar"
 
     # --- future: vLLM OpenAI endpoint for the DSLM / guided decoding ---
     llm_base_url: str = "http://127.0.0.1:8000/v1"
