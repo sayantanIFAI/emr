@@ -240,16 +240,22 @@ class VLLMBackend(Backend):
             "temperature": 0.0,
         }
         if json_schema is not None:
-            body["extra_body"] = {
-                "guided_json": bundle_schema(json_schema),
-                "guided_decoding_backend": settings.vllm_guided_backend,
+            bundled = bundle_schema(json_schema)
+            # raw HTTP (no openai client), so these go at the top level of the body.
+            # vLLM accepts either the legacy `guided_json` or `response_format`;
+            # send both so we don't depend on the server version.
+            body["guided_json"] = bundled
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "extraction", "schema": bundled, "strict": True},
             }
-            # some vllm builds read these at the top level rather than extra_body
-            body["guided_json"] = body["extra_body"]["guided_json"]
-            body["guided_decoding_backend"] = settings.vllm_guided_backend
+            if settings.vllm_guided_backend:
+                body["guided_decoding_backend"] = settings.vllm_guided_backend
 
         t0 = time.time()
         r = self._c.post(f"{self._base}/chat/completions", json=body)
+        if r.status_code >= 400:
+            log.error("vllm_http_error", status=r.status_code, body=r.text[:400])
         r.raise_for_status()
         data = r.json()
         text = (data["choices"][0]["message"]["content"] or "").strip()

@@ -23,11 +23,11 @@ nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader || true
 
 echo "########## 1. venv + vLLM ##########"
 if [ ! -x "$VENV/bin/vllm" ]; then
+  export TMPDIR=/workspace/tmp PIP_CACHE_DIR=/workspace/tmp/pipcache
+  mkdir -p "$TMPDIR"
   python3 -m venv "$VENV"          # NOT --system-site-packages: vLLM brings its own torch
-  "$VENV/bin/pip" install -q -U pip wheel
-  # newer vLLM understands --torch-backend; fall back to a plain install
-  "$VENV/bin/pip" install -q "vllm" --torch-backend=cu128 \
-    || "$VENV/bin/pip" install -q "vllm"
+  "$VENV/bin/pip" install -U pip wheel
+  "$VENV/bin/pip" install vllm     # pulls its own pinned torch + CUDA libs
 fi
 "$VENV/bin/vllm" --version || { echo "vLLM install failed"; exit 1; }
 
@@ -44,8 +44,7 @@ setsid nohup "$VENV/bin/vllm" serve "$MODEL" \
   --limit-mm-per-prompt image=2 \
   --mm-processor-kwargs '{"max_pixels": 2000000, "min_pixels": 3136}' \
   --enable-prefix-caching \
-  --guided-decoding-backend xgrammar \
-  > "$LOG" 2>&1 < /dev/null &
+  > "$LOG" 2>&1 < /dev/null &   # xgrammar is the default structured-output backend
 echo "vllm pid $!  (log: $LOG)"
 
 echo "########## 3. wait for readiness (model load is slow) ##########"
