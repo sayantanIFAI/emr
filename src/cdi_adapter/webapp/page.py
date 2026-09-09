@@ -77,34 +77,14 @@ _HTML = r"""<!doctype html>
     </div>
   </div>
 
-  <div class="card" id="editor-card" hidden>
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-      <div>
-        <h2 style="margin:0">Human review — edit before FHIR</h2>
-        <p class="hint" style="margin:2px 0 0">Scanned document on the left · extracted facts on the right.
-          Untick a row to drop it. Edit any value. Then generate the bundles.</p>
-      </div>
-      <button class="btn btn-primary" id="gen">Generate FHIR bundles</button>
+  <div class="card" id="sent-card" hidden>
+    <h2>Sent to the reviewer</h2>
+    <p class="hint" id="sentmsg">The extracted facts are now in the reviewer <b>workbasket</b>.
+      Human review, correction, approval and ABDM FHIR bundle generation all happen there.</p>
+    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+      <a class="btn btn-primary" href="/reviewer">Open the reviewer workbasket →</a>
+      <a class="btn btn-ghost" href="/admin">Admin / data inspector</a>
     </div>
-    <div class="doc-switch" id="docswitch"></div>
-    <div class="editor">
-      <div class="scan"><div class="imgwrap" id="scanwrap"></div></div>
-      <div>
-        <div style="overflow-x:auto"><table class="ftable" id="ftable"></table></div>
-        <p class="muted" id="genmsg" style="margin-top:10px"></p>
-      </div>
-    </div>
-  </div>
-
-  <div class="card" id="result-card" hidden>
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-      <h2 style="margin:0">ABDM FHIR record bundles</h2>
-      <div>
-        <button class="btn btn-ghost btn-sm" id="dl">Download all JSON</button>
-        <button class="btn btn-ghost btn-sm" id="edit">Back to editor</button>
-      </div>
-    </div>
-    <div id="bundles"></div>
   </div>
 </main>
 
@@ -169,7 +149,12 @@ function poll(){
     if(j.state==="review"||j.state==="done"){
       $("#hint").textContent="";
       if(j.patient && j.patient.is_new) showDetails(j.patient);
-      loadFacts();
+      const n=(j.documents||[]).length;
+      $("#sentmsg").innerHTML="<b>"+n+"</b> document"+(n===1?"":"s")+" processed. The extracted facts are"
+        +" now in the reviewer <b>workbasket</b> — human review, correction, approval and ABDM FHIR"
+        +" bundle generation all happen there.";
+      $("#sent-card").hidden=false;
+      $("#sent-card").scrollIntoView({behavior:"smooth"});
     } else if(j.state==="error"){ $("#hint").textContent="job error: "+(j.error||""); $("#go").disabled=false; }
     else poll();
   }, 1200);
@@ -201,7 +186,7 @@ function showMismatch(j){
   const m=j.mismatch||{};
   $("#mismatch-card").hidden=false;
   $("#emr-card").hidden=true; $("#patient-card").hidden=true;
-  $("#editor-card").hidden=true; $("#result-card").hidden=true; $("#details-card").hidden=true;
+  $("#sent-card").hidden=true; $("#details-card").hidden=true;
   $("#mismatch").innerHTML=
     '<p>'+esc(j.error||"The uploaded document does not belong to the selected patient.")+'</p>'
     +'<div class="mm-detail"><b>You selected:</b> '+esc(m.selected_name||"?")+' ('+esc(m.selected_id||"?")+')'
@@ -244,114 +229,6 @@ $("#savepat").onclick=async()=>{
   $("#savemsg").textContent = r.ok ? "saved — this patient can now be looked up" : ("error: "+await r.text());
 };
 
-async function loadFacts(){
-  const r=await fetch("api/jobs/"+JOB+"/facts");
-  if(!r.ok) return;
-  FACTS=await r.json();
-  if(FACTS.patient){ $("#patient-card").hidden=false; renderPatient({...FACTS.patient, is_new:$("#details-card").hidden===false}); }
-  $("#editor-card").hidden=false; CURDOC=0; renderEditor();
-}
-
-function renderEditor(){
-  const docs=FACTS.documents||[];
-  $("#docswitch").innerHTML=docs.map((d,i)=>
-    '<button class="'+(i===CURDOC?"active":"")+'" onclick="CURDOC='+i+';renderEditor()">'
-    +esc(d.filename)+' <span class="muted">('+d.facts.length+')</span></button>').join("");
-  const d=docs[CURDOC]; if(!d) return;
-  $("#scanwrap").innerHTML=(d.page_image_url
-    ? '<img id="scanimg" src="'+d.page_image_url+'" alt="scanned document"/>'
-    : '<p class="empty">no page image</p>')+'<div id="scanbox"></div>';
-  let h='<tr><th style="width:26px"></th><th>Type</th><th>Text</th><th>Value</th><th>Unit</th><th>Frequency</th><th>Code</th><th>Conf</th></tr>';
-  h+=d.facts.map(f=>{
-    const rows=(String(f.text||"").length/40)+1;
-    return '<tr id="row_'+f.fact_id+'" onmouseenter="hi('+JSON.stringify(f.bbox||null)+','+(f.page_width||0)+')" onmouseleave="hi(null,0)">'
-    +'<td><input class="chk" type="checkbox" id="k_'+f.fact_id+'" checked onchange="toggleDrop(\''+f.fact_id+'\')"/></td>'
-    +'<td><span class="pill">'+esc(f.fact_type)+'</span></td>'
-    +'<td class="txt"><textarea rows="'+Math.min(6,Math.max(1,Math.ceil(rows)))+'" data-f="'+f.fact_id+'" data-k="local_text">'+esc(f.text||"")+'</textarea></td>'
-    +'<td><input class="sm" type="text" data-f="'+f.fact_id+'" data-k="value_num" value="'+(f.value_num!=null?f.value_num:"")+'"/></td>'
-    +'<td><input class="sm" type="text" data-f="'+f.fact_id+'" data-k="value_unit_ucum" value="'+esc(f.value_unit_ucum||"")+'"/></td>'
-    +'<td><input type="text" style="width:150px" data-f="'+f.fact_id+'" data-k="freq_text" value="'+esc(f.freq_text||"")+'"'+(f.fact_type==="medication"?'':' disabled')+'/></td>'
-    +'<td><input class="sm" type="text" data-f="'+f.fact_id+'" data-k="code" value="'+esc(f.code||"")+'" title="'+esc((f.code_system||"")+" "+(f.code_display||""))+'"/></td>'
-    +'<td class="conf">'+(f.confidence*100).toFixed(0)+'%</td></tr>';
-  }).join("");
-  $("#ftable").innerHTML=h;
-}
-function toggleDrop(fid){ $("#row_"+fid).classList.toggle("drop", !$("#k_"+fid).checked); }
-function hi(bbox,pw){
-  const box=$("#scanbox"),img=$("#scanimg");
-  if(!box||!img||!bbox||!pw){ if(box) box.innerHTML=""; return; }
-  const s=img.clientWidth/pw;
-  box.innerHTML='<div class="bbox" style="position:absolute;left:'+(bbox[0]*s)+'px;top:'+(bbox[1]*s)+'px;width:'+((bbox[2]-bbox[0])*s)+'px;height:'+((bbox[3]-bbox[1])*s)+'px"></div>';
-}
-
-$("#gen").onclick=async()=>{
-  $("#gen").disabled=true; $("#genmsg").textContent="generating…";
-  const edits=[];
-  for(const d of FACTS.documents){
-    for(const f of d.facts){
-      const chk=$("#k_"+f.fact_id);
-      if(chk && !chk.checked){ edits.push({fact_id:f.fact_id,action:"drop"}); continue; }
-      const corr={};
-      document.querySelectorAll('[data-f="'+f.fact_id+'"]').forEach(inp=>{
-        const k=inp.dataset.k; let v=(inp.value||"").trim();
-        if(k==="value_num"){ if(v==="") return; v=Number(v); if(isNaN(v)) return; if(v!==f.value_num) corr[k]=v; }
-        else if(v!==(f[k]||"")){ corr[k]=v; if(k==="code"&&v) corr.code_status="bound"; }
-      });
-      edits.push(Object.keys(corr).length?{fact_id:f.fact_id,action:"keep",corrections:corr}:{fact_id:f.fact_id,action:"keep"});
-    }
-  }
-  const r=await fetch("api/jobs/"+JOB+"/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({edits})});
-  $("#gen").disabled=false;
-  if(!r.ok){ $("#genmsg").textContent="error: "+await r.text(); return; }
-  RESULT=await r.json();
-  $("#genmsg").textContent="generated in "+RESULT.generate_ms+" ms · "
-    +RESULT.applied.keep+" kept, "+RESULT.applied.correct+" corrected, "+RESULT.applied.drop+" dropped";
-  showBundles();
-};
-$("#edit").onclick=()=>{ $("#result-card").hidden=true; $("#editor-card").hidden=false; loadFacts(); };
-
-function showBundles(){
-  $("#result-card").hidden=false;
-  let html='<p class="muted" style="margin:8px 0 4px">'+(RESULT.artifact_count||0)+' bundle(s): '
-    +'<span class="pill ok">'+(RESULT.ready_to_share||0)+' ready to share</span> '
-    +((RESULT.needs_review||0)?'<span class="pill warn">'+RESULT.needs_review+' need review</span> ':'')
-    +'· IG '+esc(RESULT.ig_package||"nrces.fhir.r4.ndhm")+'</p>';
-  html+=(RESULT.bundles||[]).map((b,i)=>{
-    const errs=(b.issues||[]).filter(x=>x.severity==="error");
-    const held=b.held_facts||[];
-    const ss=b.bundle_status==="ready_to_share"?"ok":"warn";
-    return '<details class="bundle" '+(i===0?"open":"")+'>'
-      +'<summary>'+esc(b.filename)+' → <code class="k">'+esc(b.artifact_type)+'</code> '
-      +'<span class="pill '+ss+'">'+esc(b.bundle_status)+'</span> '
-      +'<span class="pill">'+b.asserted_facts+' asserted</span> '
-      +(held.length?'<span class="pill warn">'+held.length+' held</span> ':'')
-      +(errs.length?'<span class="pill err">'+errs.length+' errors</span>':'')
-      +'</summary><div class="body">'+factsTable(b.bundle)
-      +'<button class="btn btn-ghost btn-sm" onclick=\'cp('+JSON.stringify(JSON.stringify(b.bundle))+')\'>Copy this bundle</button>'
-      +'<pre class="json">'+esc(JSON.stringify(b.bundle,null,2))+'</pre></div></details>';
-  }).join("");
-  $("#bundles").innerHTML=html;
-  $("#result-card").scrollIntoView({behavior:"smooth"});
-}
-function factsTable(bundle){
-  const rows=[];
-  for(const e of (bundle.entry||[])){
-    const r=e.resource;
-    if(["Condition","Observation","MedicationRequest","Procedure","AllergyIntolerance","DiagnosticReport"].includes(r.resourceType)){
-      const cc=r.code||r.medicationCodeableConcept||{}; const cod=(cc.coding||[])[0]||{};
-      let v=""; if(r.valueQuantity) v=r.valueQuantity.value+" "+(r.valueQuantity.unit||"");
-      else if(r.valueString) v=r.valueString; else if(r.conclusion) v=r.conclusion;
-      rows.push('<tr><td>'+r.resourceType+'</td><td>'+esc(cc.text||cod.display||"")+'</td><td>'
-        +(cod.system?'<code class="k">'+sys(cod.system)+'</code> '+cod.code:'<span class="muted">local</span>')
-        +'</td><td class="tab-nums">'+esc(String(v))+'</td></tr>');
-    }
-  }
-  if(!rows.length) return '<p class="muted" style="font-size:12px">no coded clinical facts asserted</p>';
-  return '<table class="data"><tr><th>Resource</th><th>Concept</th><th>Code</th><th>Value</th></tr>'+rows.join("")+'</table>';
-}
-const sys=s=>s.includes("snomed")?"SNOMED":s.includes("loinc")?"LOINC":s.includes("icd")?"ICD-10":s;
-$("#dl").onclick=()=>window.location="api/jobs/"+JOB+"/fhir/download";
-function cp(t){ navigator.clipboard.writeText(t); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 </script>
 </body>

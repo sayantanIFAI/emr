@@ -293,3 +293,93 @@ def stats() -> dict[str, Any]:
             SELECT state, count(*) FROM rv_item GROUP BY state
         """)).all()
     return {"by_state": {k: v for k, v in r}}
+
+
+# --------------------------------------------------------------------------- #
+# Customer 360
+# --------------------------------------------------------------------------- #
+@router.get("/c360")
+def c360_list() -> dict[str, Any]:
+    """Every patient the reviewer has touched - promoted (canonical) or pending."""
+    with session_scope() as sess:
+        rows = _rows(sess, """
+          WITH keys AS (
+            SELECT mpi_id, max(patient_display) AS name,
+                   count(*) FILTER (WHERE state IN ('open','claimed','in_progress')) AS pending,
+                   count(*) FILTER (WHERE state = 'approved') AS approved
+            FROM rv_item WHERE mpi_id IS NOT NULL GROUP BY mpi_id
+          )
+          SELECT k.mpi_id, k.name, k.pending, k.approved,
+                 p.id AS canonical_id, p.gender, p.date_of_birth,
+                 (SELECT count(*) FROM cn_encounter e WHERE e.patient_id = p.id) AS encounters,
+                 (SELECT count(*) FROM cn_condition c WHERE c.patient_id = p.id) AS conditions,
+                 (SELECT count(*) FROM cn_medication_order m WHERE m.patient_id = p.id) AS meds,
+                 (SELECT count(*) FROM cn_observation o WHERE o.patient_id = p.id) AS observations,
+                 (SELECT count(*) FROM cn_fhir_bundle b WHERE b.canonical_patient_id = p.id) AS bundles
+          FROM keys k LEFT JOIN cn_patient p ON p.mpi_id = k.mpi_id
+          ORDER BY k.name
+        """)
+    return {"patients": [{k: _s(v) for k, v in r.items()} for r in rows]}
+
+
+@router.get("/c360/{mpi}")
+def c360(mpi: str) -> dict[str, Any]:
+    with session_scope() as sess:
+        pat = sess.execute(text("SELECT * FROM cn_patient WHERE mpi_id = :m"),
+                           {"m": mpi}).mappings().first()
+        reg = sess.execute(text("SELECT * FROM patient_registry WHERE patient_id = :m LIMIT 1"),
+                           {"m": mpi}).mappings().first()
+        items = _rows(sess, """
+            SELECT id, doc_type, state, priority, n_elements, n_resolved, bundle_status,
+                   assignee, created_at
+            FROM rv_item WHERE mpi_id = :m ORDER BY created_at DESC
+        """, m=mpi)
+
+        graph: dict[str, Any] = {}
+        if pat:
+            pid = str(pat["id"])
+
+            def q(sql: str) -> list[dict[str, Any]]:
+                return [{k: _s(v) for k, v in dict(r).items()}
+                        for r in sess.execute(text(sql), {"p": pid}).mappings().all()]
+
+            graph = {
+                "canonical_id": pid,
+                "identifiers": q("SELECT system, value, use, assigner FROM cn_patient_identifier WHERE patient_id = :p"),
+                "contacts": q("SELECT kind, value FROM cn_patient_contact WHERE patient_id = :p"),
+                "addresses": q("SELECT line, city, state, postal_code FROM cn_patient_address WHERE patient_id = :p"),
+                "encounters": q("SELECT klass, status, period_start, department, reason_text FROM cn_encounter WHERE patient_id = :p ORDER BY period_start DESC"),
+                "conditions": q("SELECT category, display, code_system, code, clinical_status FROM cn_condition WHERE patient_id = :p"),
+                "observations": q("SELECT category, display, code, value_num, value_unit_ucum, value_string, effective_time FROM cn_observation WHERE patient_id = :p ORDER BY effective_time DESC"),
+                "medication_orders": q("SELECT drug_text, dose_num, dose_unit_ucum, frequency_code, duration_days, instructions FROM cn_medication_order WHERE patient_id = :p"),
+                "lab_results": q("SELECT test_name, code, value_num, value_unit_ucum, ref_range_text, abnormal_flag FROM cn_lab_result WHERE patient_id = :p"),
+                "diagnostic_reports": q("SELECT category, display, status, conclusion FROM cn_diagnostic_report WHERE patient_id = :p"),
+                "procedures": q("SELECT display, code, status, performed_time FROM cn_procedure WHERE patient_id = :p"),
+                "allergies": q("SELECT substance_display, category, criticality, clinical_status FROM cn_allergy WHERE patient_id = :p"),
+                "documents": q("SELECT document_type, title, mime_type, source, source_document_id FROM cn_document WHERE patient_id = :p"),
+                "bundles": q("""SELECT artifact, status, validator, validation_ok, ig_package, created_at,
+                                       jsonb_array_length(bundle_json->'entry') AS entries
+                                FROM cn_fhir_bundle WHERE canonical_patient_id = :p ORDER BY created_at DESC"""),
+            }
+
+    name = (pat and pat.get("name_full")) or (reg and reg.get("name")) or (items[0]["doc_type"] if items else "Unknown")
+    dob = (pat and pat.get("date_of_birth")) or (reg and reg.get("dob"))
+    gender = (pat and pat.get("gender")) or (reg and reg.get("gender"))
+    return {
+        "mpi_id": mpi,
+        "name": name,
+        "gender": _s(gender),
+        "date_of_birth": _s(dob),
+        "mobile": (reg and reg.get("mobile")),
+        "abha_id": (reg and reg.get("abha_id")),
+        "address": (reg and reg.get("address")),
+        "promoted": bool(pat),
+        "review_items": items,
+        "graph": graph,
+    }
+
+
+def _s(v: Any) -> Any:
+    if v is None or isinstance(v, (str, int, float, bool, list, dict)):
+        return v
+    return str(v)

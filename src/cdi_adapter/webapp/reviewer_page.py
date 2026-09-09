@@ -47,6 +47,16 @@ table.wb tr:hover td{background:var(--surface-2);cursor:pointer}
 .muted{color:var(--muted)}
 pre.bundle{white-space:pre-wrap;font-size:11px;background:var(--surface-2);padding:10px;border-radius:8px;
   max-height:320px;overflow:auto;margin-top:8px}
+.c360card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px}
+.c360head{display:flex;gap:16px;align-items:center;border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:12px}
+.c360meta{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:4px 18px;margin-top:6px;font-size:var(--fs-13)}
+.c360card section{margin-top:12px}
+.c360card h4{margin:0 0 5px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.c360card .tbl{overflow:auto}
+.c360card .tbl table{border-collapse:collapse;font-size:11px;white-space:nowrap;width:100%}
+.c360card .tbl th,.c360card .tbl td{border:1px solid var(--line);padding:4px 8px;text-align:left;max-width:340px;overflow:hidden;text-overflow:ellipsis}
+.c360card .tbl th{background:var(--surface-2)}
+.c360card .ok{color:#15803d;font-weight:700}.c360card .bad{color:#b91c1c;font-weight:700}
 </style>
 </head>
 <body>
@@ -55,10 +65,12 @@ pre.bundle{white-space:pre-wrap;font-size:11px;background:var(--surface-2);paddi
   <div class="rv2-tabs">
     <button id="t-wb" class="on" onclick="show('wb')">Workbasket <span id="c-wb"></span></button>
     <button id="t-wl" onclick="show('wl')">My worklist <span id="c-wl"></span></button>
+    <button id="t-c3" onclick="show('c3')">Customer 360</button>
     <span class="rv2-id">reviewer: <b id="me">reviewer</b></span>
   </div>
   <div id="listview"></div>
   <div id="wsview" hidden></div>
+  <div id="c3view" hidden></div>
 </div>
 <script>
 const $=s=>document.querySelector(s);
@@ -67,7 +79,90 @@ let VIEW="wb", ITEM=null;
 
 function show(v){ VIEW=v; ITEM=null;
   $("#t-wb").classList.toggle("on",v==="wb"); $("#t-wl").classList.toggle("on",v==="wl");
-  $("#wsview").hidden=true; $("#listview").hidden=false; loadList(); }
+  $("#t-c3").classList.toggle("on",v==="c3");
+  $("#wsview").hidden=true;
+  if(v==="c3"){ $("#listview").hidden=true; $("#c3view").hidden=false; refreshCounts(); loadC360(); return; }
+  $("#c3view").hidden=true; $("#listview").hidden=false; loadList();
+}
+
+// ---- deterministic dummy avatar (initials + hashed hue), no external fetch ----
+function avatar(name, size){
+  size = size||64;
+  const parts=(name||"?").trim().split(/\s+/);
+  const ini=((parts[0]||"?")[0]+((parts[1]||"")[0]||"")).toUpperCase();
+  let h=0; for(const c of (name||"")) h=(h*31+c.charCodeAt(0))>>>0;
+  const hue=h%360;
+  const svg=`<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}'>
+    <rect width='100%' height='100%' rx='${size/2}' fill='hsl(${hue} 55% 88%)'/>
+    <circle cx='${size/2}' cy='${size*0.4}' r='${size*0.19}' fill='hsl(${hue} 45% 55%)'/>
+    <path d='M ${size*0.16} ${size*0.94} a ${size*0.34} ${size*0.30} 0 0 1 ${size*0.68} 0 Z' fill='hsl(${hue} 45% 55%)'/>
+    <text x='50%' y='54%' font-family='system-ui,Arial' font-size='${size*0.34}' font-weight='700'
+      fill='hsl(${hue} 45% 30%)' text-anchor='middle' dominant-baseline='middle'
+      opacity='0'>${ini}</text>
+    <text x='50%' y='${size*0.42}' font-family='system-ui,Arial' font-size='${size*0.3}' font-weight='700'
+      fill='#fff' text-anchor='middle' dominant-baseline='middle'>${ini}</text>
+  </svg>`;
+  return "data:image/svg+xml;utf8,"+encodeURIComponent(svg);
+}
+
+async function loadC360(){
+  const j=await (await fetch("api/reviewer/c360")).json();
+  if(!j.patients.length){ $("#c3view").innerHTML='<p class="muted">No patients yet. Process a document from <b>/</b> and it will appear here.</p>'; return; }
+  $("#c3view").innerHTML = `<div class="plist">${j.patients.map(p=>`
+    <div class="pcard" onclick="showC360('${p.mpi_id}')">
+      <div style="display:flex;gap:10px;align-items:center">
+        <img src="${avatar(p.name,44)}" width="44" height="44" style="border-radius:50%"/>
+        <div><b>${p.name||'Unknown'}</b><div class="row">${p.mpi_id} · ${p.gender||''} ${p.date_of_birth||''}</div></div>
+      </div>
+      <div class="row" style="margin-top:6px">
+        ${p.canonical_id ? `<span class="pill routine">promoted</span> ${p.encounters} enc · ${p.conditions} cond · ${p.meds} meds · ${p.observations} obs · ${p.bundles} bundle(s)`
+                         : `<span class="pill urgent">${p.pending} pending review</span>`}
+      </div>
+    </div>`).join("")}</div>`;
+}
+
+async function showC360(mpi){
+  const g=await (await fetch("api/reviewer/c360/"+encodeURIComponent(mpi))).json();
+  const row=(l,v)=> v ? `<div><span class="muted">${l}</span> <b>${v}</b></div>` : "";
+  const sec=(title,rows,cols)=> !rows||!rows.length ? "" : `<section><h4>${title} (${rows.length})</h4>
+    <div class="tbl"><table><thead><tr>${cols.map(c=>`<th>${c}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${fmtc(r[c])}</td>`).join("")}</tr>`).join("")}</tbody></table></div></section>`;
+  const G=g.graph||{}; const b=(G.bundles||[])[0];
+  $("#c3view").innerHTML = `
+   <p><button class="bigbtn ghost" style="width:auto;padding:7px 14px" onclick="show('c3')">← all patients</button></p>
+   <div class="c360card">
+     <div class="c360head">
+       <img src="${avatar(g.name,88)}" width="88" height="88" style="border-radius:50%"/>
+       <div>
+         <h2 style="margin:0">${g.name||'Unknown'}</h2>
+         <div class="c360meta">
+           ${row("Patient ID", g.mpi_id)}
+           ${row("Sex", ({M:'Male',F:'Female',O:'Other'})[g.gender]||g.gender)}
+           ${row("DOB", g.date_of_birth)}
+           ${row("Mobile", g.mobile)}
+           ${row("ABHA", g.abha_id)}
+           ${row("Address", g.address)}
+           ${row("Status", g.promoted ? 'promoted to canonical EMR' : 'pending review')}
+         </div>
+       </div>
+     </div>
+     ${sec("Identifiers", G.identifiers, ["system","value","use","assigner"])}
+     ${sec("Encounters", G.encounters, ["klass","status","period_start","department","reason_text"])}
+     ${sec("Conditions", G.conditions, ["category","display","code_system","code","clinical_status"])}
+     ${sec("Observations / vitals", G.observations, ["category","display","code","value_num","value_unit_ucum","value_string","effective_time"])}
+     ${sec("Medication orders", G.medication_orders, ["drug_text","dose_num","dose_unit_ucum","frequency_code","duration_days","instructions"])}
+     ${sec("Lab results", G.lab_results, ["test_name","code","value_num","value_unit_ucum","ref_range_text","abnormal_flag"])}
+     ${sec("Diagnostic reports", G.diagnostic_reports, ["category","display","status","conclusion"])}
+     ${sec("Procedures", G.procedures, ["display","code","status","performed_time"])}
+     ${sec("Allergies", G.allergies, ["substance_display","category","criticality","clinical_status"])}
+     ${sec("Documents", G.documents, ["document_type","title","mime_type","source"])}
+     ${sec("Review items", g.review_items, ["doc_type","state","priority","n_elements","n_resolved","bundle_status","assignee"])}
+     <section><h4>ABDM FHIR bundle</h4>${ b ? `<p>${b.artifact} · <b>${b.status}</b> · validator <code>${b.validator}</code>
+       · <span class="${b.validation_ok?'ok':'bad'}">${b.validation_ok?'CONFORMS':'HAS ERRORS'}</span> · ${b.entries} entries · ${b.ig_package}</p>`
+       : '<p class="muted">no bundle yet — approve a review item</p>' }</section>
+   </div>`;
+}
+function fmtc(v){ if(v==null) return ""; if(typeof v==="object") return JSON.stringify(v).slice(0,100); return (""+v).slice(0,100); }
 
 async function refreshCounts(){
   const [wb, wl] = await Promise.all([
