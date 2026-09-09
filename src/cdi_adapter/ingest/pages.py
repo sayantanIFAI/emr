@@ -17,7 +17,13 @@ import numpy as np
 import pymupdf as fitz
 from PIL import Image
 
+from .._cpu import THREADS_PER_TASK
 from ..config import settings
+
+try:
+    cv2.setNumThreads(THREADS_PER_TASK)
+except Exception:  # noqa: BLE001
+    pass
 from ..logging import get_logger
 
 log = get_logger(__name__)

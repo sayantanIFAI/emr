@@ -7,10 +7,17 @@ from typing import Any
 import cv2
 import numpy as np
 
+from .._cpu import THREADS_PER_TASK
 from ..config import settings
 from ..logging import get_logger
 
 log = get_logger(__name__)
+
+# OpenCV keeps its own thread pool; the env var is not always honoured.
+try:
+    cv2.setNumThreads(THREADS_PER_TASK)
+except Exception:  # noqa: BLE001
+    pass
 
 _engine = None
 _lock = threading.Lock()
@@ -31,8 +38,12 @@ def _get_engine():
             if _engine is None:
                 from rapidocr_onnxruntime import RapidOCR
 
-                _engine = RapidOCR()
-                log.info("rapidocr_loaded")
+                try:
+                    _engine = RapidOCR(intra_op_num_threads=THREADS_PER_TASK,
+                                       inter_op_num_threads=1)
+                except TypeError:  # older rapidocr without the kwargs
+                    _engine = RapidOCR()
+                log.info("rapidocr_loaded", intra_op_threads=THREADS_PER_TASK)
     return _engine
 
 

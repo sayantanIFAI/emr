@@ -6,4 +6,7 @@ provenance-bound clinical facts (rows) plus validated FHIR R4 bundles (JSON),
 ABDM/ABHA-ready. The legacy database is never modified.
 """
 
+# Must run before NumPy / OpenCV / ONNXRuntime / torch import anywhere.
+from . import _cpu as _cpu  # noqa: F401,E402
+
 __version__ = "0.1.0"
