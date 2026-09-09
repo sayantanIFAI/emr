@@ -4,52 +4,154 @@
   "title": "Prescription extraction (v3)",
   "type": "object",
   "additionalProperties": true,
-  "required": ["patient", "medications", "extracted_at_confidence"],
+  "required": [
+    "medications",
+    "extracted_at_confidence"
+  ],
   "properties": {
     "patient": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "name": { "type": ["string", "null"] },
-        "mrn": { "type": ["string", "null"] },
-        "age_text": { "type": ["string", "null"] },
-        "sex": { "type": ["string", "null"], "enum": ["M", "F", "O", null] },
-        "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
-      }
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mrn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "age_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sex": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "M",
+            "F",
+            "O",
+            null
+          ]
+        },
+        "evidence": {
+          "$ref": "cdi:common.defs#/$defs/evidence"
+        }
+      },
+      "description": "patient identity as printed; may be absent/illegible on handwritten notes"
     },
-    "encounter_date": { "type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial" },
+    "encounter_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "$ref": "cdi:common.defs#/$defs/date_partial"
+    },
     "prescriber": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "name": { "type": ["string", "null"] },
-        "reg_no": { "type": ["string", "null"] },
-        "department": { "type": ["string", "null"] },
-        "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reg_no": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "department": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "$ref": "cdi:common.defs#/$defs/evidence"
+        }
       }
     },
     "diagnoses": {
       "type": "array",
-      "items": { "$ref": "cdi:common.defs#/$defs/coded" }
+      "items": {
+        "$ref": "cdi:common.defs#/$defs/coded"
+      }
     },
     "medications": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": true,
-        "required": ["drug_text"],
+        "required": [
+          "drug_text"
+        ],
         "properties": {
-          "drug_text": { "type": "string" },
-          "form": { "type": ["string", "null"] },
-          "strength": { "$ref": "cdi:common.defs#/$defs/quantity" },
-          "dose": { "$ref": "cdi:common.defs#/$defs/quantity" },
-          "route": { "type": ["string", "null"] },
-          "frequency_text": { "type": ["string", "null"], "description": "verbatim, e.g. '1-0-1', 'BD', 'HS', 'SOS'" },
-          "duration_days": { "type": ["integer", "null"] },
-          "prn": { "type": ["boolean", "null"] },
-          "instructions": { "type": ["string", "null"] },
-          "ambiguous": { "type": "boolean", "default": false, "description": "set true when a value could not be read confidently (e.g. '500?')" },
-          "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
+          "drug_text": {
+            "type": "string"
+          },
+          "form": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "strength": {
+            "$ref": "cdi:common.defs#/$defs/quantity"
+          },
+          "dose": {
+            "$ref": "cdi:common.defs#/$defs/quantity"
+          },
+          "route": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "frequency_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "verbatim, e.g. '1-0-1', 'BD', 'HS', 'SOS'"
+          },
+          "duration_days": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "prn": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "instructions": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ambiguous": {
+            "type": "boolean",
+            "default": false,
+            "description": "set true when a value could not be read confidently (e.g. '500?')"
+          },
+          "evidence": {
+            "$ref": "cdi:common.defs#/$defs/evidence"
+          }
         }
       }
     },
@@ -58,10 +160,16 @@
       "items": {
         "type": "object",
         "additionalProperties": true,
-        "required": ["text"],
+        "required": [
+          "text"
+        ],
         "properties": {
-          "text": { "type": "string" },
-          "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
+          "text": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "cdi:common.defs#/$defs/evidence"
+          }
         }
       }
     },
@@ -70,18 +178,50 @@
       "items": {
         "type": "object",
         "additionalProperties": true,
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "properties": {
-          "name": { "type": "string", "description": "e.g. 'BP', 'weight'" },
-          "value": { "$ref": "cdi:common.defs#/$defs/quantity" },
-          "systolic": { "type": ["number", "null"] },
-          "diastolic": { "type": ["number", "null"] },
-          "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
+          "name": {
+            "type": "string",
+            "description": "e.g. 'BP', 'weight'"
+          },
+          "value": {
+            "$ref": "cdi:common.defs#/$defs/quantity"
+          },
+          "systolic": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "diastolic": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "evidence": {
+            "$ref": "cdi:common.defs#/$defs/evidence"
+          }
         }
       }
     },
-    "follow_up": { "type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial" },
-    "extracted_at_confidence": { "$ref": "cdi:common.defs#/$defs/confidence" },
-    "notes_for_reviewer": { "type": ["string", "null"] }
+    "follow_up": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "$ref": "cdi:common.defs#/$defs/date_partial"
+    },
+    "extracted_at_confidence": {
+      "$ref": "cdi:common.defs#/$defs/confidence"
+    },
+    "notes_for_reviewer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
   }
 }

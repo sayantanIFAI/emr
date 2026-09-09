@@ -4,33 +4,156 @@
   "title": "Radiology / imaging / procedure report extraction (v3)",
   "type": "object",
   "additionalProperties": true,
-  "required": ["patient", "modality", "extracted_at_confidence"],
+  "required": [
+    "extracted_at_confidence"
+  ],
   "properties": {
     "patient": {
-      "type": "object", "additionalProperties": true,
+      "type": "object",
+      "additionalProperties": true,
       "properties": {
-        "name": {"type": ["string", "null"]}, "mrn": {"type": ["string", "null"]},
-        "age_text": {"type": ["string", "null"]}, "sex": {"type": ["string", "null"], "enum": ["M", "F", "O", null]},
-        "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}
-      }
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mrn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "age_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sex": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "M",
+            "F",
+            "O",
+            null
+          ]
+        },
+        "evidence": {
+          "$ref": "cdi:common.defs#/$defs/evidence"
+        }
+      },
+      "description": "patient identity as printed; may be absent/illegible on handwritten notes"
     },
-    "study_date": {"type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial"},
-    "modality": {"type": "string", "description": "USG | X-RAY | CT | MRI | ECHO | ANGIOGRAM | ENDOSCOPY | MAMMOGRAPHY | OTHER"},
-    "study_name": {"type": ["string", "null"], "description": "e.g. 'Coronary Angiogram', 'USG Whole Abdomen'"},
-    "procedure_name": {"type": ["string", "null"], "description": "the procedure performed, if this is a procedure report"},
-    "technique": {"type": ["string", "null"]},
-    "findings": {"type": ["string", "null"], "description": "the FULL Findings section verbatim, every line"},
+    "study_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "$ref": "cdi:common.defs#/$defs/date_partial"
+    },
+    "modality": {
+      "type": "string",
+      "description": "USG | X-RAY | CT | MRI | ECHO | ANGIOGRAM | ENDOSCOPY | MAMMOGRAPHY | OTHER"
+    },
+    "study_name": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "e.g. 'Coronary Angiogram', 'USG Whole Abdomen'"
+    },
+    "procedure_name": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "the procedure performed, if this is a procedure report"
+    },
+    "technique": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "findings": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "the FULL Findings section verbatim, every line"
+    },
     "findings_list": {
       "type": "array",
-      "items": {"$ref": "cdi:common.defs#/$defs/coded"},
+      "items": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "cdi:common.defs#/$defs/coded"
+          }
+        ],
+        "description": "each individual finding as its own item (e.g. 'LAD 100% ISR', 'LCX proximally 90% lesion')"
+      },
       "description": "each individual finding as its own item (e.g. 'LAD 100% ISR', 'LCX proximally 90% lesion')"
     },
-    "impression": {"type": ["string", "null"], "description": "the Impression / Conclusion section verbatim"},
-    "impression_concepts": {"type": "array", "items": {"$ref": "cdi:common.defs#/$defs/coded"}},
-    "diagnoses": {"type": "array", "items": {"$ref": "cdi:common.defs#/$defs/coded"}},
-    "advice": {"type": ["string", "null"]},
-    "reported_by": {"type": ["string", "null"]},
-    "extracted_at_confidence": {"$ref": "cdi:common.defs#/$defs/confidence"},
-    "notes_for_reviewer": {"type": ["string", "null"]}
+    "impression": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "the Impression / Conclusion section verbatim"
+    },
+    "impression_concepts": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "cdi:common.defs#/$defs/coded"
+          }
+        ]
+      }
+    },
+    "diagnoses": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "cdi:common.defs#/$defs/coded"
+          }
+        ]
+      }
+    },
+    "advice": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reported_by": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "extracted_at_confidence": {
+      "$ref": "cdi:common.defs#/$defs/confidence"
+    },
+    "notes_for_reviewer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
   }
 }

@@ -71,10 +71,11 @@ class Settings(BaseSettings):
 
     # --- throughput ---
     job_max_workers: int = 6              # documents ingested/classified/OCR'd concurrently
-    fast_classify: bool = False          # keyword classifier is opt-in; VLM classify is default
-                                         # (keyword matching mislabels real docs, e.g. a
-                                         #  prescription that mentions "Laboratory" -> lab_report)
-    extract_retries: int = 2             # VLM extraction re-tries on schema failure
+    fast_classify: bool = True           # try the scored heuristic classifier first; it only
+                                         # short-circuits the VLM on an unambiguous, cleanly
+                                         # OCR'd page - everything else still goes to the VLM
+    extract_retries: int = 1             # VLM extraction re-tries on schema failure (schemas
+                                         # were relaxed so a first-pass slip is now rare)
     extract_max_tokens: int = 1400       # base; long doc types get more (see extract/prompt.py)
 
     # --- S6 governance gate (fact -> auto_accepted | in_review) ---

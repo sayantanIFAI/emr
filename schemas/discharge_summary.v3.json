@@ -4,51 +4,175 @@
   "title": "Discharge summary extraction (v3)",
   "type": "object",
   "additionalProperties": true,
-  "required": ["patient", "extracted_at_confidence"],
+  "required": [
+    "extracted_at_confidence"
+  ],
   "properties": {
     "patient": {
-      "type": "object", "additionalProperties": true,
+      "type": "object",
+      "additionalProperties": true,
       "properties": {
-        "name": {"type": ["string", "null"]}, "mrn": {"type": ["string", "null"]},
-        "age_text": {"type": ["string", "null"]}, "sex": {"type": ["string", "null"], "enum": ["M", "F", "O", null]},
-        "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mrn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "age_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sex": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "M",
+            "F",
+            "O",
+            null
+          ]
+        },
+        "evidence": {
+          "$ref": "cdi:common.defs#/$defs/evidence"
+        }
+      },
+      "description": "patient identity as printed; may be absent/illegible on handwritten notes"
+    },
+    "admission_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "$ref": "cdi:common.defs#/$defs/date_partial"
+    },
+    "discharge_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "$ref": "cdi:common.defs#/$defs/date_partial"
+    },
+    "facility": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "diagnoses": {
+      "type": "array",
+      "items": {
+        "$ref": "cdi:common.defs#/$defs/coded"
       }
     },
-    "admission_date": {"type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial"},
-    "discharge_date": {"type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial"},
-    "facility": {"type": ["string", "null"]},
-    "diagnoses": {"type": "array", "items": {"$ref": "cdi:common.defs#/$defs/coded"}},
     "procedures": {
       "type": "array",
       "items": {
-        "type": "object", "additionalProperties": true, "required": ["name"],
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "name"
+        ],
         "properties": {
-          "name": {"type": "string"},
-          "date": {"type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial"},
-          "surgeon": {"type": ["string", "null"]},
-          "findings": {"type": ["string", "null"]},
-          "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}
+          "name": {
+            "type": "string"
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "$ref": "cdi:common.defs#/$defs/date_partial"
+          },
+          "surgeon": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "findings": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "$ref": "cdi:common.defs#/$defs/evidence"
+          }
         }
       }
     },
     "medications_on_discharge": {
       "type": "array",
       "items": {
-        "type": "object", "additionalProperties": true, "required": ["drug_text"],
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "drug_text"
+        ],
         "properties": {
-          "drug_text": {"type": "string"},
-          "strength": {"$ref": "cdi:common.defs#/$defs/quantity"},
-          "dose": {"$ref": "cdi:common.defs#/$defs/quantity"},
-          "route": {"type": ["string", "null"]},
-          "frequency_text": {"type": ["string", "null"]},
-          "duration_days": {"type": ["integer", "null"]},
-          "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}
+          "drug_text": {
+            "type": "string"
+          },
+          "strength": {
+            "$ref": "cdi:common.defs#/$defs/quantity"
+          },
+          "dose": {
+            "$ref": "cdi:common.defs#/$defs/quantity"
+          },
+          "route": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "frequency_text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_days": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "evidence": {
+            "$ref": "cdi:common.defs#/$defs/evidence"
+          }
         }
       }
     },
-    "course_summary": {"type": ["string", "null"]},
-    "follow_up": {"type": ["string", "null"]},
-    "extracted_at_confidence": {"$ref": "cdi:common.defs#/$defs/confidence"},
-    "notes_for_reviewer": {"type": ["string", "null"]}
+    "course_summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "follow_up": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "extracted_at_confidence": {
+      "$ref": "cdi:common.defs#/$defs/confidence"
+    },
+    "notes_for_reviewer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
   }
 }

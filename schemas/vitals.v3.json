@@ -4,52 +4,100 @@
   "title": "Vitals / nursing intake sheet extraction (v3)",
   "type": "object",
   "additionalProperties": true,
-  "required": ["patient", "vitals", "extracted_at_confidence"],
+  "required": [
+    "vitals",
+    "extracted_at_confidence"
+  ],
   "properties": {
     "patient": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "name": { "type": ["string", "null"] },
-        "mrn": { "type": ["string", "null"] },
-        "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
-      }
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mrn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "$ref": "cdi:common.defs#/$defs/evidence"
+        }
+      },
+      "description": "patient identity as printed; may be absent/illegible on handwritten notes"
     },
-    "recorded_at": { "type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial" },
+    "recorded_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "$ref": "cdi:common.defs#/$defs/date_partial"
+    },
     "vitals": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": true,
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "properties": {
           "name": {
             "type": "string",
             "description": "one of: systolic_bp, diastolic_bp, heart_rate, resp_rate, temperature, spo2, weight, height, bmi, pain_score"
           },
-          "value": { "$ref": "cdi:common.defs#/$defs/quantity" },
-          "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
+          "value": {
+            "$ref": "cdi:common.defs#/$defs/quantity"
+          },
+          "evidence": {
+            "$ref": "cdi:common.defs#/$defs/evidence"
+          }
         }
       }
     },
     "symptoms": {
       "type": "array",
-      "items": { "$ref": "cdi:common.defs#/$defs/coded" }
+      "items": {
+        "$ref": "cdi:common.defs#/$defs/coded"
+      }
     },
     "allergies": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": true,
-        "required": ["substance_text"],
+        "required": [
+          "substance_text"
+        ],
         "properties": {
-          "substance_text": { "type": "string" },
-          "reaction_text": { "type": ["string", "null"] },
-          "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
+          "substance_text": {
+            "type": "string"
+          },
+          "reaction_text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "$ref": "cdi:common.defs#/$defs/evidence"
+          }
         }
       }
     },
-    "extracted_at_confidence": { "$ref": "cdi:common.defs#/$defs/confidence" },
-    "notes_for_reviewer": { "type": ["string", "null"] }
+    "extracted_at_confidence": {
+      "$ref": "cdi:common.defs#/$defs/confidence"
+    },
+    "notes_for_reviewer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
   }
 }
