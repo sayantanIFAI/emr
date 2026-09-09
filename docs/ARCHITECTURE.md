@@ -328,6 +328,15 @@ persisted, exception re-raised.
 
 ### S2 — Classify · `cdi_adapter.classify`
 
+> **Bug fixed (2026-09-09).** A "fast keyword classifier" (opt-in, `config.fast_classify`)
+> matched the substring *"Laboratory"* / *"lab"* in a real Apollo-Clinic
+> **prescription** and labelled it `lab_report`. The extractor was then handed the
+> `lab_report` schema — which has no `medications` field — and captured only the
+> one "BP 150/80" line; all 10 drugs were lost. **`fast_classify` is now OFF by
+> default**; the VLM classifier (which labelled the other real images correctly at
+> 0.90 / 0.95) is the default.
+
+
 - `_ocr_hint(page1)` — a fast RapidOCR pass on the full first-page image → top ~25
   lines of text, wrapped in `<<<OCR_SAMPLE>>>…<<<END_OCR_SAMPLE>>>`. Grounds the VLM
   and makes the stub deterministic. Best-effort; `None` if the engine is absent.
@@ -353,6 +362,23 @@ persisted, exception re-raised.
 - One `pipeline_run(stage='ocr')`; `delete_ocr_blocks_for_document` first
   (idempotent re-run); bulk `insert_ocr_blocks`; `status='ocr_done'`; audit; enqueue S4.
 - Observed: printed lab report → 23–39 blocks, line confidences 0.94–1.00.
+
+### Patient registry — look up an existing patient first · `cdi_adapter.mpi.registry`
+
+`patient_registry` (migration 0003, seeded with 4 dummy patients) is the clinic's
+own master list: `patient_id` (CareFlow id), `name`, `mobile`, `dob`, `gender`,
+`address`, `abha_id`; the composite key is `(mobile, lower(name), dob)`.
+
+- **`GET /api/registry/lookup?q=`** resolves an existing patient by **CareFlow id
+  / ABHA id / mobile** (digits-only match, tolerant of dashes/spaces).
+- When the upload form's lookup matches, `create_job(patient_ref=…)` calls
+  `registry.ensure_identity` (creates the `patient_identity` row from the registry
+  data if it doesn't exist yet) and **all documents attach to that patient** —
+  document-driven identity resolution is skipped, no new CareFlow id is minted.
+- For a **new** patient the flow is unchanged (identity read from the documents,
+  `CFP-<YYYY>-<seq>` minted). After processing, the UI shows a **"Complete patient
+  details"** form; **`POST /api/registry`** persists `mobile / address / abha …`
+  so the patient is found by lookup next time.
 
 ### Identity — MPI, fetched from the documents · `cdi_adapter.mpi`
 
@@ -387,8 +413,17 @@ Das", sex M, DOB 1978-01-01, `identity_confidence 0.99`.
   (also operative_note), `radiology.v3`. Unknown type → skip, `status='normalized'`.
 - `build_extraction_prompt(doc_type, ocr_blocks)` presents blocks as `[b1] text …`,
   `[b2] …`; `block_id_map` maps `bN → ocr_block uuid`.
-- `client.vlm_json(page1_image, prompt, schema, max_tokens=1600)` — with repair +
-  `_partial` fallback (see §3.4). Payload stored verbatim in `extraction`.
+- `client.vlm_json(image, prompt, schema, max_tokens=max_tokens_for(doc_type),
+  retries=2)` — with repair + `_partial` fallback (see §3.4). **Per-doc-type token
+  budget** (prescription / discharge 2600, opd 2400, lab 2000, …) plus doc-type
+  guidance ("list EVERY medication line — 5–15 drugs — don't stop early") so long
+  list-heavy documents are captured in full. Payload stored verbatim in `extraction`.
+- **Schemas relaxed** so real VLM output validates cleanly (far fewer `_partial`):
+  `evidence` is optional (`minItems 0`, dropped from every `required`); `quantity`
+  accepts a bare number/string (`"value": 150`); list-item objects allow
+  `additionalProperties`. Same 10-drug prescription that previously yielded **1
+  fact now yields 16** (10 medications + 3 conditions + 2 vitals + advice), with
+  `_partial = false`.
 - **Identity & encounter**: `patient_id` is passed in by the web-app job (created
   once from the form); otherwise `get_or_create_patient` from the payload's
   `patient` block / legacy MRN. One `encounter` per document, class `IMP` for
