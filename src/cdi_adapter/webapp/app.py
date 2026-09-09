@@ -18,9 +18,12 @@ from . import review as review_svc
 from .jobs import apply_edits_and_generate, create_job, get_job, job_facts
 from .page import PAGE
 from .review_page import REVIEW_PAGE
+from .reviewer import router as reviewer_router
+from .reviewer_page import REVIEWER_PAGE
 
 log = get_logger(__name__)
 app = FastAPI(title="CDI-Adapter - scanned docs -> ABDM FHIR", version=__version__)
+app.include_router(reviewer_router)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -145,6 +148,11 @@ def job_fhir_download(job_id: str) -> Response:
 @app.get("/review", response_class=HTMLResponse)
 def review_index() -> str:
     return REVIEW_PAGE
+
+
+@app.get("/reviewer", response_class=HTMLResponse)
+def reviewer_index() -> str:
+    return REVIEWER_PAGE
 
 
 @app.get("/api/review/tasks")

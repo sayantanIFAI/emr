@@ -302,6 +302,12 @@ def _run_job(jid: str, files: list[tuple[str, bytes]]) -> None:
 
         job.state = "review" if any(d.status == "done" for d in job.docs) else "error"
         _refresh_result(job)
+        if job.state == "review":
+            try:
+                from .reviewer import seed_from_job
+                seed_from_job(job)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("seed_from_job_failed", job=jid, error=str(exc)[:200])
     except Exception as exc:  # noqa: BLE001
         job.state = "error"
         job.error = str(exc)[:500]
