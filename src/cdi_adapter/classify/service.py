@@ -5,9 +5,10 @@ from typing import Any
 from uuid import UUID
 
 from .. import repo, storage
+from ..config import settings
 from ..db import session_scope
 from ..logging import get_logger
-from ..ml.client import MLError, get_client
+from ..ml.client import MLError, _stub_classify, get_client
 from .prompt import CLASSIFICATION_SCHEMA, build_classification_prompt
 
 log = get_logger(__name__)
@@ -37,17 +38,27 @@ def classify_document(document_id: str) -> ClassifyResult:
             model_name="mlserve/vlm", params={"schema": "classification.v1"},
         )
 
-    page1_key = storage.key_from_uri(pages[0]["image_uri"])
-    image = storage.get_bytes(page1_key)
-    prompt = build_classification_prompt(n_pages=len(pages), page_hint=_ocr_hint(pages[0]))
+    hint = _ocr_hint(pages[0])
+    prompt = build_classification_prompt(n_pages=len(pages), page_hint=hint)
+    used_model = "mlserve/vlm"
 
-    try:
-        obj: dict[str, Any] = client.vlm_json(image, prompt, CLASSIFICATION_SCHEMA, max_tokens=500)
-    except MLError as exc:
-        with session_scope() as sess:
-            repo.finish_pipeline_run(sess, run_id, status="failed", error_detail=str(exc)[:400])
-            repo.set_document_status(sess, document_id, "error", error_detail=f"classify: {exc}")
-        raise
+    obj: dict[str, Any] | None = None
+    # fast path: keyword classify on the OCR text, skip the VLM when unambiguous
+    if settings.fast_classify and hint:
+        kw = _stub_classify(prompt)
+        if kw.get("doc_type") and kw["doc_type"] != "other":
+            obj = kw
+            used_model = "fast/keyword"
+
+    if obj is None:
+        image = storage.get_bytes(storage.key_from_uri(pages[0]["image_uri"]))
+        try:
+            obj = client.vlm_json(image, prompt, CLASSIFICATION_SCHEMA, max_tokens=500)
+        except MLError as exc:
+            with session_scope() as sess:
+                repo.finish_pipeline_run(sess, run_id, status="failed", error_detail=str(exc)[:400])
+                repo.set_document_status(sess, document_id, "error", error_detail=f"classify: {exc}")
+            raise
 
     doc_type = obj["doc_type"]
     is_hw = bool(obj["is_handwritten"])
@@ -68,7 +79,8 @@ def classify_document(document_id: str) -> ClassifyResult:
         )
         repo.finish_pipeline_run(
             sess, run_id, status="ok",
-            metrics={"doc_type": doc_type, "handwritten": is_hw, "confidence": conf},
+            metrics={"doc_type": doc_type, "handwritten": is_hw, "confidence": conf,
+                     "via": used_model},
         )
         repo.set_document_status(sess, document_id, "classified")
         repo.write_audit(

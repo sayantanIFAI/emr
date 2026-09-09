@@ -375,7 +375,9 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
     image = storage.get_bytes(storage.key_from_uri(pages[0]["image_uri"]))
 
     try:
-        payload = client.vlm_json(image, prompt, schema, max_tokens=1600)
+        payload = client.vlm_json(image, prompt, schema,
+                                  max_tokens=settings.extract_max_tokens,
+                                  retries=settings.extract_retries)
     except MLError as exc:
         with session_scope() as sess:
             repo.finish_pipeline_run(sess, run_id, status="failed", error_detail=str(exc)[:400])

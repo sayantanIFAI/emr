@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     ocr_min_conf: float = 0.30
     handwritten_uses_vlm: bool = True
 
+    # --- throughput ---
+    job_max_workers: int = 6              # documents ingested/classified/OCR'd concurrently
+    fast_classify: bool = True           # keyword classifier on OCR text; VLM only when ambiguous
+    extract_retries: int = 1             # VLM extraction re-tries on schema failure (was 2)
+    extract_max_tokens: int = 1100
+
     # --- S6 governance gate (fact -> auto_accepted | in_review) ---
     gate_auto_accept_conf: float = 0.985  # >= this AND clean -> auto_accepted
     gate_audit_conf: float = 0.95         # >= this AND clean -> auto_accepted + audit sample

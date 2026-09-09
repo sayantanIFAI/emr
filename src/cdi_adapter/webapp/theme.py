@@ -173,6 +173,54 @@ pre.json{background:#0d1836;color:#dce7ff;border-radius:10px;padding:12px;overfl
 .muted{color:var(--muted)} .err-txt{color:var(--err)}
 .empty{color:var(--muted);text-align:center;padding:22px}
 
+/* page title */
+.cf-pagetitle{max-width:1000px;margin:0 auto;padding:20px 24px 4px}
+.cf-pagetitle h1{margin:0;font-size:var(--fs-20);font-weight:700;letter-spacing:.2px}
+.cf-pagetitle .cf-sub{margin-top:3px}
+
+/* Generate EMR — stage tabs + grid */
+.emr-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 14px}
+.emr-tab{display:flex;align-items:center;gap:7px;padding:7px 12px;border:1px solid var(--line);
+  border-radius:var(--r-pill);font-size:var(--fs-13);font-weight:600;color:var(--muted);
+  background:var(--surface-2);cursor:default}
+.emr-tab.active{color:var(--blue-700);background:var(--blue-50);border-color:var(--blue-100)}
+.emr-tab.done{color:var(--ok);background:var(--ok-bg);border-color:var(--ok-line)}
+.emr-tab .dot{width:8px;height:8px;border-radius:50%;background:currentColor;opacity:.55}
+.emr-tab.done .dot{opacity:1}
+
+.emr-grid{width:100%;border-collapse:collapse;font-size:var(--fs-13)}
+.emr-grid th{font-size:var(--fs-12);color:var(--muted);font-weight:600;text-align:center;padding:6px 4px}
+.emr-grid th.doc{text-align:left}
+.emr-grid td{padding:8px 4px;border-top:1px solid var(--line);text-align:center;vertical-align:middle}
+.emr-grid td.doc{text-align:left}
+.emr-grid td.doc .fn{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px}
+.emr-grid td.doc .sub{color:var(--muted);font-size:var(--fs-12)}
+.cell{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:7px}
+.cell.pending{color:var(--faint)}
+.cell.running{color:var(--blue-600)}
+.cell.done{color:var(--ok);background:var(--ok-bg)}
+.cell.error{color:var(--err);background:var(--err-bg)}
+.tick{width:15px;height:15px}
+
+/* inline extraction editor: image left, table right */
+.editor{display:grid;grid-template-columns:minmax(300px,460px) 1fr;gap:20px;align-items:start}
+.editor .scan{position:sticky;top:70px}
+.editor .imgwrap{width:100%}
+.doc-switch{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.doc-switch button{padding:6px 12px;border:1px solid var(--line);border-radius:var(--r-pill);
+  background:var(--surface-2);font-size:var(--fs-13);font-weight:600;color:var(--muted);cursor:pointer}
+.doc-switch button.active{color:var(--blue-700);background:var(--blue-50);border-color:var(--blue-100)}
+.ftable{width:100%;border-collapse:collapse;font-size:var(--fs-13)}
+.ftable th{font-size:var(--fs-12);color:var(--muted);font-weight:600;text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+.ftable td{padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.ftable tr.drop{opacity:.4;text-decoration:line-through}
+.ftable tr:hover td{background:var(--blue-tint)}
+.ftable input[type=text]{padding:5px 7px;font-size:var(--fs-13);border-radius:7px}
+.ftable input.sm{width:70px}
+.ftable .conf{font-size:var(--fs-12);color:var(--muted)}
+.chk{width:16px;height:16px;accent-color:var(--blue-600);cursor:pointer}
+@media (max-width:860px){.editor{grid-template-columns:1fr}.editor .scan{position:static}}
+
 /* review console */
 .rv-wrap{display:grid;grid-template-columns:minmax(320px,600px) 1fr;gap:0;min-height:calc(100vh - 58px)}
 .rv-list{border-right:1px solid var(--line);overflow:auto;padding:16px;background:var(--surface)}

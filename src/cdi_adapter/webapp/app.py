@@ -15,7 +15,7 @@ from ..logging import get_logger
 from ..ml.client import get_client
 from ..storage import ping as s3_ping
 from . import review as review_svc
-from .jobs import create_job, get_job
+from .jobs import apply_edits_and_generate, create_job, get_job, job_facts
 from .page import PAGE
 from .review_page import REVIEW_PAGE
 
@@ -70,6 +70,26 @@ def job_status(job_id: str) -> dict[str, Any]:
     if not job:
         raise HTTPException(404, "unknown job")
     return job.public()
+
+
+@app.get("/api/jobs/{job_id}/facts")
+def job_facts_endpoint(job_id: str) -> Any:
+    """Extracted facts per document for the inline human editor (image left, table right)."""
+    try:
+        return JSONResponse(job_facts(job_id))
+    except KeyError:
+        raise HTTPException(404, "unknown job or no patient resolved yet") from None
+
+
+@app.post("/api/jobs/{job_id}/generate")
+def job_generate(job_id: str, body: dict[str, Any] = Body(default={})) -> Any:
+    """Apply the editor's keep/edit/drop decisions, then build the FHIR bundles (ms)."""
+    edits = (body or {}).get("edits") or []
+    reviewer = (body or {}).get("reviewer") or "reviewer"
+    try:
+        return JSONResponse(apply_edits_and_generate(job_id, edits, reviewer))
+    except KeyError:
+        raise HTTPException(404, "unknown job") from None
 
 
 @app.get("/api/jobs/{job_id}/fhir")

@@ -4,30 +4,33 @@ import threading
 import time
 import traceback
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any
 
 from .. import repo
 from ..classify.service import classify_document
+from ..config import settings
 from ..db import session_scope
 from ..extract.service import extract_document
 from ..fhir.service import project_patient
 from ..ingest.service import ingest_bytes
 from ..logging import get_logger
-from ..mpi.service import IdentityCandidate, merge_identity_evidence
+from ..mpi.service import IdentityCandidate, merge_identity_evidence, parse_age, parse_dob
 from ..ocr.service import ocr_document
 from ..terminology.service import bind_document
 from ..validate.service import validate_document
 
 log = get_logger(__name__)
 
-# one worker: the VLM gateway is single-GPU, serialise pipeline runs
-_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cdi-job")
+STAGES = ["ingest", "classify", "ocr", "extract", "terminology", "validate"]
+
+# CPU-bound stages (ingest / fast-classify / OCR) run for every document at once;
+# the GPU extract stage is serialised (single VLM), so no document sits "queued".
+_pool = ThreadPoolExecutor(max_workers=max(2, settings.job_max_workers),
+                           thread_name_prefix="cdi-job")
 _jobs: dict[str, "Job"] = {}
 _lock = threading.Lock()
-
-_STEPS = ["ingest", "classify", "ocr", "extract", "terminology", "validate"]
 
 
 @dataclass
@@ -36,11 +39,17 @@ class DocProg:
     document_id: str | None = None
     doc_type: str | None = None
     status: str = "queued"          # queued|running|done|error
-    step: str | None = None
     facts: int = 0
     accepted: int = 0
     in_review: int = 0
     error: str | None = None
+    stages: dict[str, str] = field(
+        default_factory=lambda: {s: "pending" for s in STAGES})
+    t0: float = field(default_factory=time.time)
+    seconds: float | None = None
+
+    def stage(self, name: str, state: str) -> None:
+        self.stages[name] = state
 
 
 @dataclass
@@ -48,8 +57,8 @@ class Job:
     id: str
     abha: str | None
     patient_id: str | None = None
-    patient: dict[str, Any] | None = None      # {mpi_id, name, sex, birth_date, ...}
-    state: str = "queued"          # queued|running|done|error
+    patient: dict[str, Any] | None = None
+    state: str = "queued"          # queued|running|review|generating|done|error
     created: float = field(default_factory=time.time)
     docs: list[DocProg] = field(default_factory=list)
     error: str | None = None
@@ -62,10 +71,13 @@ class Job:
             "patient_id": self.patient_id,
             "patient": self.patient or (self.result or {}).get("patient"),
             "error": self.error,
+            "stages": STAGES,
             "documents": [
                 {"filename": d.filename, "document_id": d.document_id, "doc_type": d.doc_type,
-                 "status": d.status, "step": d.step, "facts": d.facts,
-                 "accepted": d.accepted, "in_review": d.in_review, "error": d.error}
+                 "status": d.status, "stages": d.stages, "facts": d.facts,
+                 "accepted": d.accepted, "in_review": d.in_review,
+                 "seconds": round(d.seconds, 1) if d.seconds else None,
+                 "error": d.error}
                 for d in self.docs
             ],
             "artifact_count": (self.result or {}).get("artifact_count"),
@@ -90,79 +102,209 @@ def get_job(jid: str) -> Job | None:
     return _jobs.get(jid)
 
 
+# --------------------------------------------------------------------------- #
+def _stage1(prog: DocProg, fn: str, raw: bytes, abha: str | None) -> None:
+    """ingest -> classify (fast) -> OCR.  CPU-bound; runs in parallel per document."""
+    try:
+        prog.status = "running"
+        prog.stage("ingest", "running")
+        res = ingest_bytes(raw, filename=fn, source_channel="webapp", legacy_patient_ref=abha)
+        prog.document_id = res.document_id
+        prog.stage("ingest", "done")
+
+        prog.stage("classify", "running")
+        c = classify_document(res.document_id)
+        prog.doc_type = c.doc_type
+        prog.stage("classify", "done")
+
+        prog.stage("ocr", "running")
+        ocr_document(res.document_id)
+        prog.stage("ocr", "done")
+    except Exception as exc:  # noqa: BLE001
+        prog.status = "error"
+        prog.error = str(exc)[:400]
+        for s in STAGES:
+            if prog.stages[s] == "running":
+                prog.stage(s, "error")
+        raise
+
+
+def _stage2(job: "Job", prog: DocProg,
+            candidates: list[IdentityCandidate]) -> None:
+    """extract (GPU) -> terminology -> validate.  Serialised across documents."""
+    if prog.status == "error" or not prog.document_id:
+        return
+    try:
+        prog.stage("extract", "running")
+        ex = extract_document(prog.document_id, patient_id=job.patient_id, abha_hint=job.abha)
+        prog.facts = ex.n_facts
+        if ex.patient_id and not job.patient_id:
+            job.patient_id = ex.patient_id
+        if ex.identity:
+            i = ex.identity
+            _age_y, bd_age = parse_age(i.get("age_years"))
+            candidates.append(IdentityCandidate(
+                name_full=i.get("name"), sex=i.get("sex"), age_years=i.get("age_years"),
+                birth_date=parse_dob(i.get("birth_date")) or bd_age,
+                abha=job.abha, source_doc_id=prog.document_id))
+            job.patient = {"mpi_id": ex.mpi_id, "name": i.get("name"), "sex": i.get("sex"),
+                           "birth_date": i.get("birth_date"), "age_years": i.get("age_years"),
+                           "abha_number": job.abha, "provisional": True}
+        prog.stage("extract", "done")
+
+        prog.stage("terminology", "running")
+        bind_document(prog.document_id)
+        prog.stage("terminology", "done")
+
+        prog.stage("validate", "running")
+        v = validate_document(prog.document_id)
+        prog.accepted, prog.in_review = v.auto_accepted, v.in_review
+        prog.stage("validate", "done")
+
+        prog.status = "done"
+        prog.seconds = time.time() - prog.t0
+    except Exception as exc:  # noqa: BLE001
+        prog.status = "error"
+        prog.error = str(exc)[:400]
+        for s in STAGES:
+            if prog.stages[s] == "running":
+                prog.stage(s, "error")
+        log.error("job_doc_failed", job=job.id, file=prog.filename,
+                  error=str(exc)[:300], tb=traceback.format_exc()[-700:])
+
+
 def _run_job(jid: str, files: list[tuple[str, bytes]]) -> None:
     job = _jobs[jid]
     job.state = "running"
     candidates: list[IdentityCandidate] = []
     try:
-        for prog, (fn, raw) in zip(job.docs, files):
-            prog.status = "running"
+        # --- phase 1: ingest + classify + OCR for every document, concurrently ---
+        futs = [_pool.submit(_stage1, prog, fn, raw, job.abha)
+                for prog, (fn, raw) in zip(job.docs, files)]
+        for f in as_completed(futs):
             try:
-                prog.step = "ingest"
-                res = ingest_bytes(raw, filename=fn, source_channel="webapp",
-                                   legacy_patient_ref=job.abha)
-                prog.document_id = res.document_id
+                f.result()
+            except Exception:  # noqa: BLE001  (already recorded on the DocProg)
+                pass
 
-                prog.step = "classify"
-                c = classify_document(res.document_id)
-                prog.doc_type = c.doc_type
+        # --- phase 2: extract + terminology + validate, serial on the single GPU ---
+        for prog in job.docs:
+            _stage2(job, prog, candidates)
 
-                prog.step = "ocr"
-                ocr_document(res.document_id)
-
-                prog.step = "extract"
-                # first doc: no patient yet -> MPI resolves/creates it from the doc
-                ex = extract_document(
-                    res.document_id, patient_id=job.patient_id, abha_hint=job.abha,
-                )
-                prog.facts = ex.n_facts
-                if ex.patient_id and not job.patient_id:
-                    job.patient_id = ex.patient_id
-                if ex.identity:
-                    i = ex.identity
-                    from ..mpi.service import parse_age, parse_dob
-                    age_y, bd_age = parse_age(i.get("age_years"))
-                    bd = parse_dob(i.get("birth_date")) or bd_age
-                    candidates.append(IdentityCandidate(
-                        name_full=i.get("name"), sex=i.get("sex"),
-                        age_years=i.get("age_years"), birth_date=bd,
-                        abha=job.abha, source_doc_id=res.document_id,
-                    ))
-                    job.patient = {"mpi_id": ex.mpi_id, "name": i.get("name"),
-                                   "sex": i.get("sex"), "birth_date": i.get("birth_date"),
-                                   "age_years": i.get("age_years"), "abha_number": job.abha,
-                                   "provisional": True}
-
-                prog.step = "terminology"
-                bind_document(res.document_id)
-
-                prog.step = "validate"
-                v = validate_document(res.document_id)
-                prog.accepted = v.auto_accepted
-                prog.in_review = v.in_review
-
-                prog.step = None
-                prog.status = "done"
-            except Exception as exc:  # noqa: BLE001
-                prog.status = "error"
-                prog.error = str(exc)[:400]
-                log.error("job_doc_failed", job=jid, file=fn, error=str(exc)[:300],
-                          tb=traceback.format_exc()[-800:])
-
+        # --- phase 3: finalise identity ---
         if job.patient_id and candidates:
             with session_scope() as sess:
                 job.patient = merge_identity_evidence(sess, job.patient_id, candidates)
 
-        if job.patient_id:
-            job.result = project_patient(job.patient_id)
-            with session_scope() as sess:
-                job.result["review_open"] = len(
-                    repo.list_review_tasks(sess, patient_id=job.patient_id))
-        else:
-            job.result = {"patient": None, "bundles": [], "artifact_count": 0,
-                          "ready_to_share": 0, "needs_review": 0}
-        job.state = "done" if any(d.status == "done" for d in job.docs) else "error"
+        job.state = "review" if any(d.status == "done" for d in job.docs) else "error"
+        _refresh_result(job)
     except Exception as exc:  # noqa: BLE001
         job.state = "error"
         job.error = str(exc)[:500]
         log.error("job_failed", job=jid, error=str(exc)[:400], tb=traceback.format_exc()[-1000:])
+
+
+def _refresh_result(job: "Job") -> None:
+    if not job.patient_id:
+        job.result = {"patient": None, "bundles": [], "artifact_count": 0,
+                      "ready_to_share": 0, "needs_review": 0}
+        return
+    job.result = project_patient(job.patient_id)
+    with session_scope() as sess:
+        job.result["review_open"] = len(repo.list_review_tasks(sess, patient_id=job.patient_id))
+
+
+# --------------------------------------------------------------------------- #
+def job_facts(jid: str) -> dict[str, Any]:
+    """All extracted facts for a job, grouped by document, for the inline editor."""
+    job = _jobs.get(jid)
+    if not job or not job.patient_id:
+        raise KeyError(jid)
+    out_docs = []
+    with session_scope() as sess:
+        prow = sess.execute(
+            __import__("sqlalchemy").text("SELECT * FROM patient_identity WHERE id=:i"),
+            {"i": job.patient_id}).mappings().first()
+        for prog in job.docs:
+            if not prog.document_id:
+                continue
+            facts = repo.list_clinical_facts(sess, document_id=prog.document_id)
+            pages = repo.list_document_pages(sess, prog.document_id)
+            img = (f"api/documents/{prog.document_id}/pages/{pages[0]['page_no']}"
+                   if pages else None)
+            rows = []
+            for f in facts:
+                if f["review_state"] in ("rejected",) or not f["is_current"]:
+                    continue
+                prov = repo.get_fact_provenance(sess, f["id"])
+                bbox = next((list(p["bbox_union"]) for p in prov if p.get("bbox_union")), None)
+                md = (repo.get_medication_detail(sess, f["id"])
+                      if f["fact_type"] == "medication" else None)
+                rows.append({
+                    "fact_id": str(f["id"]), "fact_type": f["fact_type"],
+                    "text": f["local_text"],
+                    "value_num": float(f["value_num"]) if f["value_num"] is not None else None,
+                    "value_unit_ucum": f["value_unit_ucum"], "value_text": f["value_text"],
+                    "code_system": f["code_system"], "code": f["code"],
+                    "code_display": f["code_display"], "code_status": f["code_status"],
+                    "abnormal_flag": f["abnormal_flag"],
+                    "confidence": float(f["confidence_overall"] or 0),
+                    "review_state": f["review_state"],
+                    "medication": ({"dose": md.get("dose_num") or md.get("strength_num"),
+                                    "unit": md.get("dose_unit_ucum") or md.get("strength_unit"),
+                                    "freq": md.get("frequency_code"),
+                                    "route": md.get("route")} if md else None),
+                    "bbox": bbox, "page_width": pages[0]["width_px"] if pages else None,
+                    "page_height": pages[0]["height_px"] if pages else None,
+                })
+            out_docs.append({"document_id": prog.document_id, "filename": prog.filename,
+                             "doc_type": prog.doc_type, "page_image_url": img,
+                             "seconds": round(prog.seconds, 1) if prog.seconds else None,
+                             "facts": rows})
+    patient = {
+        "mpi_id": prow["mpi_id"] if prow else None,
+        "name": (prow.get("name_full") if prow else None),
+        "sex": prow.get("gender") if prow else None,
+        "birth_date": str(prow["birth_date"])[:10] if prow and prow.get("birth_date") else None,
+        "age_years": prow.get("age_years") if prow else None,
+        "abha_number": prow.get("abha_number") if prow else None,
+        "identity_confidence": (float(prow["identity_confidence"])
+                                if prow and prow.get("identity_confidence") is not None else None),
+    }
+    return {"job_id": jid, "state": job.state, "patient": patient, "documents": out_docs}
+
+
+def apply_edits_and_generate(jid: str, edits: list[dict[str, Any]],
+                             reviewer: str = "reviewer") -> dict[str, Any]:
+    """Bulk-apply the editor's decisions, then re-project the FHIR bundles (ms)."""
+    from . import review as review_svc
+
+    job = _jobs.get(jid)
+    if not job or not job.patient_id:
+        raise KeyError(jid)
+    job.state = "generating"
+    t0 = time.time()
+    applied = {"keep": 0, "correct": 0, "drop": 0}
+    for e in edits:
+        fid = e.get("fact_id")
+        if not fid:
+            continue
+        action = (e.get("action") or "keep").lower()
+        try:
+            if action == "drop":
+                review_svc.submit_decision(fid, "reject", reviewer=reviewer)
+                applied["drop"] += 1
+            elif e.get("corrections"):
+                review_svc.submit_decision(fid, "correct", reviewer=reviewer,
+                                           corrections=e["corrections"])
+                applied["correct"] += 1
+            else:
+                review_svc.submit_decision(fid, "accept", reviewer=reviewer)
+                applied["keep"] += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning("edit_apply_failed", fact=fid, error=str(exc)[:150])
+    _refresh_result(job)
+    job.state = "done"
+    ms = int((time.time() - t0) * 1000)
+    log.info("bundles_generated", job=jid, applied=applied, ms=ms)
+    return {**job.result, "applied": applied, "generate_ms": ms}
