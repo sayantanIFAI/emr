@@ -215,6 +215,21 @@ def _refresh_result(job: "Job") -> None:
 
 
 # --------------------------------------------------------------------------- #
+def _num(x: Any) -> float | None:
+    try:
+        return float(x) if x is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _med(md: dict[str, Any]) -> dict[str, Any]:
+    return {"dose": _num(md.get("dose_num") or md.get("strength_num")),
+            "unit": md.get("dose_unit_ucum") or md.get("strength_unit"),
+            "freq": md.get("frequency_code"),
+            "freq_per_day": _num(md.get("frequency_per_day")),
+            "route": md.get("route")}
+
+
 def job_facts(jid: str) -> dict[str, Any]:
     """All extracted facts for a job, grouped by document, for the inline editor."""
     job = _jobs.get(jid)
@@ -250,10 +265,7 @@ def job_facts(jid: str) -> dict[str, Any]:
                     "abnormal_flag": f["abnormal_flag"],
                     "confidence": float(f["confidence_overall"] or 0),
                     "review_state": f["review_state"],
-                    "medication": ({"dose": md.get("dose_num") or md.get("strength_num"),
-                                    "unit": md.get("dose_unit_ucum") or md.get("strength_unit"),
-                                    "freq": md.get("frequency_code"),
-                                    "route": md.get("route")} if md else None),
+                    "medication": (_med(md) if md else None),
                     "bbox": bbox, "page_width": pages[0]["width_px"] if pages else None,
                     "page_height": pages[0]["height_px"] if pages else None,
                 })
