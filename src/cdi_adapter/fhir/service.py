@@ -18,7 +18,7 @@ log = get_logger(__name__)
 
 _MODEL_STACK = {"classifier": "qwen2.5-vl-7b", "ocr": "rapidocr", "extractor": "qwen2.5-vl-7b",
                 "terminology": "seed-v1", "projector": "deterministic"}
-_MAX_INLINE_BYTES = 12 * 1024 * 1024
+_MAX_INLINE_BYTES = 700 * 1024   # inline small scans; larger -> DocumentReference.url (fast re-generate)
 
 
 def _obs_category(f: dict[str, Any]) -> str:

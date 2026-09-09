@@ -148,6 +148,17 @@ def review_decision(fact_id: str, body: dict[str, Any] = Body(...)) -> dict[str,
         raise HTTPException(422, str(exc)) from exc
 
 
+@app.get("/api/documents/{document_id}/original")
+def document_original(document_id: str) -> Response:
+    with session_scope() as sess:
+        doc = repo.get_document(sess, document_id)
+    if not doc:
+        raise HTTPException(404, "document not found")
+    key = storage.key_from_uri(doc["object_uri"])
+    return Response(content=storage.get_bytes(key),
+                    media_type=doc.get("mime_type") or "application/pdf")
+
+
 @app.get("/api/documents/{document_id}/pages/{page_no}")
 def document_page_image(document_id: str, page_no: int) -> Response:
     with session_scope() as sess:

@@ -278,7 +278,7 @@ def document_reference(doc_row: dict[str, Any], urn: str, patient_ref: str,
     if b64:
         att["data"] = b64
     else:
-        att["url"] = doc_row.get("object_uri")
+        att["url"] = f"/api/documents/{doc_row['id']}/original"
     return {
         "resourceType": "DocumentReference",
         "id": urn.split(":")[-1],
