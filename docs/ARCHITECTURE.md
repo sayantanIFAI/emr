@@ -590,19 +590,38 @@ the generated `CFP-…` id, name, sex, DOB and identity confidence.
 `GET /api/jobs/{id}/fhir` re-runs `project_patient` **live** each call, so it always
 reflects the latest review decisions.
 
-### 7.2 Job model (`webapp/jobs.py`)
+### 7.2 Job model (`webapp/jobs.py`) — parallel, then human-edit, then generate
 
-- `ThreadPoolExecutor(max_workers=1)` — the GPU/gateway is single, so pipeline runs
-  are serialized. Job state is an in-memory `Job`/`DocProg` dataclass; the durable
-  record is the DB rows.
-- `_run_job`: create/lookup patient from the form → for each file
-  `ingest_bytes → classify_document → ocr_document → extract_document(patient_id=…)
-  → bind_document`; a per-document failure is captured on that `DocProg` and the
-  job continues → finally `project_patient(pid)` → `job.result`.
-- The page polls `GET /api/jobs/{id}` every 1.5 s and renders progress; on
-  completion it fetches `/fhir` and renders, per bundle: a facts table
-  (Resource / Concept / Code system+code / Value), a "Copy this bundle" button, and
-  the pretty-printed JSON; plus "Download all JSON".
+- **Phase 1 (parallel).** `ThreadPoolExecutor(max_workers=job_max_workers, default 6)` —
+  every document runs `ingest → classify → OCR` concurrently. `classify` uses a
+  **fast keyword classifier** on the OCR text (`config.fast_classify`) and only
+  calls the VLM when the type is ambiguous — no VLM call for a normal prescription /
+  lab report / vitals sheet.
+- **Phase 2 (serial).** `extract → terminology → validate` per document, serialised
+  on the single GPU. Extract uses one retry and a smaller token budget
+  (`config.extract_retries=1`, `extract_max_tokens=1100`). No document ever shows
+  "queued" — the grid shows each cell `pending → running → done`.
+- The job then stops at **`state = review`** (it does **not** auto-project).
+- **`GET /api/jobs/{id}/facts`** → every fact grouped by document, each with the
+  page-image URL and its evidence `bbox` — the inline editor renders the **scanned
+  image on the left, an editable fact table on the right** (Type / Text / Value /
+  Unit / Code; untick a row to drop it; row hover highlights the bbox on the scan).
+- **`POST /api/jobs/{id}/generate`** `{edits:[{fact_id, action:keep|drop, corrections?}]}` —
+  applies the reviewer's decisions (`keep`→`clinician_confirmed`, `corrections`→
+  `corrected`, `drop`→`rejected`) then re-projects. Because scans over 700 KB are
+  referenced by URL rather than base64-inlined, **bundle generation is ~140 ms for
+  3 documents**. All kept facts are governed → the bundles come back
+  `ready_to_share`.
+- The front page (`/`) header is **"Intelligent OCR driven Agentic EMR
+  generation"**; the "Generate EMR" card shows a stage-tab row (Ingest…Validate) and
+  a document × stage grid with a green tick per completed cell.
+
+> **Latency note.** Sub-5 s *per-document extraction* is not reachable with the
+> generalist Qwen2.5-VL-7B (each schema-locked extract is ~25–40 s on this GPU).
+> The changes above remove the VLM classify call, cut retries, parallelise
+> everything that isn't the single GPU, and make the human-review → FHIR step
+> genuinely millisecond-fast. True <5 s extraction needs the fine-tuned DSLM +
+> grammar-locked decoding (Tier C).
 
 ### 7.3 Timing (RTX PRO 4500, 7B bf16)
 
