@@ -11,7 +11,7 @@ from ..config import settings
 from ..db import session_scope
 from ..logging import get_logger
 from ..ml.client import MLError, get_client
-from .prompt import block_id_map, build_extraction_prompt, load_schema
+from .prompt import block_id_map, build_extraction_prompt, load_schema, max_tokens_for
 
 log = get_logger(__name__)
 
@@ -376,7 +376,7 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
 
     try:
         payload = client.vlm_json(image, prompt, schema,
-                                  max_tokens=settings.extract_max_tokens,
+                                  max_tokens=max_tokens_for(cls["doc_type"]),
                                   retries=settings.extract_retries)
     except MLError as exc:
         with session_scope() as sess:

@@ -3,12 +3,12 @@
   "$id": "cdi:prescription.v3",
   "title": "Prescription extraction (v3)",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["patient", "medications", "extracted_at_confidence"],
   "properties": {
     "patient": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "name": { "type": ["string", "null"] },
         "mrn": { "type": ["string", "null"] },
@@ -20,7 +20,7 @@
     "encounter_date": { "type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial" },
     "prescriber": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "name": { "type": ["string", "null"] },
         "reg_no": { "type": ["string", "null"] },
@@ -36,8 +36,8 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["drug_text", "evidence"],
+        "additionalProperties": true,
+        "required": ["drug_text"],
         "properties": {
           "drug_text": { "type": "string" },
           "form": { "type": ["string", "null"] },
@@ -57,8 +57,8 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["text", "evidence"],
+        "additionalProperties": true,
+        "required": ["text"],
         "properties": {
           "text": { "type": "string" },
           "evidence": { "$ref": "cdi:common.defs#/$defs/evidence" }
@@ -69,8 +69,8 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["name", "evidence"],
+        "additionalProperties": true,
+        "required": ["name"],
         "properties": {
           "name": { "type": "string", "description": "e.g. 'BP', 'weight'" },
           "value": { "$ref": "cdi:common.defs#/$defs/quantity" },

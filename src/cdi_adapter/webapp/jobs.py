@@ -58,6 +58,7 @@ class Job:
     abha: str | None
     patient_id: str | None = None
     patient: dict[str, Any] | None = None
+    existing: bool = False         # matched an existing registry patient
     state: str = "queued"          # queued|running|review|generating|done|error
     created: float = field(default_factory=time.time)
     docs: list[DocProg] = field(default_factory=list)
@@ -65,11 +66,15 @@ class Job:
     result: dict[str, Any] | None = None
 
     def public(self) -> dict[str, Any]:
+        pat = self.patient or (self.result or {}).get("patient")
+        if pat is not None:
+            pat = {**pat, "is_new": not self.existing}
         return {
             "job_id": self.id,
             "state": self.state,
             "patient_id": self.patient_id,
-            "patient": self.patient or (self.result or {}).get("patient"),
+            "existing_patient": self.existing,
+            "patient": pat,
             "error": self.error,
             "stages": STAGES,
             "documents": [
@@ -88,10 +93,30 @@ class Job:
         }
 
 
-def create_job(abha: str | None, files: list[tuple[str, bytes]]) -> str:
+def create_job(abha: str | None, files: list[tuple[str, bytes]],
+               patient_ref: str | None = None) -> str:
     jid = uuid.uuid4().hex[:12]
     job = Job(id=jid, abha=(abha or "").strip() or None)
     job.docs = [DocProg(filename=fn) for fn, _ in files]
+
+    ref = (patient_ref or "").strip()
+    if ref:
+        from ..mpi import registry
+        with session_scope() as sess:
+            reg = registry.lookup(sess, ref)
+            if reg:
+                pid, mpi = registry.ensure_identity(sess, reg)
+                job.patient_id = pid
+                job.existing = True
+                job.patient = {
+                    "mpi_id": mpi, "name": reg.get("name"),
+                    "sex": (reg.get("gender") or "")[:1].upper() or None,
+                    "birth_date": reg.get("dob"), "mobile": reg.get("mobile"),
+                    "address": reg.get("address"), "abha_number": reg.get("abha_id"),
+                    "identity_confidence": 1.0, "provisional": False}
+                if not job.abha and reg.get("abha_id"):
+                    job.abha = reg["abha_id"]
+
     with _lock:
         _jobs[jid] = job
     _pool.submit(_run_job, jid, files)
@@ -191,8 +216,8 @@ def _run_job(jid: str, files: list[tuple[str, bytes]]) -> None:
         for prog in job.docs:
             _stage2(job, prog, candidates)
 
-        # --- phase 3: finalise identity ---
-        if job.patient_id and candidates:
+        # --- phase 3: finalise identity (skip for an existing registry patient) ---
+        if job.patient_id and candidates and not job.existing:
             with session_scope() as sess:
                 job.patient = merge_identity_evidence(sess, job.patient_id, candidates)
 
@@ -282,7 +307,17 @@ def job_facts(jid: str) -> dict[str, Any]:
         "abha_number": prow.get("abha_number") if prow else None,
         "identity_confidence": (float(prow["identity_confidence"])
                                 if prow and prow.get("identity_confidence") is not None else None),
+        "is_new": not job.existing,
     }
+    if prow and prow.get("mpi_id"):
+        with session_scope() as sess2:
+            reg = sess2.execute(
+                __import__("sqlalchemy").text(
+                    "SELECT mobile, address FROM patient_registry WHERE patient_id=:m LIMIT 1"),
+                {"m": prow["mpi_id"]}).mappings().first()
+        if reg:
+            patient["mobile"] = reg["mobile"]
+            patient["address"] = reg["address"]
     return {"job_id": jid, "state": job.state, "patient": patient, "documents": out_docs}
 
 

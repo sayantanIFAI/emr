@@ -3,11 +3,11 @@
   "$id": "cdi:opd_note.v3",
   "title": "OPD consultation / advice note extraction (v3)",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["patient", "extracted_at_confidence"],
   "properties": {
     "patient": {
-      "type": "object", "additionalProperties": false,
+      "type": "object", "additionalProperties": true,
       "properties": {
         "name": {"type": ["string", "null"]},
         "mrn": {"type": ["string", "null"]},
@@ -18,7 +18,7 @@
     },
     "encounter_date": {"type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial"},
     "prescriber": {
-      "type": "object", "additionalProperties": false,
+      "type": "object", "additionalProperties": true,
       "properties": {"name": {"type": ["string", "null"]}, "department": {"type": ["string", "null"]},
                      "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}}
     },
@@ -27,7 +27,7 @@
     "medications": {
       "type": "array",
       "items": {
-        "type": "object", "additionalProperties": false, "required": ["drug_text", "evidence"],
+        "type": "object", "additionalProperties": true, "required": ["drug_text"],
         "properties": {
           "drug_text": {"type": "string"},
           "strength": {"$ref": "cdi:common.defs#/$defs/quantity"},
@@ -43,7 +43,7 @@
     "vitals": {
       "type": "array",
       "items": {
-        "type": "object", "additionalProperties": false, "required": ["name", "evidence"],
+        "type": "object", "additionalProperties": true, "required": ["name"],
         "properties": {
           "name": {"type": "string"},
           "value": {"$ref": "cdi:common.defs#/$defs/quantity"},
@@ -55,7 +55,7 @@
     },
     "advice": {
       "type": "array",
-      "items": {"type": "object", "additionalProperties": false, "required": ["text", "evidence"],
+      "items": {"type": "object", "additionalProperties": true, "required": ["text"],
                 "properties": {"text": {"type": "string"},
                                "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}}}
     },

@@ -3,11 +3,11 @@
   "$id": "cdi:radiology.v3",
   "title": "Radiology / imaging report extraction (v3)",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["patient", "modality", "extracted_at_confidence"],
   "properties": {
     "patient": {
-      "type": "object", "additionalProperties": false,
+      "type": "object", "additionalProperties": true,
       "properties": {
         "name": {"type": ["string", "null"]}, "mrn": {"type": ["string", "null"]},
         "evidence": {"$ref": "cdi:common.defs#/$defs/evidence"}

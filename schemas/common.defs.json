@@ -4,9 +4,9 @@
   "$defs": {
     "evidence": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "items": { "type": "string", "pattern": "^b[0-9]+$" },
-      "description": "ocr_block ids that support the sibling value. Every non-null extracted value MUST carry at least one."
+      "description": "ocr_block ids that support the sibling value (optional; a missing value just yields weaker provenance)."
     },
     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
     "date_partial": {
@@ -18,24 +18,24 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "text": { "type": "string" },
+        "text": { "type": ["string", "null"] },
         "system": { "type": ["string", "null"] },
         "code": { "type": ["string", "null"] },
+        "display": { "type": ["string", "null"] },
         "evidence": { "$ref": "#/$defs/evidence" }
       },
-      "required": ["text", "evidence"]
+      "required": ["text"]
     },
     "quantity": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": ["object", "number", "string", "null"],
+      "additionalProperties": true,
       "properties": {
-        "value": { "type": ["number", "null"] },
+        "value": { "type": ["number", "string", "null"] },
         "unit_text": { "type": ["string", "null"] },
         "unit_ucum": { "type": ["string", "null"] },
         "comparator": { "type": ["string", "null"], "enum": ["<", "<=", ">", ">=", null] },
         "evidence": { "$ref": "#/$defs/evidence" }
-      },
-      "required": ["evidence"]
+      }
     }
   }
 }

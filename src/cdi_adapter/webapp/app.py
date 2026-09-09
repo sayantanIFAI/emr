@@ -42,13 +42,37 @@ def healthz() -> Any:
                                  "ig_package": settings.ig_package})
 
 
+@app.get("/api/registry/lookup")
+def registry_lookup(q: str) -> dict[str, Any]:
+    """Resolve an existing clinic patient by CareFlow id / ABHA id / mobile."""
+    from ..mpi import registry
+    with session_scope() as sess:
+        row = registry.lookup(sess, q)
+    return {"found": row is not None, "patient": row}
+
+
+@app.post("/api/registry")
+def registry_save(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Persist a new patient's full details for future look-ups."""
+    from ..mpi import registry
+    req = {k: (body or {}).get(k) for k in
+           ("patient_id", "name", "mobile", "dob", "gender", "address", "abha_id")}
+    if not req["name"] or not req["mobile"]:
+        raise HTTPException(422, "name and mobile are required")
+    with session_scope() as sess:
+        row = registry.save(sess, **req)
+    return {"ok": True, "patient": row}
+
+
 @app.post("/api/jobs", status_code=202)
 async def submit_job(
     abha: str | None = Form(default=None),
+    patient_ref: str | None = Form(default=None),
     files: list[UploadFile] = File(...),
 ) -> dict[str, Any]:
-    """Patient name, sex and DOB are read from the documents; a CareFlow patient
-    id is generated. ABHA is optional and only helps de-duplicate."""
+    """If ``patient_ref`` (CareFlow id / ABHA / mobile) matches the clinic
+    registry, all documents attach to that patient. Otherwise the patient's name,
+    sex and DOB are read from the documents and a new CareFlow id is generated."""
     if not files:
         raise HTTPException(422, "attach at least one document")
     if len(files) > 10:
@@ -60,7 +84,7 @@ async def submit_job(
             payload.append((f.filename or "document", data))
     if not payload:
         raise HTTPException(422, "all uploads were empty")
-    jid = create_job(abha, payload)
+    jid = create_job(abha, payload, patient_ref=patient_ref)
     return {"job_id": jid, "documents": len(payload)}
 
 

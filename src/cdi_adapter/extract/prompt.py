@@ -20,6 +20,42 @@ SCHEMA_FOR_DOC_TYPE = {
 
 _cache: dict[str, dict[str, Any]] = {}
 
+# long, list-heavy documents need a bigger output budget so every item is captured
+MAX_TOKENS_BY_DOC_TYPE = {
+    "prescription": 2600,
+    "opd_note": 2400,
+    "referral": 2400,
+    "discharge_summary": 2600,
+    "operative_note": 2400,
+    "lab_report": 2000,
+    "radiology_report": 1600,
+    "vitals_sheet": 1400,
+}
+
+# extra, doc-type-specific guidance appended to the base prompt
+_EXTRA = {
+    "prescription": (
+        "\nThis is a PRESCRIPTION. List EVERY medication line in `medications` - a "
+        "typical prescription has 5-15 drugs. For each: `drug_text` = the full drug "
+        "name as printed (brand or generic), `strength` = the numeric strength if "
+        "shown, `frequency_text` = the timing/frequency notation verbatim (e.g. "
+        "'1-0-1', 'BD', 'After Food - Daily', 'TWICE IN A YEAR'), `instructions` = "
+        "any 'Notes'/'Composition' text. Do NOT stop after the first few - include "
+        "the last drug on the page. Put diagnoses in `diagnoses`, BP/weight in `vitals`."
+    ),
+    "lab_report": (
+        "\nThis is a LAB REPORT. Put every analyte row in `results` with its numeric "
+        "`value`, `unit`, reference range and flag. `value` is an object "
+        "{value, unit_text, evidence}."
+    ),
+}
+
+
+def max_tokens_for(doc_type: str) -> int:
+    from ..config import settings
+
+    return MAX_TOKENS_BY_DOC_TYPE.get(doc_type, settings.extract_max_tokens)
+
 
 def load_schema(doc_type: str) -> tuple[str, dict[str, Any]] | None:
     fname = SCHEMA_FOR_DOC_TYPE.get(doc_type)
@@ -51,10 +87,9 @@ OCR blocks (id, text) - noisy, use together with the image:
 
 
 def build_extraction_prompt(doc_type: str, ocr_blocks: list[dict[str, Any]]) -> str:
-    lines = []
-    for i, b in enumerate(ocr_blocks, start=1):
-        lines.append(f"[b{i}] {b['text']}")
-    return _BASE.format(doc_type=doc_type, ocr="\n".join(lines) or "(none)")
+    lines = [f"[b{i}] {b['text']}" for i, b in enumerate(ocr_blocks, start=1)]
+    return (_BASE.format(doc_type=doc_type, ocr="\n".join(lines) or "(none)")
+            + _EXTRA.get(doc_type, ""))
 
 
 def block_id_map(ocr_blocks: list[dict[str, Any]]) -> dict[str, str]:

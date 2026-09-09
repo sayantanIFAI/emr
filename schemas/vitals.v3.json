@@ -3,12 +3,12 @@
   "$id": "cdi:vitals.v3",
   "title": "Vitals / nursing intake sheet extraction (v3)",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["patient", "vitals", "extracted_at_confidence"],
   "properties": {
     "patient": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "name": { "type": ["string", "null"] },
         "mrn": { "type": ["string", "null"] },
@@ -20,8 +20,8 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["name", "evidence"],
+        "additionalProperties": true,
+        "required": ["name"],
         "properties": {
           "name": {
             "type": "string",
@@ -40,8 +40,8 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["substance_text", "evidence"],
+        "additionalProperties": true,
+        "required": ["substance_text"],
         "properties": {
           "substance_text": { "type": "string" },
           "reaction_text": { "type": ["string", "null"] },

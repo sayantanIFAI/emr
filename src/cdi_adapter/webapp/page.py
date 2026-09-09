@@ -12,14 +12,20 @@ _HTML = r"""<!doctype html>
 %%HEADER%%
 <div class="cf-pagetitle">
   <h1>Intelligent OCR driven Agentic EMR generation</h1>
-  <p class="cf-sub">Upload a patient's scanned documents · identity, coding and ABDM FHIR are generated · a human reviews and edits before bundles are produced.</p>
+  <p class="cf-sub">Look up an existing patient, or upload a new one's documents · identity, coding and ABDM FHIR are generated · a human reviews and edits before bundles are produced.</p>
 </div>
 <main class="cf-main">
   <div class="card" id="form-card">
-    <h2>Upload patient documents</h2>
-    <p class="hint">Prescriptions, lab reports, discharge summaries, vitals sheets…
-      The patient's <b>name, sex and date of birth are read from the documents</b> and a
-      CareFlow patient ID is generated automatically.</p>
+    <h2>Patient</h2>
+    <label class="fld" for="pref">Existing patient — CareFlow ID · ABHA ID · mobile number</label>
+    <div style="display:flex;gap:8px">
+      <input type="text" id="pref" placeholder="CFP-2026-000901  /  14-1111-2222-3333  /  9830011234" autocomplete="off" style="flex:1"/>
+      <button class="btn btn-ghost" id="lookup">Look up</button>
+    </div>
+    <div id="matched" class="muted" style="margin-top:8px;font-size:13px"></div>
+
+    <label class="fld">Documents</label>
+    <p class="hint" style="margin:0 0 8px">For a <b>new patient</b>, name / sex / date of birth are read from the documents and a CareFlow ID is generated.</p>
     <div class="dropzone" id="dz" tabindex="0" role="button" aria-label="Choose or drop documents">
       %%ICON%%
       <div class="dz-title">Drop files here or click to choose</div>
@@ -28,7 +34,7 @@ _HTML = r"""<!doctype html>
     </div>
     <input type="file" id="files" multiple hidden
       accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,image/*,application/pdf"/>
-    <label class="fld" for="abha">ABHA number (optional — helps match an existing patient)</label>
+    <label class="fld" for="abha">ABHA number (optional, for a new patient)</label>
     <input type="text" id="abha" placeholder="14-XXXX-XXXX-XXXX" autocomplete="off"/>
     <div style="margin-top:16px;display:flex;gap:10px;align-items:center">
       <button class="btn btn-primary" id="go">Generate EMR</button>
@@ -43,8 +49,27 @@ _HTML = r"""<!doctype html>
   </div>
 
   <div class="card" id="patient-card" hidden>
-    <h2>Patient (detected from documents)</h2>
+    <h2>Patient</h2>
     <div class="patient" id="patient"></div>
+  </div>
+
+  <div class="card" id="details-card" hidden>
+    <h2>Complete patient details</h2>
+    <p class="hint">New patient <b id="d_pid"></b>. Save the full record so this patient can be looked up next time.</p>
+    <div class="row">
+      <div><label class="fld">Full name</label><input type="text" id="d_name"/></div>
+      <div><label class="fld">Mobile number *</label><input type="text" id="d_mobile" placeholder="10-digit mobile"/></div>
+    </div>
+    <div class="row">
+      <div><label class="fld">Date of birth</label><input type="text" id="d_dob" placeholder="YYYY-MM-DD"/></div>
+      <div><label class="fld">Sex</label><input type="text" id="d_sex" placeholder="M / F / O"/></div>
+      <div><label class="fld">ABHA ID</label><input type="text" id="d_abha" placeholder="14-XXXX-XXXX-XXXX"/></div>
+    </div>
+    <label class="fld">Address</label><input type="text" id="d_addr" placeholder="House, street, city, PIN"/>
+    <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+      <button class="btn btn-primary" id="savepat">Save patient</button>
+      <span id="savemsg" class="muted"></span>
+    </div>
   </div>
 
   <div class="card" id="editor-card" hidden>
@@ -83,7 +108,24 @@ const $=s=>document.querySelector(s);
 const STAGES=["ingest","classify","ocr","extract","terminology","validate"];
 const STAGE_LABEL={ingest:"Ingest",classify:"Classify",ocr:"OCR",extract:"Extract",terminology:"Terminology",validate:"Validate"};
 const TICK='<svg class="tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
-let JOB=null,TIMER=null,FACTS=null,CURDOC=0,RESULT=null,EDITS={};
+let JOB=null,TIMER=null,FACTS=null,CURDOC=0,RESULT=null,MATCH=null;
+
+$("#lookup").onclick=doLookup;
+$("#pref").addEventListener("blur",()=>{ if($("#pref").value.trim()) doLookup(); });
+async function doLookup(){
+  const q=$("#pref").value.trim();
+  if(!q){ $("#matched").textContent=""; MATCH=null; return; }
+  const r=await fetch("api/registry/lookup?q="+encodeURIComponent(q));
+  const j=await r.json();
+  if(j.found){ MATCH=j.patient;
+    $("#matched").innerHTML='<span class="pill ok">existing patient</span> <b>'+esc(j.patient.name)
+      +'</b> · '+esc(j.patient.patient_id||"—")+' · '+esc(j.patient.mobile||"")
+      +(j.patient.dob?' · DOB '+esc(j.patient.dob):'')
+      +' — all documents will attach to this patient';
+  } else { MATCH=null;
+    $("#matched").innerHTML='<span class="pill warn">no match</span> a new patient will be created from the documents';
+  }
+}
 
 const dz=$("#dz"),fileInput=$("#files");
 dz.onclick=()=>fileInput.click();
@@ -98,12 +140,14 @@ function showFiles(){ const n=fileInput.files.length;
 $("#go").onclick=async()=>{
   const files=fileInput.files;
   if(!files.length){ $("#hint").textContent="pick at least one file"; return; }
-  const fd=new FormData(); fd.append("abha",$("#abha").value||"");
+  const fd=new FormData();
+  fd.append("abha",$("#abha").value||"");
+  if(MATCH) fd.append("patient_ref", $("#pref").value.trim());
   for(const f of files) fd.append("files",f);
-  $("#go").disabled=true; $("#hint").textContent="uploading…";
+  $("#go").disabled=true; $("#hint").textContent="processing…";
   const r=await fetch("api/jobs",{method:"POST",body:fd});
   if(!r.ok){ $("#hint").textContent="error: "+(await r.text()); $("#go").disabled=false; return; }
-  JOB=(await r.json()).job_id; $("#hint").textContent="job "+JOB;
+  JOB=(await r.json()).job_id; $("#hint").textContent="processing…";
   $("#emr-card").hidden=false; poll();
 };
 
@@ -113,35 +157,33 @@ function poll(){
     const j=await (await fetch("api/jobs/"+JOB)).json();
     renderGrid(j);
     if(j.patient){ $("#patient-card").hidden=false; renderPatient(j.patient); }
-    if(j.state==="review"||j.state==="done"){ loadFacts(); }
-    else if(j.state==="error"){ $("#hint").textContent="job error: "+(j.error||""); }
+    if(j.state==="review"||j.state==="done"){
+      $("#hint").textContent="";
+      if(j.patient && j.patient.is_new) showDetails(j.patient);
+      loadFacts();
+    } else if(j.state==="error"){ $("#hint").textContent="job error: "+(j.error||""); }
     else poll();
   }, 1200);
 }
 
 function renderGrid(j){
-  // stage tabs across the top
   const anyRunning=s=>j.documents.some(d=>d.stages[s]==="running");
-  const allDone=s=>j.documents.every(d=>d.stages[s]==="done");
+  const allDone=s=>j.documents.length && j.documents.every(d=>d.stages[s]==="done");
   $("#emrtabs").innerHTML=STAGES.map(s=>{
     const cls=allDone(s)?"done":anyRunning(s)?"active":"";
     return '<span class="emr-tab '+cls+'"><span class="dot"></span>'+STAGE_LABEL[s]+'</span>';
   }).join("");
-  // grid: rows = documents, cols = stages
   let h='<tr><th class="doc">Document</th>'+STAGES.map(s=>'<th>'+STAGE_LABEL[s]+'</th>').join("")+'<th>Done</th></tr>';
   h+=j.documents.map(d=>{
     const cells=STAGES.map(s=>{
       const st=d.stages[s]||"pending";
-      const inner = st==="done"?TICK : st==="running"?'<span class="spin"></span>' : st==="error"?'✕':'·';
+      const inner=st==="done"?TICK:st==="running"?'<span class="spin"></span>':st==="error"?'✕':'·';
       return '<td><span class="cell '+st+'">'+inner+'</span></td>';
     }).join("");
-    const done = d.status==="done";
-    return '<tr><td class="doc"><div class="fn">'+esc(d.filename)+'</div>'
-      +'<div class="sub">'+(d.doc_type?esc(d.doc_type):'')
-      +(d.facts?' · '+d.facts+' facts':'')
-      +(d.seconds?' · '+d.seconds+'s':'')+'</div></td>'
-      +cells
-      +'<td>'+(done?'<span class="cell done">'+TICK+'</span>':d.status==="error"?'<span class="cell error">✕</span>':'<span class="cell running"><span class="spin"></span></span>')+'</td></tr>';
+    const done=d.status==="done";
+    return '<tr><td class="doc"><div class="fn">'+esc(d.filename)+'</div><div class="sub">'
+      +(d.doc_type?esc(d.doc_type):'')+(d.facts?' · '+d.facts+' facts':'')+(d.seconds?' · '+d.seconds+'s':'')+'</div></td>'
+      +cells+'<td>'+(done?'<span class="cell done">'+TICK+'</span>':d.status==="error"?'<span class="cell error">✕</span>':'<span class="cell running"><span class="spin"></span></span>')+'</td></tr>';
   }).join("");
   $("#emrgrid").innerHTML=h;
 }
@@ -153,19 +195,35 @@ function renderPatient(p){
   const conf=(p.identity_confidence!=null)?(' · identity '+(p.identity_confidence*100).toFixed(0)+'%'):'';
   const dob=p.birth_date?(' · DOB '+esc(p.birth_date)):(p.age_years!=null?(' · age '+p.age_years):'');
   const abha=p.abha_number?(' · ABHA '+esc(p.abha_number)):'';
-  const prov=p.provisional?' <span class="pill warn">provisional</span>':'';
+  const mob=p.mobile?(' · '+esc(p.mobile)):'';
+  const tag=p.is_new?' <span class="pill warn">new</span>':' <span class="pill ok">on file</span>';
   $("#patient").innerHTML='<div class="avatar">'+esc(initials)+'</div>'
     +'<div><div class="pid tab-nums">'+esc(p.mpi_id||"CFP-…")+'</div>'
-    +'<div class="meta"><b>'+esc(nm)+'</b> · '+sex+dob+abha+conf+prov+'</div></div>';
+    +'<div class="meta"><b>'+esc(nm)+'</b> · '+sex+dob+mob+abha+conf+tag+'</div></div>';
 }
+
+function showDetails(p){
+  $("#details-card").hidden=false;
+  $("#d_pid").textContent=p.mpi_id||"";
+  $("#d_name").value=p.name||""; $("#d_dob").value=p.birth_date||"";
+  $("#d_sex").value=p.sex||""; $("#d_abha").value=p.abha_number||"";
+  $("#d_mobile").value=p.mobile||""; $("#d_addr").value=p.address||"";
+}
+$("#savepat").onclick=async()=>{
+  const body={patient_id:$("#d_pid").textContent, name:$("#d_name").value, mobile:$("#d_mobile").value,
+    dob:$("#d_dob").value||null, gender:$("#d_sex").value||null, address:$("#d_addr").value||null,
+    abha_id:$("#d_abha").value||null};
+  if(!body.name||!body.mobile){ $("#savemsg").textContent="name and mobile are required"; return; }
+  const r=await fetch("api/registry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  $("#savemsg").textContent = r.ok ? "saved — this patient can now be looked up" : ("error: "+await r.text());
+};
 
 async function loadFacts(){
   const r=await fetch("api/jobs/"+JOB+"/facts");
   if(!r.ok) return;
   FACTS=await r.json();
-  if(FACTS.patient) { $("#patient-card").hidden=false; renderPatient(FACTS.patient); }
-  $("#editor-card").hidden=false;
-  CURDOC=0; renderEditor();
+  if(FACTS.patient){ $("#patient-card").hidden=false; renderPatient({...FACTS.patient, is_new:$("#details-card").hidden===false}); }
+  $("#editor-card").hidden=false; CURDOC=0; renderEditor();
 }
 
 function renderEditor(){
@@ -178,26 +236,20 @@ function renderEditor(){
     ? '<img id="scanimg" src="'+d.page_image_url+'" alt="scanned document"/>'
     : '<p class="empty">no page image</p>')+'<div id="scanbox"></div>';
   let h='<tr><th style="width:26px"></th><th>Type</th><th>Text</th><th>Value</th><th>Unit</th><th>Code</th><th>Conf</th></tr>';
-  h+=d.facts.map(f=>{
-    const k='k_'+f.fact_id;
-    return '<tr id="row_'+f.fact_id+'" onmouseenter="hi('+JSON.stringify(f.bbox||null)+','+(f.page_width||0)+')" onmouseleave="hi(null,0)">'
-      +'<td><input class="chk" type="checkbox" id="'+k+'" checked onchange="toggleDrop(\''+f.fact_id+'\')"/></td>'
-      +'<td><span class="pill">'+esc(f.fact_type)+'</span></td>'
-      +'<td><input type="text" data-f="'+f.fact_id+'" data-k="local_text" value="'+esc(f.text||"")+'" style="width:100%"/></td>'
-      +'<td><input class="sm" type="text" data-f="'+f.fact_id+'" data-k="value_num" value="'+(f.value_num!=null?f.value_num:"")+'"/></td>'
-      +'<td><input class="sm" type="text" data-f="'+f.fact_id+'" data-k="value_unit_ucum" value="'+esc(f.value_unit_ucum||"")+'"/></td>'
-      +'<td><input class="sm" type="text" data-f="'+f.fact_id+'" data-k="code" value="'+esc(f.code||"")+'" title="'+esc((f.code_system||"")+" "+(f.code_display||""))+'"/></td>'
-      +'<td class="conf">'+(f.confidence*100).toFixed(0)+'%</td></tr>';
-  }).join("");
+  h+=d.facts.map(f=>
+    '<tr id="row_'+f.fact_id+'" onmouseenter="hi('+JSON.stringify(f.bbox||null)+','+(f.page_width||0)+')" onmouseleave="hi(null,0)">'
+    +'<td><input class="chk" type="checkbox" id="k_'+f.fact_id+'" checked onchange="toggleDrop(\''+f.fact_id+'\')"/></td>'
+    +'<td><span class="pill">'+esc(f.fact_type)+'</span></td>'
+    +'<td><input type="text" data-f="'+f.fact_id+'" data-k="local_text" value="'+esc(f.text||"")+'" style="width:100%"/></td>'
+    +'<td><input class="sm" type="text" data-f="'+f.fact_id+'" data-k="value_num" value="'+(f.value_num!=null?f.value_num:"")+'"/></td>'
+    +'<td><input class="sm" type="text" data-f="'+f.fact_id+'" data-k="value_unit_ucum" value="'+esc(f.value_unit_ucum||"")+'"/></td>'
+    +'<td><input class="sm" type="text" data-f="'+f.fact_id+'" data-k="code" value="'+esc(f.code||"")+'" title="'+esc((f.code_system||"")+" "+(f.code_display||""))+'"/></td>'
+    +'<td class="conf">'+(f.confidence*100).toFixed(0)+'%</td></tr>').join("");
   $("#ftable").innerHTML=h;
 }
-
-function toggleDrop(fid){
-  const row=$("#row_"+fid), chk=$("#k_"+fid);
-  row.classList.toggle("drop", !chk.checked);
-}
+function toggleDrop(fid){ $("#row_"+fid).classList.toggle("drop", !$("#k_"+fid).checked); }
 function hi(bbox,pw){
-  const box=$("#scanbox"), img=$("#scanimg");
+  const box=$("#scanbox"),img=$("#scanimg");
   if(!box||!img||!bbox||!pw){ if(box) box.innerHTML=""; return; }
   const s=img.clientWidth/pw;
   box.innerHTML='<div class="bbox" style="position:absolute;left:'+(bbox[0]*s)+'px;top:'+(bbox[1]*s)+'px;width:'+((bbox[2]-bbox[0])*s)+'px;height:'+((bbox[3]-bbox[1])*s)+'px"></div>';
@@ -209,12 +261,12 @@ $("#gen").onclick=async()=>{
   for(const d of FACTS.documents){
     for(const f of d.facts){
       const chk=$("#k_"+f.fact_id);
-      if(chk && !chk.checked){ edits.push({fact_id:f.fact_id, action:"drop"}); continue; }
+      if(chk && !chk.checked){ edits.push({fact_id:f.fact_id,action:"drop"}); continue; }
       const corr={};
       document.querySelectorAll('input[data-f="'+f.fact_id+'"]').forEach(inp=>{
         const k=inp.dataset.k; let v=inp.value.trim();
         if(k==="value_num"){ if(v==="") return; v=Number(v); if(isNaN(v)) return; if(v!==f.value_num) corr[k]=v; }
-        else if(v!==(f[k]||"")) { corr[k]=v; if(k==="code"&&v) corr.code_status="bound"; }
+        else if(v!==(f[k]||"")){ corr[k]=v; if(k==="code"&&v) corr.code_status="bound"; }
       });
       edits.push(Object.keys(corr).length?{fact_id:f.fact_id,action:"keep",corrections:corr}:{fact_id:f.fact_id,action:"keep"});
     }

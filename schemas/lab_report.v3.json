@@ -3,12 +3,12 @@
   "$id": "cdi:lab_report.v3",
   "title": "Laboratory report extraction (v3)",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["patient", "results", "extracted_at_confidence"],
   "properties": {
     "patient": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "name": { "type": ["string", "null"] },
         "mrn": { "type": ["string", "null"] },
@@ -25,8 +25,8 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["analyte_text", "value", "evidence"],
+        "additionalProperties": true,
+        "required": ["analyte_text", "value"],
         "properties": {
           "analyte_text": { "type": "string" },
           "loinc_hint": { "type": ["string", "null"] },

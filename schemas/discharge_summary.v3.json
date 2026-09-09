@@ -3,11 +3,11 @@
   "$id": "cdi:discharge_summary.v3",
   "title": "Discharge summary extraction (v3)",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["patient", "extracted_at_confidence"],
   "properties": {
     "patient": {
-      "type": "object", "additionalProperties": false,
+      "type": "object", "additionalProperties": true,
       "properties": {
         "name": {"type": ["string", "null"]}, "mrn": {"type": ["string", "null"]},
         "age_text": {"type": ["string", "null"]}, "sex": {"type": ["string", "null"], "enum": ["M", "F", "O", null]},
@@ -21,7 +21,7 @@
     "procedures": {
       "type": "array",
       "items": {
-        "type": "object", "additionalProperties": false, "required": ["name", "evidence"],
+        "type": "object", "additionalProperties": true, "required": ["name"],
         "properties": {
           "name": {"type": "string"},
           "date": {"type": ["string", "null"], "$ref": "cdi:common.defs#/$defs/date_partial"},
@@ -34,7 +34,7 @@
     "medications_on_discharge": {
       "type": "array",
       "items": {
-        "type": "object", "additionalProperties": false, "required": ["drug_text", "evidence"],
+        "type": "object", "additionalProperties": true, "required": ["drug_text"],
         "properties": {
           "drug_text": {"type": "string"},
           "strength": {"$ref": "cdi:common.defs#/$defs/quantity"},

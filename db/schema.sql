@@ -120,6 +120,26 @@ CREATE TABLE IF NOT EXISTS patient_identity (
 CREATE SEQUENCE IF NOT EXISTS patient_mpi_seq START 1;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_patient_mpi_id
   ON patient_identity (mpi_id) WHERE mpi_id IS NOT NULL;
+
+-- the clinic's own patient master: look up an existing patient by CareFlow id,
+-- ABHA id or mobile before running the pipeline.
+CREATE TABLE IF NOT EXISTS patient_registry (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id  text,
+  name        text NOT NULL,
+  mobile      text NOT NULL,
+  dob         date,
+  gender      text,
+  address     text,
+  abha_id     text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_reg_mobile_name_dob
+  ON patient_registry (mobile, lower(name), COALESCE(dob, DATE '1900-01-01'));
+CREATE INDEX IF NOT EXISTS ix_reg_patient_id ON patient_registry (patient_id);
+CREATE INDEX IF NOT EXISTS ix_reg_abha       ON patient_registry (abha_id);
+CREATE INDEX IF NOT EXISTS ix_reg_mobile     ON patient_registry (mobile);
 CREATE INDEX IF NOT EXISTS ix_patient_mrn  ON patient_identity (legacy_mrn);
 CREATE INDEX IF NOT EXISTS ix_patient_abha ON patient_identity (abha_number);
 
