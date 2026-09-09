@@ -5,8 +5,12 @@ records into a structured EMR and **ABDM/ABHA FHIR R4** record bundles.
 
 - **Status:** working end-to-end prototype with a governance gate, deployed and live
   on a RunPod GPU pod. Not production-hardened (see §13).
-- **Live URL:** `https://2kkk36y0r2z7yv-8888.proxy.runpod.net` — `/` upload → FHIR,
+- **Live URL:** `https://g1a7lswmb5t79o-8888.proxy.runpod.net` — `/` upload → FHIR,
   `/review` the human adjudication queue.
+- **Last perf pass (2026-09-09):** heuristic classifier (no VLM for clean printed
+  pages), OCR runs once (before classify, not twice), schema relaxation + one
+  retry, patient-mismatch guard. A 3-document job now completes in **~90 s wall**
+  (was ~140 s); see §7.3–§7.4 for the measured breakdown and the vLLM plan.
 - **Companion docs:** [`DESIGN.md`](DESIGN.md) is the north-star design + 10-country
   research; this document is **what is actually built and running**.
 - **Governing principle** (adopted verbatim from external review):
@@ -22,11 +26,14 @@ records into a structured EMR and **ABDM/ABHA FHIR R4** record bundles.
 
 ## 0. What exists today (one-paragraph truth)
 
-A pipeline (`ingest → classify → OCR → extract → terminology → **validate/gate** →
-FHIR projection`, with a **human review** loop) runs on one GPU pod. Classification
-and extraction use a **real open-source vision-language model
-(Qwen2.5-VL-7B-Instruct)** served by an in-house model gateway; printed-text OCR
-uses RapidOCR (ONNX, CPU); handwriting uses the VLM. Terminology binding uses a
+A pipeline (`ingest → OCR → classify → extract → terminology → **validate/gate** →
+FHIR projection`, with a **human review** loop) runs on one GPU pod. Extraction
+uses a **real open-source vision-language model (Qwen2.5-VL-7B-Instruct)** served
+by an in-house model gateway. **Classification** is a scored keyword heuristic over
+the page OCR text that only calls the VLM when the type is genuinely ambiguous or
+the page is handwritten. Printed-text OCR uses RapidOCR (ONNX, CPU) and runs
+*before* classify so the same page is never OCR'd twice; handwriting gets a second
+VLM-OCR pass that supersedes it. Terminology binding uses a
 **curated seed map** (SNOMED CT / LOINC / UCUM), not a full terminology server.
 **S6** runs deterministic clinical-plausibility rules (physiological ranges, unit
 sanity, dose/frequency ceilings, impossible dates, evidence-present,
@@ -59,7 +66,7 @@ Constraints that shaped the build:
 |---|---|
 | Open-source only, no per-document API cost | On-prem models: Qwen2.5-VL (Apache-2.0), RapidOCR, seed terminology |
 | Runs on a single RunPod pod, **no Docker** | Native processes (Postgres, Redis, MinIO, gateway, web app) |
-| Pod GPU is 24–32 GB (Blackwell) | 7B VLM in bf16 fits; no fine-tuned 8B DSLM yet |
+| Pod GPU is an **RTX PRO 4500 Blackwell 32 GB** (workstation-class, 165 W) | 7B VLM in bf16 fits (~15 GB); ~12–14 GB left for a KV cache once vLLM lands; no fine-tuned DSLM yet |
 | `/workspace` is MooseFS (persistent, but `chown`/`fallocate` fail, dirs forced 0777) | Postgres cluster runs on the ephemeral overlay; a `pg_dump` on `/workspace` + auto-restore is the persistence mechanism |
 | Pod is recreated often (new IP/port each time) | One idempotent `start_all.sh`; nothing derived stored only in the cluster |
 
@@ -136,10 +143,14 @@ ingest-only API; `cdi_adapter.ingest.watcher` watches a drop folder.
 
 | # | Stage | Module | Model / method | Writes |
 |---|---|---|---|---|
-| S1 | Ingest & normalize | `ingest/pages.py`, `ingest/service.py` | PyMuPDF render; OpenCV deskew (min-area-rect) + denoise + CLAHE; SHA-256 dedupe | `source_document`, `document_page`, original+pages → MinIO |
-| S2 | Classify | `classify/service.py`, `classify/prompt.py` | Qwen2.5-VL, schema `classification.v1`, + a fast RapidOCR text hint | `doc_classification` |
-| S3 | OCR / layout | `ocr/service.py`, `ocr/rapid.py`, `ocr/vlm_ocr.py` | printed → RapidOCR (boxes+conf+reading order); handwritten → VLM transcription | `ocr_block` |
-| S4 | Extract | `extract/service.py`, `extract/prompt.py` | Qwen2.5-VL, schema-locked JSON per `doc_type`, evidence = OCR block ids; **repair + lenient fallback** (marks `_partial`) | `extraction`, `clinical_fact` (+ `medication_detail`), `fact_provenance`, `patient_identity`, `encounter` |
+> **Execution order** is `S1 → S3 → S2 → S4 …` — OCR runs before classify so the
+> classifier reads real OCR text and the page is never OCR'd twice. The S-numbers
+> below are stage identities, not run order.
+
+| S1 | Ingest & normalize | `ingest/pages.py`, `ingest/service.py` | PyMuPDF render; OpenCV deskew (min-area-rect) + denoise + CLAHE; SHA-256 dedupe (race-safe: `IntegrityError` → reuse existing row) | `source_document`, `document_page`, original+pages → MinIO |
+| S2 | Classify | `classify/service.py`, `classify/prompt.py` | **scored keyword heuristic** over the S3 OCR text (`_heuristic_classify`): a type only when it scores ≥5 *and* leads the runner-up by ≥3 on a legible page (≥180 chars, ≥75% alnum); otherwise Qwen2.5-VL, schema `classification.v1` | `doc_classification` |
+| S3 | OCR / layout | `ocr/service.py`, `ocr/rapid.py`, `ocr/vlm_ocr.py` | **runs before classify.** printed → RapidOCR (boxes+conf+reading order); a page the classifier later calls handwritten gets a second VLM-transcription pass that replaces the blocks. `ocr_document(force_engine="rapidocr"|"vlm")` | `ocr_block` |
+| S4 | Extract | `extract/service.py`, `extract/prompt.py` | Qwen2.5-VL, schema-locked JSON per `doc_type`, evidence = OCR block ids; **repair + one retry + lenient fallback** (marks `_partial`); re-extract purges the prior attempt's rows first | `extraction`, `clinical_fact` (+ `medication_detail`), `fact_provenance`, `patient_identity`, `encounter` |
 | S5 | Terminology | `terminology/service.py`, `terminology/seed.py` | curated exact + alias + `difflib` fuzzy → SNOMED CT / LOINC; UCUM unit parse; frequency parse | updates `clinical_fact.code_*`, `medication_detail` |
 | **S6** | **Validation + gate** | `validate/rules.py`, `validate/service.py` | **deterministic rules** (value ranges, unit sanity, dose/frequency ceilings, impossible dates, evidence-present, unmapped-critical, duplicate & cross-document contradiction) + confidence calibration + **routing** | `clinical_fact.review_state`, `review_note`, calibrated `confidence_overall`, `fact_conflict`, `review_task` |
 | S7 | Longitudinal reconciliation | — | **not built** (S6 does per-patient duplicate/contradiction; no temporal merge / summary graph) | — |
@@ -185,7 +196,8 @@ GET  /healthz       → { status, backend, model, device, loaded, configured_bac
 
 | Backend (`CDI_MLSERVE_BACKEND`) | Use |
 |---|---|
-| `hf` | transformers `AutoModelForImageTextToText` = Qwen2.5-VL-7B, bf16, `attn_implementation="sdpa"`, `max_pixels` capped (2 MP) to bound VRAM; **lazy-load on first request**, 7B→3B fallback on OOM |
+| `hf` *(current; to be deprecated)* | transformers `AutoModelForImageTextToText` = Qwen2.5-VL-7B, bf16, `attn_implementation="sdpa"`, `max_pixels` capped (2 MP) to bound VRAM; **lazy-load on first request**, 7B→3B fallback on OOM. One forward pass at a time — this is why Phase 2 (extract) is serialised. |
+| `vllm` *(planned — Roadmap #1)* | `AsyncLLMEngine`, Qwen2.5-VL, paged KV cache + continuous batching, `guided_json` / XGrammar grammar-locked decoding. 32 GB ⇒ ~15 GB weights + ~12–14 GB KV ⇒ **3–4 concurrent page extractions**. Long image prefill still serialises on compute, so the realistic Phase-2 gain is 2–3×, not 5×. `hf` stays selectable as rollback. |
 | `stub` | deterministic keyword responder — CI / no-GPU |
 
 Client side (`cdi_adapter.ml.client`):
@@ -328,32 +340,46 @@ persisted, exception re-raised.
 
 ### S2 — Classify · `cdi_adapter.classify`
 
-> **Bug fixed (2026-09-09).** A "fast keyword classifier" (opt-in, `config.fast_classify`)
-> matched the substring *"Laboratory"* / *"lab"* in a real Apollo-Clinic
-> **prescription** and labelled it `lab_report`. The extractor was then handed the
-> `lab_report` schema — which has no `medications` field — and captured only the
-> one "BP 150/80" line; all 10 drugs were lost. **`fast_classify` is now OFF by
-> default**; the VLM classifier (which labelled the other real images correctly at
-> 0.90 / 0.95) is the default.
+Runs **after S3**, so the full page OCR text is already on hand.
 
-
-- `_ocr_hint(page1)` — a fast RapidOCR pass on the full first-page image → top ~25
-  lines of text, wrapped in `<<<OCR_SAMPLE>>>…<<<END_OCR_SAMPLE>>>`. Grounds the VLM
-  and makes the stub deterministic. Best-effort; `None` if the engine is absent.
-- `build_classification_prompt(hint, n_pages)` → instruction listing the 11
-  `doc_type` values + rules for `specialty` / `is_handwritten` / `languages` /
-  `page_spans` / `confidence`.
-- `client.vlm_json(page1_image, prompt, classification.v1)` → validated dict.
+- **`_heuristic_classify(text)`** — a scored keyword classifier (`_SIGNALS`: ~35
+  weighted word-boundary patterns across the 8 doc types, weight 3 = near-unique
+  anchor, 2 = strong, 1 = corroborating). It returns a type **only** when the
+  winner scores **≥ 5** *and* leads the runner-up by **≥ 3** on a page that is
+  ≥ 180 chars and ≥ 75 % alphanumeric (i.e. cleanly OCR'd, almost certainly
+  printed). Every other page — weak signal, tie, sparse/garbled text, likely
+  handwriting — returns `None` and falls through to the VLM. Deliberately
+  conservative: it trades coverage for *never* handing S4 the wrong schema.
+  - This is the fix for the earlier mis-label bug: the old substring matcher hit
+    *"lab"* inside *"Cardiac Cath **Lab**oratory"* on a prescription. The scored
+    version needs *"laboratory report"* / *"reference range"* as phrases; a
+    cardiology prescription scores 9+ for `prescription`, ~0 for `lab_report`.
+- **Fallback path (ambiguous / handwritten):** `build_classification_prompt` (11
+  `doc_type` values + `specialty` / `is_handwritten` / `languages` / `page_spans` /
+  `confidence` rules) → `client.vlm_json(page1_image, prompt, classification.v1)`.
+- The hint text is taken from the persisted `ocr_block` rows (S3 already ran);
+  `_ocr_hint(page1)` — a one-off RapidOCR pass — is kept only as a fallback when
+  no blocks exist (the Celery path, which still classifies before OCR).
 - Insert `doc_classification`, finish `pipeline_run(stage='classify')`,
-  `status='classified'`, audit, enqueue S3.
-- Observed: 9/9 synthetic docs correct at confidence 0.95; ~15 s/call (plus one-off
-  ~35 s model load).
+  `status='classified'`, audit. If `is_handwritten`, S1's orchestrator triggers the
+  VLM-OCR pass before S4.
+- Observed (2026-09-09, 3 real doc types): heuristic classified prescription,
+  radiology and lab report **correctly in ~0 s each** — no VLM call. `config.fast_classify`
+  now defaults **ON** (it gates the heuristic, not the old substring matcher).
 
 ### S3 — OCR / layout · `cdi_adapter.ocr`
 
-- Route: `is_handwritten AND CDI_HANDWRITTEN_USES_VLM` → **VLM transcription**
-  (`vlm_ocr.run_vlm_transcription`, one line per output line, page-level bbox,
-  conf 0.55); else **RapidOCR** (`rapid.run_rapidocr`).
+- **Runs before classify.** The orchestrator calls `ocr_document(doc,
+  force_engine="rapidocr")` first — a fast printed-text pass whose blocks feed the
+  S2 heuristic. If S2 then marks the page handwritten, the orchestrator calls
+  `ocr_document(doc, force_engine="vlm")`, a second pass that `delete_ocr_blocks`
+  then re-inserts, so the VLM transcription cleanly supersedes the RapidOCR one.
+  This replaces the old "OCR the page once for a classify hint, once for real"
+  double pass.
+- `ocr_document(document_id, *, force_engine=None)`: `force_engine` pins
+  `"rapidocr"` | `"vlm"`; without it the engine is chosen from the classification
+  (`is_handwritten AND CDI_HANDWRITTEN_USES_VLM` → **VLM transcription**
+  `vlm_ocr.run_vlm_transcription`, page-level bbox, conf 0.55; else **RapidOCR**).
 - RapidOCR (`rapidocr-onnxruntime`, CPU): returns `[quad, text, score]`; kept if
   `score ≥ CDI_OCR_MIN_CONF` (0.30); quad → `bbox [x0,y0,x1,y1]`; `polygon`
   retained.
@@ -414,16 +440,38 @@ Das", sex M, DOB 1978-01-01, `identity_confidence 0.99`.
 - `build_extraction_prompt(doc_type, ocr_blocks)` presents blocks as `[b1] text …`,
   `[b2] …`; `block_id_map` maps `bN → ocr_block uuid`.
 - `client.vlm_json(image, prompt, schema, max_tokens=max_tokens_for(doc_type),
-  retries=2)` — with repair + `_partial` fallback (see §3.4). **Per-doc-type token
+  retries=1)` — with repair + `_partial` fallback (see §3.4). **Per-doc-type token
   budget** (prescription / discharge 2600, opd 2400, lab 2000, …) plus doc-type
-  guidance ("list EVERY medication line — 5–15 drugs — don't stop early") so long
-  list-heavy documents are captured in full. Payload stored verbatim in `extraction`.
-- **Schemas relaxed** so real VLM output validates cleanly (far fewer `_partial`):
-  `evidence` is optional (`minItems 0`, dropped from every `required`); `quantity`
-  accepts a bare number/string (`"value": 150`); list-item objects allow
-  `additionalProperties`. Same 10-drug prescription that previously yielded **1
-  fact now yields 16** (10 medications + 3 conditions + 2 vitals + advice), with
-  `_partial = false`.
+  guidance ("list EVERY medication line — 5–15 drugs — don't stop early"; radiology
+  "copy every finding line") so long list-heavy documents are captured in full.
+  Payload stored verbatim in `extraction`.
+- **Schemas relaxed** so real VLM output validates on the first pass (retries were
+  burning ~10–20 s each on constraints the 7B could never satisfy):
+  - `evidence` optional everywhere (`minItems 0`); `quantity` accepts a bare
+    number/string (`"value": 150`); list-item objects allow `additionalProperties`.
+  - `patient` is **not** root-required on any v3 schema (handwritten notes often
+    have no legible name; identity code handles an absent block).
+  - `patient.sex` is free text — the model returns `"Male"`; `parse_sex` maps
+    `Male/Female/Other → M/F/O` downstream.
+  - `radiology.findings_list` / `impression_concepts` / `diagnoses` accept a bare
+    string as well as a `{text,system,code}` object.
+  Same 10-drug prescription that once yielded **1 fact now yields 19** (10
+  medications with dose + frequency + route, 3 conditions, 3 advice, 3 vitals),
+  `_partial = false`, no retry.
+- **Re-extraction supersedes**: if a document already has an `extraction`,
+  `purge_document_facts` clears its facts / extraction / encounter / aliases before
+  the new pass writes — re-processing the same file never doubles rows.
+- **Medication detail** (`_add_medication`): strength is parsed out of the drug
+  name (`METPURE XL 50 MG → Metpure XL / 50 / mg`, preferring a dose unit over a
+  pen's fill volume); frequency from the dose-slot column (`1-0-1 → 2/day`,
+  `BD → 2/day`, `TWICE IN A YEAR → 0.006/day`) with `"x 15 days"` correctly read as
+  *duration*, not frequency; SC/injection route inferred for pens/`Inj`.
+- **Existing-patient mismatch guard**: when the job was started against a
+  registry patient, every document's extracted name/DOB is checked against that
+  patient (`names_match` token-subset + fuzzy ≥ 0.72; `dob_match` ±1 yr). On a
+  mismatch the job **stops** (`state = mismatch`), the facts this document just
+  wrote are purged, and the UI shows a red card naming both parties — no
+  patient id / identity is surfaced.
 - **Identity & encounter**: `patient_id` is passed in by the web-app job (created
   once from the form); otherwise `get_or_create_patient` from the payload's
   `patient` block / legacy MRN. One `encounter` per document, class `IMP` for
@@ -443,9 +491,9 @@ Das", sex M, DOB 1978-01-01, `identity_confidence 0.99`.
   computing `bbox_union`. Fused `confidence_overall = 0.5·(extract_conf + mean OCR conf)`.
 - `pipeline_run(stage='extract')` ok with `facts` count; `status='extracted'`; audit;
   enqueue S5.
-- Observed (real 7B): prescription → 9 facts, lab report → 5 facts, vitals → 1–8.
-  `_partial` warnings are common — the 7B often mis-slots values — but the data is
-  recovered by the tolerant readers.
+- Observed (real 7B, 2026-09-09): prescription → 19 facts, angiogram report → 14
+  (8 findings + 3 dx + report + procedure + advice), lab report → 6/6 analytes.
+  No `_partial`, no retry. Extract is ~14–29 s/doc on this GPU (see §7.3).
 
 ### S5 — Terminology · `cdi_adapter.terminology`
 
@@ -627,15 +675,17 @@ reflects the latest review decisions.
 
 ### 7.2 Job model (`webapp/jobs.py`) — parallel, then human-edit, then generate
 
-- **Phase 1 (parallel).** `ThreadPoolExecutor(max_workers=job_max_workers, default 6)` —
-  every document runs `ingest → classify → OCR` concurrently. `classify` uses a
-  **fast keyword classifier** on the OCR text (`config.fast_classify`) and only
-  calls the VLM when the type is ambiguous — no VLM call for a normal prescription /
-  lab report / vitals sheet.
+- **Phase 1 (parallel).** `ThreadPoolExecutor(max_workers=max(2, job_max_workers))`,
+  `job_max_workers = 6` — every document runs `ingest → OCR(rapidocr) → classify →
+  [OCR(vlm) if handwritten]` concurrently. `classify` is the scored heuristic
+  (`config.fast_classify` ON); it makes **no VLM call** for a clean printed
+  prescription / lab report / vitals / radiology report.
 - **Phase 2 (serial).** `extract → terminology → validate` per document, serialised
-  on the single GPU. Extract uses one retry and a smaller token budget
-  (`config.extract_retries=1`, `extract_max_tokens=1100`). No document ever shows
-  "queued" — the grid shows each cell `pending → running → done`.
+  on the single GPU **because the `hf` backend does one forward pass at a time** —
+  firing them concurrently would OOM, not speed up. This lock is removed only once
+  the `vllm` backend lands (Roadmap #1 / §7.4). Extract uses one retry
+  (`config.extract_retries = 1`). No document ever shows "queued" — the grid shows
+  each cell `pending → running → done`.
 - The job then stops at **`state = review`** (it does **not** auto-project).
 - **`GET /api/jobs/{id}/facts`** → every fact grouped by document, each with the
   page-image URL and its evidence `bbox` — the inline editor renders the **scanned
@@ -651,25 +701,43 @@ reflects the latest review decisions.
   generation"**; the "Generate EMR" card shows a stage-tab row (Ingest…Validate) and
   a document × stage grid with a green tick per completed cell.
 
-> **Latency note.** Sub-5 s *per-document extraction* is not reachable with the
-> generalist Qwen2.5-VL-7B (each schema-locked extract is ~25–40 s on this GPU).
-> The changes above remove the VLM classify call, cut retries, parallelise
-> everything that isn't the single GPU, and make the human-review → FHIR step
-> genuinely millisecond-fast. True <5 s extraction needs the fine-tuned DSLM +
-> grammar-locked decoding (Tier C).
+### 7.3 Timing — measured (RTX PRO 4500 Blackwell 32 GB, 7B bf16, hot model)
 
-### 7.3 Timing (RTX PRO 4500, 7B bf16)
+Same 3-document job (`prescription`, `angiogram`, `lab report`), one patient:
 
-| step | first doc | subsequent |
-|---|---|---|
-| model load | ~35 s (once) | — |
-| classify (VLM) | ~15 s | ~15 s |
-| OCR (RapidOCR) | ~7 s | ~7 s |
-| extract (VLM, up to 3 tries) | ~40–50 s | ~40–50 s |
-| terminology + FHIR | < 1 s | < 1 s |
-| **per document** | ~110 s | ~65–75 s |
+| stage | before (2026-09-08) | after (2026-09-09) | change |
+|---|--:|--:|---|
+| ingest ×3 (parallel) | 9.2 / 0.3 / 0.9 | 1.4 / 16.4 / 16.4 | render contention, now that classify no longer blocks on the GPU (see §7.4 #4) |
+| **classify ×3** | 21.6 / 31.8 / 36.2 (VLM) | **0.0 / 0.0 / 0.0** (heuristic) | no VLM call |
+| **OCR ×3** | 9.8 / 4.6 / 23.1 **+ a hidden 2nd pass** | 10.4 / 8.8 / 7.0 (one pass) | page OCR'd once, before classify |
+| **extract ×3 (serial)** | 17.6 / 30.5 / 31.6 | 28.8 / 13.9 / 21.0 | angiogram 3 passes → **1** (schema fixes); no `"Male"` retry |
+| terminology + validate + project | < 0.1 | < 0.1 | — |
+| **total wall (3 docs)** | **~140 s** | **89.8 s** | **−36 %** |
 
-5 documents ≈ 5–7 minutes. The UI shows live progress throughout.
+Extraction facts are unchanged or higher (19 / 14 / 6). `_partial` and schema
+retries are gone. First job after a restart still pays a one-off ~35 s model load.
+
+### 7.4 Performance plan & the latency floor
+
+**The floor is one VLM forward pass per distinct document.** On this GPU a
+schema-locked Qwen2.5-VL-7B pass over a full-page image + ~2 k output tokens is
+**~8–15 s** — arithmetic (FLOPs ÷ throughput), not removable waste. "Almost zero"
+latency is **not** reachable with a generalist 7B; it needs a distilled/quantized
+`cdi-dslm` (Roadmap #1), or *not calling the VLM* for documents a layout model +
+deterministic parser can handle, or precompute/cache.
+
+Planned changes and their honest effect:
+
+| # | Change | Effect | Notes / risk |
+|---|---|---|---|
+| 1 | **`hf` → `vllm` async engine** (`AsyncLLMEngine`, paged KV, continuous batching) | **2–3× throughput on Phase 2** — a 5-doc job's wall time, not one doc's latency | 32 GB ⇒ ~15 GB weights + ~12–14 GB KV ⇒ 3–4 concurrent page extractions, not 5 (large image prefill still serialises on compute). vLLM wheels for Blackwell sm_120 + torch 2.8/cu128 are new — budget a build; keep `hf` as rollback. |
+| 2 | **Remove the Phase-2 serialisation lock** in `webapp/jobs.py` | lets vLLM batch concurrent extracts | one-line change, **only after #1** — today it would OOM. Phase 1 is *already* parallel (`ThreadPoolExecutor`, 6 workers); the "`max_workers=1`" premise is not the current code. Celery for web uploads is a *scaling/durability* change (Roadmap #8), not a latency lever. |
+| 3 | **Grammar-locked decoding** (vLLM `guided_json` / XGrammar) | deletes the repair + retry path → ~1 fewer pass (~10–20 s) on docs that retry today | guarantees JSON *validity*, **not clinical fidelity** — the model can still mis-slot a value or hallucinate; S6 + human review stay load-bearing. Needs the v3 schemas *re-tightened* (they were loosened to stop retries) so the grammar actually constrains. Depends on #1. |
+| 4 | **CPU thread hygiene** — pin `OMP_NUM_THREADS` / ORT `intra_op_num_threads`, set `job_max_workers ≈ cores ÷ threads_per_task` | keeps RapidOCR at ~7 s and stops the ingest-render contention that spiked ingest to 16 s | config knobs, no redesign. RapidOCR already runs CPU-only, parallel to the GPU. |
+
+**Realistic target with all four:** a 5-document job in **~20–35 s wall**,
+~12–18 s perceived per document, `_partial` effectively gone — a solid **3–4×**,
+"review starts in well under a minute". Not "almost zero".
 
 ---
 
@@ -684,11 +752,11 @@ User        webapp            jobs(thread)     mlserve(VLM)   RapidOCR    Postgr
  │  202 {job_id}               │                │              │           │
  │                             │ for each file: │              │           │
  │                             │  ingest ───────────────────────────────────▶ source_document, pages→MinIO
- │                             │  classify ────▶ /vlm/generate │            │
- │                             │        ◀──────  doc_type       │            │
- │                             │  ─────────────────────────────▶ hint OCR    │
- │                             │  ocr ──────────────────────────▶ blocks     │
+ │                             │  ocr (rapidocr) ───────────────▶ blocks     │
  │                             │  ─────────────────────────────────────────▶ ocr_block
+ │                             │  classify (heuristic on OCR text; VLM only  │
+ │                             │            if ambiguous/handwritten)        │
+ │                             │  [ocr (vlm) if handwritten] ───▶ blocks     │
  │                             │  extract ─────▶ /vlm/generate (schema)      │
  │                             │        ◀──────  JSON (repair/_partial)      │
  │                             │  ─────────────────────────────────────────▶ extraction, clinical_fact, fact_provenance
@@ -725,9 +793,12 @@ Postgres.
 | `CDI_PAGE_DPI` | 200 | render resolution |
 | `CDI_WEBAPP_PORT` | **8888** | the RunPod-proxied port |
 | `CDI_MLSERVE_URL` / `_PORT` | `http://127.0.0.1:8077` / 8077 | model gateway |
-| `CDI_MLSERVE_BACKEND` | `hf` | `hf` \| `stub` |
+| `CDI_MLSERVE_BACKEND` | `hf` | `hf` \| `stub` (`vllm` planned — §7.4) |
 | `CDI_VLM_MODEL_ID` / `_FALLBACK_MODEL_ID` | `Qwen/Qwen2.5-VL-7B-Instruct` / `…-3B-…` | VLM + OOM fallback |
 | `CDI_VLM_MAX_PIXELS_OCR` | 2 000 000 | processor cap (VRAM bound) |
+| `CDI_FAST_CLASSIFY` | `true` | S2 scored heuristic first; VLM only on ambiguous/handwritten |
+| `CDI_EXTRACT_RETRIES` | `1` | S4 VLM re-tries on schema failure (schemas relaxed → rare) |
+| `CDI_JOB_MAX_WORKERS` | 6 | Phase-1 documents in flight concurrently |
 | `CDI_OCR_ENGINE` / `CDI_HANDWRITTEN_USES_VLM` | `rapidocr` / `true` | S3 routing |
 | `CDI_IG_PACKAGE` | `nrces.fhir.r4.ndhm#6.5.0` | Profile/IG package |
 | `CDI_TERMINOLOGY_PACKAGE` | `in-snomed-loinc-icd10` | Terminology package |
@@ -787,7 +858,7 @@ checks must grep a content marker); `psql`/`pg_restore` need the URL with
   dose/frequency/ceiling, future/implausible dates, evidence-present) and the
   `_calibrate` gate function.
 - Integration (`-m integration`, needs Postgres+MinIO, stub VLM): full
-  `ingest → classify → ocr` producing `doc_classification` + `ocr_block` rows with
+  `ingest → ocr → classify` producing `doc_classification` + `ocr_block` rows with
   bboxes and `pipeline_run` stages `ok`.
 - `scripts/pipeline_smoke.py` drives S1–S3 (or S1–S9 via the web app) over the
   generated sample docs and prints a summary; `scripts/make_sample_docs.py`
@@ -849,14 +920,14 @@ placeholder-grade:
 
 | # | Work | Status |
 |---|---|---|
-| 1 | **Harden S4** — fine-tune `cdi-dslm` (Qwen2.5-7B / Llama-3.1-8B + QLoRA) on synthetic + de-identified gold; serve via vLLM + **XGrammar** grammar-locked decoding so JSON is valid by construction; eval harness (field F1, numeric exactness, hallucination, FHIR validity). Removes the `_partial` path. | **next** |
+| 1 | **Harden + accelerate S4.** (a) **Swap the gateway to a `vllm` `AsyncLLMEngine`** — paged KV cache + continuous batching; deprecate `hf`. (b) **Remove the Phase-2 serialisation lock** in `webapp/jobs.py` so concurrent extracts batch on vLLM. (c) **Grammar-locked decoding** (vLLM `guided_json` / XGrammar) — JSON valid by construction, deletes the repair + retry path; re-tighten the v3 schemas so the grammar constrains. (d) **Fine-tune `cdi-dslm`** (Qwen2.5-VL-7B or a 2–3 B distil + QLoRA, AWQ/INT4) on synthetic + de-identified gold; eval harness (field F1, numeric exactness, hallucination, FHIR validity). Expected: 3-doc job ~90 s → ~30–40 s; 5-doc ~20–35 s. **Floor stays ~8–15 s/doc** for a 7B — sub-5 s needs the small DSLM (d). Grammar fixes JSON validity, **not** clinical fidelity. | **next** |
 | 2 | **Real terminology service** — Snowstorm-lite (SNOMED CT India) + LOINC/ICD in Postgres; SapBERT/BioLORD + FAISS candidate gen + rule reranker; `$validate-code` / `$translate`; local-code minting. Replaces `seed.py`. | next |
 | 3 | **Fit the S6 calibrator** — replace `_calibrate` with isotonic regression per `doc_type × fact_type` on clinician-adjudicated data; derive the gate thresholds empirically per class. | after data |
 | 4 | **S7 longitudinal reconciliation** — temporal merge across encounters, `supersedes` chains, medication continuity, derived patient-summary view. | — |
 | 5 | **FHIR/IG validation in-loop** — HAPI validator + `nrces.fhir.r4.ndhm` package + terminology `$validate-code`; bundle fails on `error`, quarantines on IG `warning`. | — |
 | 6 | **Review console hardening** — auth, reviewer assignment + SLA queue, keyboard-driven throughput, correction diffs as training data, dual-review for high-risk facts. | — |
 | 7 | **ABDM edge** — DMZ service: HFR/HPR registration, care-context linking, consent-artifact intake, Fidelius (ECDH) encryption, HIU push + status callback; keys never persisted. | — |
-| 8 | **Scale** — durable queue (Temporal / tuned Celery), separate ingest/OCR/VLM worker pools, GPU batching, priority + dead-letter queues, idempotency keys, autoscaling. Replaces the single `ThreadPool`. | — |
+| 8 | **Scale** — durable queue (Temporal / tuned Celery) for web-app uploads too, separate ingest/OCR/VLM worker pools, priority + dead-letter queues, idempotency keys, autoscaling. Replaces the in-process `ThreadPool` (robustness / back-pressure — not a single-job latency win). | — |
 | 9 | **Ops & governance** — Prometheus/Grafana/Loki + OTel; drift monitors (confidence dist, human-override rate, unmapped-code rate); model registry + canary/rollback; Postgres primary+standby; MinIO 3-node; KMS; web-app AuthN/AuthZ; DPDP data-principal workflow; WORM audit. | — |
 | 10 | **Shadow-mode pilot** on real historical documents with clinician adjudication before anything is trusted or shared. | — |
 
@@ -935,21 +1006,22 @@ clinical-emr-adapter/
 | CUDA / driver | 13.0 / 580 |
 | Python | 3.12 |
 | torch / torchvision | 2.8.0+cu128 / 0.23.0+cu128 (inherited via `venv --system-site-packages`) |
-| transformers | 5.16.1 |
-| VLM | `Qwen/Qwen2.5-VL-7B-Instruct` (Apache-2.0), bf16, ~16 GB VRAM, sdpa attention |
+| transformers | 5.16.1 (current `hf` serving backend — one forward pass at a time) |
+| vLLM | *not installed* — planned serving backend (§7.4), needs a Blackwell sm_120 / torch 2.8 build |
+| VLM | `Qwen/Qwen2.5-VL-7B-Instruct` (Apache-2.0), bf16, ~15 GB VRAM, sdpa attention |
 | OCR | `rapidocr-onnxruntime` + `onnxruntime` (CPU) |
 | API / server | FastAPI + uvicorn |
 | DB / store / broker | PostgreSQL 16, MinIO (RELEASE.2025-09-07), Redis 7 |
 | schema validation | `jsonschema` + `referencing` registry |
 | DB access | SQLAlchemy 2 (Core `text()`), psycopg 3 |
 
-## Appendix C — Live endpoints (current pod `2kkk36y0r2z7yv`)
+## Appendix C — Live endpoints (current pod `g1a7lswmb5t79o`)
 
 ```
-UI            https://2kkk36y0r2z7yv-8888.proxy.runpod.net/
-review        https://2kkk36y0r2z7yv-8888.proxy.runpod.net/review
+UI            https://g1a7lswmb5t79o-8888.proxy.runpod.net/
+review        https://g1a7lswmb5t79o-8888.proxy.runpod.net/review
 health        …/healthz
-submit        POST …/api/jobs              (multipart: patient_name, abha?, gender?, files[])
+submit        POST …/api/jobs              (multipart: patient_ref? (existing-patient lookup), abha?, files[])
 poll          GET  …/api/jobs/{id}         (per-doc facts / accepted / in_review)
 bundles       GET  …/api/jobs/{id}/fhir    (re-projected live; ready_to_share vs draft)
 download      GET  …/api/jobs/{id}/fhir/download
