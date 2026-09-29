@@ -68,7 +68,7 @@ cd "$REPO"
 . .venv/bin/activate
 export PIP_ROOT_USER_ACTION=ignore
 python -c "import cdi_adapter, rapidocr_onnxruntime, transformers" 2>/dev/null || {
-  pip install -q -e ".[dev,ocr]"
+  pip install -q -e ".[dev,ocr,trocr,listener]"
   pip install -q transformers accelerate qwen-vl-utils einops sentencepiece
 }
 set -a; . "$REPO/.env"; set +a

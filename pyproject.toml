@@ -51,9 +51,25 @@ ml = [
   "einops>=0.8",
   "sentencepiece>=0.2",
 ]
+# recognition v2 CPU host: TrOCR line recognizer (torch preinstalled on the pod)
+trocr = [
+  "transformers>=4.49",
+  "torchvision",
+  "sentencepiece>=0.2",
+  "protobuf>=4",
+]
+# file listener: OneDrive / SharePoint via Microsoft Graph (app-only auth)
+listener = [
+  "msal>=1.28",
+]
 
 [project.scripts]
 cdi-ingest-watch = "cdi_adapter.ingest.watcher:main"
+cdi-ocrhost = "cdi_adapter.ocrhost.app:main"
+cdi-listener = "cdi_adapter.listener.service:main"
+cdi-listener-recovery = "cdi_adapter.listener.recovery:main"
+cdi-fhir-agent = "cdi_adapter.agents.fhir_builder:main"
+cdi-dispatch = "cdi_adapter.agents.dispatch:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

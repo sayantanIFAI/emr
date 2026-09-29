@@ -75,6 +75,24 @@ on the ephemeral overlay and is rebuilt/restored by `infra/runpod/bootstrap_pod.
 restart. The 24 GB GPU means later model phases use a 4-bit (AWQ) 7B stack or 3B models,
 not full-precision co-resident 7B.
 
+## Recognition v2 (handwriting, evidence, agents)
+
+Design: `docs/ARCHITECTURE.md` §15–§16; what is built: **§17**. In short:
+OpenCV quality gate → RapidOCR (printed) → OpenCV line regions → **TrOCR on a CPU OCR host**
++ **Qwen2.5-VL per line crop**, independently → disagreement engine → append-only
+`ocr_observation` → extraction → alias cascade + clinical-context plausibility → pixel
+grounding + per-field policy → `verified_fact` ledger → normalised `rx_*` tables → FHIR
+builder agent (blob store). Plus a file listener (local / OneDrive / SharePoint, 3 retries),
+a doctor master matcher and a dispatch agent for downstream screens (disabled until approved).
+
+```bash
+python -m cdi_adapter.ocrhost                       # CPU OCR host on :8079
+python -m cdi_adapter.listener.service              # file listener (CDI_LISTENER_CONNECTOR)
+python -m cdi_adapter.listener.recovery             # retries failed files (max 3)
+python -m cdi_adapter.agents.fhir_builder           # fhir_outbox -> bundle -> blob
+python -m cdi_adapter.agents.dispatch run           # governed data -> approved screens
+```
+
 ## Configuration
 
 All settings are env vars with the `CDI_` prefix (see `.env.example`). Two jurisdiction

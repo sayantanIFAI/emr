@@ -45,7 +45,9 @@ _EXTRA = {
         "sits in its own column next to the drug - never drop it. `duration` = the "
         "'x N days' / 'x 1 month' text. `instructions` = any 'Notes'/'Composition' "
         "text. Do NOT stop after the first few - include "
-        "the last drug on the page. Put diagnoses in `diagnoses`, BP/weight in `vitals`."
+        "the last drug on the page. Put diagnoses in `diagnoses`, BP/weight in `vitals`, and "
+        "every test or scan the doctor ORDERS/advises ('Adv: CBC, KFT', 'X-ray LS spine') in "
+        "`investigations` - one item per test, panels as written (never expand a panel)."
     ),
     "lab_report": (
         "\nThis is a LAB REPORT. Put every analyte row in `results` with its numeric "
@@ -96,6 +98,9 @@ Rules:
 - Every non-null value you emit MUST carry an "evidence" array of OCR block ids
   (like "b12"). If nothing supports a value, omit it.
 - Do NOT infer, expand abbreviations, or add clinical judgement.
+- A block written "A ⟂ B" holds two independent readings of the same handwritten line
+  that DISAGREE. Copy the reading the image supports, and set "ambiguous": true on that
+  item where the schema allows it. Never merge the two readings into a third value.
 - Output ONLY the JSON object - no markdown fence, no commentary.
 
 OCR blocks (id, text) - noisy, use together with the image:

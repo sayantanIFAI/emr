@@ -763,7 +763,8 @@ def delete_ocr_blocks_for_document(sess: Session, document_id: UUID | str) -> in
 
 def insert_ocr_blocks(sess: Session, blocks: list[dict[str, Any]]) -> int:
     """Bulk insert. Each dict: page_id, block_type, reading_order, text, bbox(list[int]),
-    ocr_conf, lang, polygon(optional list), table_ref, row_idx, col_idx, model_run_id."""
+    ocr_conf, lang, polygon(optional list), table_ref, row_idx, col_idx, model_run_id,
+    observation_ids (recognition v2 evidence), recognition (engine verdict jsonb)."""
     if not blocks:
         return 0
     sess.execute(
@@ -771,11 +772,12 @@ def insert_ocr_blocks(sess: Session, blocks: list[dict[str, Any]]) -> int:
             """
             INSERT INTO ocr_block
               (page_id, block_type, reading_order, text, bbox, polygon, ocr_conf,
-               lang, table_ref, row_idx, col_idx, model_run_id)
+               lang, table_ref, row_idx, col_idx, model_run_id, observation_ids, recognition)
             VALUES
               (:page_id, :block_type, :reading_order, :text, CAST(:bbox AS int[]),
                CAST(:polygon AS jsonb),
-               :ocr_conf, :lang, :table_ref, :row_idx, :col_idx, :model_run_id)
+               :ocr_conf, :lang, :table_ref, :row_idx, :col_idx, :model_run_id,
+               CAST(:observation_ids AS uuid[]), CAST(:recognition AS jsonb))
             """
         ),
         [
@@ -792,6 +794,9 @@ def insert_ocr_blocks(sess: Session, blocks: list[dict[str, Any]]) -> int:
                 "row_idx": b.get("row_idx"),
                 "col_idx": b.get("col_idx"),
                 "model_run_id": str(b["model_run_id"]) if b.get("model_run_id") else None,
+                "observation_ids": [str(x) for x in (b.get("observation_ids") or [])],
+                "recognition": (json.dumps(b["recognition"])
+                                if b.get("recognition") is not None else None),
             }
             for b in blocks
         ],
@@ -846,3 +851,151 @@ def write_audit(
             "request_id": request_id,
         },
     )
+
+
+# --------------------------------------------------------------------------- #
+# recognition v2 evidence (ARCHITECTURE §15.4) - ocr_observation is append-only
+# --------------------------------------------------------------------------- #
+def insert_observations(sess: Session, rows: list[dict[str, Any]]) -> list[str]:
+    """Append engine readings. Never updates: a re-run supersedes via ``supersedes``."""
+    ids: list[str] = []
+    for o in rows:
+        ids.append(str(sess.execute(
+            text(
+                """
+                INSERT INTO ocr_observation
+                  (document_id, page_id, line_key, region_kind, bbox, polygon, crop_hash,
+                   field_domain, engine, engine_version, prompt_hash, raw_text,
+                   raw_confidence, token_confidences, error, run_id, supersedes)
+                VALUES
+                  (:document_id, :page_id, :line_key, :region_kind, CAST(:bbox AS int[]),
+                   CAST(:polygon AS jsonb), :crop_hash, :field_domain, :engine,
+                   :engine_version, :prompt_hash, :raw_text, :raw_confidence,
+                   CAST(:token_confidences AS jsonb), :error, :run_id,
+                   CAST(:supersedes AS uuid[]))
+                RETURNING id
+                """
+            ),
+            {
+                "document_id": str(o["document_id"]), "page_id": str(o["page_id"]),
+                "line_key": o["line_key"], "region_kind": o["region_kind"],
+                "bbox": [int(x) for x in o["bbox"]],
+                "polygon": json.dumps(o["polygon"]) if o.get("polygon") else None,
+                "crop_hash": o.get("crop_hash"), "field_domain": o.get("field_domain"),
+                "engine": o["engine"], "engine_version": o["engine_version"],
+                "prompt_hash": o.get("prompt_hash"), "raw_text": o.get("raw_text") or "",
+                "raw_confidence": o.get("raw_confidence"),
+                "token_confidences": (json.dumps(o["token_confidences"])
+                                      if o.get("token_confidences") else None),
+                "error": o.get("error"),
+                "run_id": str(o["run_id"]) if o.get("run_id") else None,
+                "supersedes": [str(x) for x in (o.get("supersedes") or [])],
+            },
+        ).scalar_one()))
+    return ids
+
+
+def list_current_observations(sess: Session, document_id: UUID | str,
+                              engine: str | None = None) -> list[dict[str, Any]]:
+    q = "SELECT * FROM v_ocr_observation_current WHERE document_id = :d"
+    params: dict[str, Any] = {"d": str(document_id)}
+    if engine:
+        q += " AND engine = :e"
+        params["e"] = engine
+    return [dict(r) for r in sess.execute(text(q + " ORDER BY created_at"), params).mappings()]
+
+
+def insert_candidates(sess: Session, rows: list[dict[str, Any]]) -> int:
+    for c in rows:
+        sess.execute(
+            text(
+                """
+                INSERT INTO interpretation_candidate
+                  (fact_id, observation_ids, domain, concept_id, normalized_text, code_system,
+                   code, code_display, source, alias_class, resolved_by_level, score,
+                   is_selected, collision, eliminated_by, evidence)
+                VALUES
+                  (:fact_id, CAST(:observation_ids AS uuid[]), :domain, :concept_id,
+                   :normalized_text, :code_system, :code, :code_display, :source,
+                   :alias_class, :resolved_by_level, :score, :is_selected, :collision,
+                   :eliminated_by, CAST(:evidence AS jsonb))
+                """
+            ),
+            {
+                "fact_id": str(c["fact_id"]) if c.get("fact_id") else None,
+                "observation_ids": [str(x) for x in (c.get("observation_ids") or [])],
+                "domain": c["domain"], "concept_id": c.get("concept_id"),
+                "normalized_text": c.get("normalized_text") or "",
+                "code_system": c.get("code_system"), "code": c.get("code"),
+                "code_display": c.get("code_display"), "source": c["source"],
+                "alias_class": c.get("alias_class"),
+                "resolved_by_level": c.get("resolved_by_level"),
+                "score": float(c.get("score") or 0.0),
+                "is_selected": bool(c.get("is_selected")),
+                "collision": bool(c.get("collision")),
+                "eliminated_by": c.get("eliminated_by"),
+                "evidence": json.dumps(c.get("evidence") or {}, default=str),
+            },
+        )
+    return len(rows)
+
+
+def delete_candidates_for_fact(sess: Session, fact_id: UUID | str) -> None:
+    sess.execute(text("DELETE FROM interpretation_candidate WHERE fact_id = :f"),
+                 {"f": str(fact_id)})
+
+
+def set_fact_decision(sess: Session, fact_id: UUID | str, *, evidence_state: str | None,
+                      field_policy: str | None, decision_trace: list[dict[str, Any]]) -> None:
+    sess.execute(
+        text("UPDATE clinical_fact SET evidence_state = :e, field_policy = :p, "
+             "decision_trace = CAST(:t AS jsonb) WHERE id = :id"),
+        {"e": evidence_state, "p": field_policy,
+         "t": json.dumps(decision_trace, default=str), "id": str(fact_id)},
+    )
+
+
+def insert_verified_fact(sess: Session, **v: Any) -> str:
+    """Append to the immutable verified-fact ledger (no FK: re-extraction cannot erase it)."""
+    return str(sess.execute(
+        text(
+            """
+            INSERT INTO verified_fact
+              (fact_id, document_id, patient_id, fact_type, observation_ids,
+               winning_candidate_ids, code_system, code, code_display, governed_value,
+               verification_method, confidence, evidence_state, policy_id, reviewer_id,
+               model_stack, decision_trace)
+            VALUES
+              (:fact_id, :document_id, :patient_id, :fact_type, CAST(:observation_ids AS uuid[]),
+               CAST(:winning AS uuid[]), :code_system, :code, :code_display,
+               CAST(:governed_value AS jsonb), :method, :confidence, :evidence_state,
+               :policy_id, :reviewer_id, CAST(:model_stack AS jsonb),
+               CAST(:decision_trace AS jsonb))
+            RETURNING id
+            """
+        ),
+        {
+            "fact_id": str(v["fact_id"]),
+            "document_id": str(v["document_id"]) if v.get("document_id") else None,
+            "patient_id": str(v["patient_id"]) if v.get("patient_id") else None,
+            "fact_type": v["fact_type"],
+            "observation_ids": [str(x) for x in (v.get("observation_ids") or [])],
+            "winning": [str(x) for x in (v.get("winning_candidate_ids") or [])],
+            "code_system": v.get("code_system"), "code": v.get("code"),
+            "code_display": v.get("code_display"),
+            "governed_value": json.dumps(v.get("governed_value") or {}, default=str),
+            "method": v["verification_method"], "confidence": v.get("confidence"),
+            "evidence_state": v.get("evidence_state"), "policy_id": v.get("policy_id"),
+            "reviewer_id": v.get("reviewer_id"),
+            "model_stack": json.dumps(v.get("model_stack") or {}, default=str),
+            "decision_trace": json.dumps(v.get("decision_trace") or [], default=str),
+        },
+    ).scalar_one())
+
+
+def get_blocks_by_ids(sess: Session, block_ids: list[Any]) -> list[dict[str, Any]]:
+    if not block_ids:
+        return []
+    rows = sess.execute(text("SELECT * FROM ocr_block WHERE id = ANY(CAST(:ids AS uuid[]))"),
+                        {"ids": [str(b) for b in block_ids]}).mappings().all()
+    return [dict(r) for r in rows]

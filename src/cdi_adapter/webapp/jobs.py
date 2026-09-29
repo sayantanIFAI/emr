@@ -149,6 +149,12 @@ def _stage1(prog: DocProg, fn: str, raw: bytes, abha: str | None) -> None:
         prog.stage("ingest", "running")
         res = ingest_bytes(raw, filename=fn, source_channel="webapp", legacy_patient_ref=abha)
         prog.document_id = res.document_id
+        if res.status == "quality_hold":
+            # E2-S12: an unreadable capture is held for rescan - never guessed at
+            with session_scope() as sess:
+                d = repo.get_document(sess, res.document_id) or {}
+            prog.stage("ingest", "error")
+            raise RuntimeError(d.get("error_detail") or "rescan: image quality below threshold")
         prog.stage("ingest", "done")
 
         # fast text first: a rapidocr pass the classifier reads directly, so the
@@ -162,8 +168,10 @@ def _stage1(prog: DocProg, fn: str, raw: bytes, abha: str | None) -> None:
         prog.doc_type = c.doc_type
         prog.stage("classify", "done")
 
-        # only a page the classifier calls handwritten needs the slow VLM OCR
-        if c.is_handwritten and settings.handwritten_uses_vlm:
+        # v2: the region pass always runs - printed lines keep their RapidOCR text and
+        # only handwritten/mixed/uncertain line crops go to TrOCR + Qwen (ARCHITECTURE §15).
+        # legacy: only a page the classifier calls handwritten gets page-level VLM OCR
+        if settings.recognition_v2 or (c.is_handwritten and settings.handwritten_uses_vlm):
             prog.stage("ocr", "running")
             ocr_document(res.document_id, force_engine="vlm")
             prog.stage("ocr", "done")

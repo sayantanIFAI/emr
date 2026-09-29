@@ -32,11 +32,14 @@ log = get_logger(__name__)
 @dataclass
 class RenderedPage:
     page_no: int
-    png_bytes: bytes
+    png_bytes: bytes             # normalised (gray, denoised, CLAHE) - what RapidOCR/classify read
     width_px: int
     height_px: int
     dpi: int
     preproc: dict[str, Any] = field(default_factory=dict)
+    # pixel-faithful colour render in the SAME coordinates as png_bytes (deskew applied, no
+    # filtering). Line crops and grounding are cut from this - never from the filtered image.
+    src_png: bytes | None = None
 
 
 def _pil_to_png(img: Image.Image) -> bytes:
@@ -77,12 +80,24 @@ def _rotate(arr: np.ndarray, angle_deg: float) -> np.ndarray:
 
 def normalize_image(png_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
     """Return (normalized_png, preproc_metadata)."""
+    norm, _src, meta = normalize_with_source(png_bytes)
+    return norm, meta
+
+
+def normalize_with_source(png_bytes: bytes) -> tuple[bytes, bytes, dict[str, Any]]:
+    """Return (normalized_png, source_png, meta). ``source_png`` is the colour render with the
+    same deskew rotation but no denoise/CLAHE, so its pixels line up with OCR bboxes.
+    ``meta['quality']`` is the E2-S12 gate verdict measured on the UNPROCESSED render."""
+    from ..recognition.quality import assess
+
     arr = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
     if arr is None:
         raise ValueError("could not decode page image")
 
-    gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
     meta: dict[str, Any] = {"steps": []}
+    if settings.quality_gate_mode != "off":
+        meta["quality"] = assess(arr).as_dict()
+    gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
 
     skew = 0.0
     if settings.deskew_enabled:
@@ -103,7 +118,7 @@ def normalize_image(png_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
 
     h, w = gray.shape[:2]
     meta["width_px"], meta["height_px"] = int(w), int(h)
-    return _np_to_png(gray), meta
+    return _np_to_png(gray), _np_to_png(arr), meta
 
 
 def render_pages(raw: bytes, mime_type: str, *, dpi: int | None = None) -> list[RenderedPage]:
@@ -119,7 +134,7 @@ def render_pages(raw: bytes, mime_type: str, *, dpi: int | None = None) -> list[
             for i in range(n):
                 pix = doc.load_page(i).get_pixmap(matrix=mat, alpha=False)
                 png = pix.tobytes("png")
-                norm, meta = normalize_image(png)
+                norm, src, meta = normalize_with_source(png)
                 meta["source"] = "pdf"
                 pages.append(
                     RenderedPage(
@@ -129,6 +144,7 @@ def render_pages(raw: bytes, mime_type: str, *, dpi: int | None = None) -> list[
                         height_px=meta["height_px"],
                         dpi=dpi,
                         preproc=meta,
+                        src_png=src,
                     )
                 )
         finally:
@@ -141,16 +157,16 @@ def render_pages(raw: bytes, mime_type: str, *, dpi: int | None = None) -> list[
             for i in range(img.n_frames):
                 img.seek(i)
                 frame = img.convert("RGB")
-                norm, meta = normalize_image(_pil_to_png(frame))
+                norm, src, meta = normalize_with_source(_pil_to_png(frame))
                 meta["source"] = "tiff"
                 pages.append(
-                    RenderedPage(i + 1, norm, meta["width_px"], meta["height_px"], dpi, meta)
+                    RenderedPage(i + 1, norm, meta["width_px"], meta["height_px"], dpi, meta, src)
                 )
         else:
             frame = img.convert("RGB")
-            norm, meta = normalize_image(_pil_to_png(frame))
+            norm, src, meta = normalize_with_source(_pil_to_png(frame))
             meta["source"] = "image"
-            pages.append(RenderedPage(1, norm, meta["width_px"], meta["height_px"], dpi, meta))
+            pages.append(RenderedPage(1, norm, meta["width_px"], meta["height_px"], dpi, meta, src))
         return pages
 
     raise ValueError(f"unsupported mime_type for rendering: {mime_type!r}")

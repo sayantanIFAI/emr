@@ -8,7 +8,9 @@
 #   - the Postgres cluster on the overlay,      [bootstrap_pod.sh]
 #     restored from /workspace/backup/cdi.dump
 #   - the model gateway (Qwen2.5-VL) process
+#   - the CPU OCR host (RapidOCR + TrOCR, recognition v2)
 #   - the web app process
+#   - background agents: FHIR builder, file listener + recovery, dispatch
 set -uo pipefail
 REPO=/workspace/cdi
 cd "$REPO"
@@ -37,6 +39,9 @@ else
 fi
 curl -s "http://127.0.0.1:${MLP}/healthz"; echo
 
+echo "########## 2b. CPU OCR host  (:${CDI_OCRHOST_PORT:-8079}) ##########"
+bash "$REPO/infra/runpod/start_ocrhost.sh" || echo "(ocrhost failed - handwriting lines will be single-engine -> review)"
+
 echo "########## 3. web app  (:$WBP) ##########"
 # on these pods the only RunPod-edge-routed HTTP port is 8888 (Jupyter's) — take it
 pkill -f jupyter 2>/dev/null || true
@@ -48,6 +53,23 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 curl -s "http://127.0.0.1:${WBP}/healthz"; echo
+
+echo "########## 4. agents ##########"
+for mod in agents.fhir_builder listener.recovery; do
+  pkill -f "cdi_adapter.$mod" 2>/dev/null || true
+  setsid nohup python -m "cdi_adapter.$mod" > "/workspace/logs/${mod##*.}.log" 2>&1 < /dev/null &
+  echo "$mod pid $!"
+done
+# the listener runs only when asked (it moves files in the configured drive)
+if [ "${CDI_START_LISTENER:-0}" = "1" ]; then
+  pkill -f "cdi_adapter.listener.service" 2>/dev/null || true
+  setsid nohup python -m cdi_adapter.listener.service > /workspace/logs/listener.log 2>&1 < /dev/null &
+  echo "listener pid $!  (connector ${CDI_LISTENER_CONNECTOR:-local})"
+fi
+# dispatch sends nothing until a target is approved; safe to keep running
+pkill -f "cdi_adapter.agents.dispatch" 2>/dev/null || true
+setsid nohup python -m cdi_adapter.agents.dispatch run > /workspace/logs/dispatch.log 2>&1 < /dev/null &
+echo "dispatch pid $!"
 
 POD=$(tr '\0' '\n' < /proc/1/environ | sed -n 's/^RUNPOD_POD_ID=//p')
 echo

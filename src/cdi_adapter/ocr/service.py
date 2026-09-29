@@ -21,6 +21,9 @@ class OcrResult:
 def ocr_document(document_id: str, *, force_engine: str | None = None) -> OcrResult:
     """OCR every page and persist the blocks (replacing any previous ones).
 
+    With ``recognition_v2`` (default) any pass other than an explicit ``rapidocr`` one is
+    delegated to :func:`cdi_adapter.recognition.pipeline.recognize_document`.
+
     ``force_engine`` pins the engine ("rapidocr" | "vlm"); without it the engine
     is chosen from the classification (VLM for handwriting). The pipeline runs a
     fast ``rapidocr`` pass before classification and, only for a page the
@@ -49,7 +52,21 @@ def ocr_document(document_id: str, *, force_engine: str | None = None) -> OcrRes
         use_vlm = bool(cls and cls["is_handwritten"]) and settings.handwritten_uses_vlm
     engine = "vlm" if use_vlm else settings.ocr_engine
 
+    # v2 always runs the region pass (a printed form can carry handwritten lines); only an
+    # explicit rapidocr pass - the fast text the classifier reads - stays printed-only
+    if settings.recognition_v2 and force_engine != "rapidocr":
+        # recognition v2: line regions -> TrOCR + Qwen per crop -> immutable evidence
+        from ..recognition.pipeline import recognize_document
+
+        with session_scope() as sess:
+            repo.finish_pipeline_run(sess, run_id, status="ok",
+                                     metrics={"delegated": "recognition-v2"})
+        rr = recognize_document(document_id)
+        _enqueue_extract(document_id)
+        return OcrResult(document_id, "recognition-v2", rr.n_blocks, rr.n_pages)
+
     all_blocks: list[dict] = []
+    page_lines: list[tuple[dict, list]] = []
     order = 0
     try:
         for pg in pages:
@@ -64,6 +81,7 @@ def ocr_document(document_id: str, *, force_engine: str | None = None) -> OcrRes
 
                 lines = run_rapidocr(png)
                 block_type = "line"
+                page_lines.append((pg, lines))
             else:
                 lines = []
                 block_type = "line"
@@ -85,6 +103,13 @@ def ocr_document(document_id: str, *, force_engine: str | None = None) -> OcrRes
                 )
 
         with session_scope() as sess:
+            if settings.recognition_v2 and page_lines:
+                # the printed pass is evidence too (append-only ocr_observation)
+                from ..recognition.pipeline import record_rapid_observations
+
+                for pg, lines in page_lines:
+                    record_rapid_observations(sess, document_id=document_id, page=pg,
+                                              lines=lines, run_id=run_id)
             repo.delete_ocr_blocks_for_document(sess, document_id)
             n = repo.insert_ocr_blocks(sess, all_blocks)
             repo.finish_pipeline_run(

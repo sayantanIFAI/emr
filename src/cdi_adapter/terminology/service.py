@@ -156,6 +156,17 @@ def bind_document(document_id: str | UUID) -> dict[str, int]:
             else:
                 local += 1
 
+        # recognition v2: recorded interpretation candidates (alias cascade + context)
+        from ..config import settings
+
+        if settings.recognition_v2:
+            from ..recognition.interpret import interpret_document
+
+            cur = [dict(r) for r in sess.execute(
+                text("SELECT * FROM clinical_fact WHERE :doc = ANY(source_doc_ids) AND is_current"),
+                {"doc": str(document_id)}).mappings()]
+            interpret_document(sess, str(document_id), cur)
+
         sess.execute(
             text(
                 "UPDATE source_document SET status = 'normalized' "

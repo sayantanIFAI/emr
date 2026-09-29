@@ -133,6 +133,10 @@ def project_document(document_id: str | UUID, *, persist: bool = True) -> dict[s
         elif ft == "allergy":
             emit(u, R.allergy_intolerance(f, u, pat_ref, enc_ref), rtype="AllergyIntolerance", fact_ids=[fid])
             by_kind.setdefault("allergies", []).append(u)
+        elif ft == "investigation_order":
+            emit(u, R.service_request(f, u, pat_ref, enc_ref, u_prac),
+                 rtype="ServiceRequest", fact_ids=[fid])
+            by_kind.setdefault("orders", []).append(u)
         elif ft == "advice":
             by_kind.setdefault("advice_text", []).append(f.get("value_text") or f.get("local_text") or "")
         elif ft == "diagnostic_report":
@@ -144,7 +148,7 @@ def project_document(document_id: str | UUID, *, persist: bool = True) -> dict[s
     emit(u_doc, R.document_reference(doc, u_doc, pat_ref, original, title),
          rtype="DocumentReference", fact_ids=[])
     _clin = {"Condition", "Observation", "MedicationRequest", "Procedure",
-             "AllergyIntolerance", "DiagnosticReport"}
+             "AllergyIntolerance", "DiagnosticReport", "ServiceRequest"}
     emitted_clin_urns = [rr["urn"] for rr in resource_rows if rr["rtype"] in _clin]
     emit(u_prov, R.provenance(emitted_clin_urns + [u_doc], u_prov, u_doc, when, _MODEL_STACK),
          rtype="Provenance", fact_ids=[])
@@ -157,6 +161,7 @@ def project_document(document_id: str | UUID, *, persist: bool = True) -> dict[s
         ("Medical history / Diagnosis", "Diagnosis", by_kind.get("diagnoses")),
         ("Investigations", "Diagnostic studies", by_kind.get("investigations")),
         ("Medications", "Medication summary", by_kind.get("medications")),
+        ("Investigation advice", "Plan of care", by_kind.get("orders")),
         ("Procedures", "History of past procedure", by_kind.get("procedures")),
         ("Allergies", "Allergy record", by_kind.get("allergies")),
         ("Vital signs", "Vital signs", by_kind.get("vitals")),

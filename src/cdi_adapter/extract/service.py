@@ -171,6 +171,11 @@ def _facts_prescription(c: _Ctx, p: dict[str, Any]) -> None:
         t, ev = _coded_text(a)
         if t:
             c.add(fact_type="advice", local_text=t, value_text=t, evidence=ev)
+    for io in p.get("investigations") or []:
+        t, ev = _coded_text(io)
+        if t:
+            c.add(fact_type="investigation_order", local_text=t, value_code_display=t,
+                  value_text=t, evidence=ev)
     _add_vitals(c, p.get("vitals") or [])
 
 
@@ -540,6 +545,22 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
             "birth_date": cand.birth_date.isoformat() if cand.birth_date else None,
             "source_document_id": document_id,
         }
+        # ---- practitioner link (E18): prescriber field + header lines vs doctor master ----
+        prac_ref = None
+        try:
+            from ..recognition.practitioner import link_document
+
+            pres = _asdict(payload.get("prescriber"))
+            p1 = str(pages[0]["id"])
+            header = [b["text"] for b in blocks if str(b["page_id"]) == p1][:12]
+            header += [b["text"] for b in blocks if re.search(r"\breg", b["text"] or "", re.I)]
+            with sess.begin_nested():     # savepoint: a failure here cannot sink S4
+                pm = link_document(sess, document_id, name=pres.get("name"),
+                                   reg_no=pres.get("reg_no"), header_texts=header)
+            # linked -> the master's name; otherwise what was read (never a guess)
+            prac_ref = pm.db_name if pm.linked else (pres.get("name") or None)
+        except Exception as exc:  # noqa: BLE001 - a missing doctor master must not block S4
+            log.warning("practitioner_link_skipped", document_id=document_id, error=str(exc)[:200])
         eid = encounter_id
         if not eid:
             edate, eprec = _parse_date(
@@ -552,6 +573,7 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
                 sess, patient_id=pid, enc_class=enc_class,
                 period_start=edate or doc.get("captured_at") or doc["ingested_at"],
                 period_end=None, period_precision=eprec, specialty=cls.get("specialty"),
+                practitioner_ref=prac_ref,
                 derived_from=[document_id], confidence=float(cls["confidence"]),
             ))
 

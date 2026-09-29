@@ -77,6 +77,75 @@ class Settings(BaseSettings):
     ocr_min_conf: float = 0.30
     handwritten_uses_vlm: bool = True
 
+    # --- recognition v2 (ARCHITECTURE §15): regions -> independent engines -> evidence ---
+    recognition_v2: bool = True           # False = legacy page-level VLM transcription (§5 S3)
+    # CPU OCR host (RapidOCR + TrOCR). Blank = run the engines in-process.
+    ocrhost_url: str = ""                 # e.g. http://127.0.0.1:8079
+    ocrhost_port: int = 8079
+    ocrhost_timeout_s: float = 120.0
+    trocr_enabled: bool = True
+    trocr_model_id: str = "microsoft/trocr-base-handwritten"   # English (IAM); Bengali is E2-S10
+    trocr_max_new_tokens: int = 64
+    trocr_batch_size: int = 8
+    qwen_line_mode: str = "crop"          # crop = independent read per line crop | off
+    qwen_line_max_tokens: int = 48
+    # an engine reading is "the same" as another when, after numeric-context
+    # normalisation, every number matches exactly AND the text similarity is >= this
+    engine_agree_similarity: float = 0.85
+
+    # --- image quality gate (E2-S12) ---
+    quality_gate_mode: str = "enforce"    # enforce = hold for rescan | warn = record only | off
+    quality_min_blur_var: float = 25.0    # variance of the Laplacian; sharp 200-dpi scans >> 100
+    quality_min_short_side_px: int = 600
+    quality_max_glare_frac: float = 0.25  # share of page area in saturated blobs
+    quality_max_dark_frac: float = 0.60   # share of page that is near-black (clipped/underexposed)
+
+    # --- pixel grounding (E4-S4) ---
+    grounding_enabled: bool = True
+    grounding_margin_frac: float = 0.15
+    grounding_min_similarity: float = 0.72
+
+    # --- per-field gate policy (E4-S2/S3). Values are ASSUMED until fitted on adjudicated
+    # data; engine disagreement, single-engine handwriting and failed grounding always review.
+    gate_policy_enabled: bool = True
+    gate_policy_path: str = ""            # optional JSON overriding validate/policy.DEFAULT_POLICY
+
+    # --- practitioner link (E6-S11 / E18) ---
+    practitioner_min_link_conf: float = 0.90
+
+    # --- file listener (E16) ---
+    listener_connector: str = "local"     # local | onedrive | sharepoint
+    listener_root: str = "./data/listener"            # local: folder; graph: folder path in the drive
+    listener_inbox: str = "inbox"
+    listener_processing: str = "processing"
+    listener_completed: str = "completed"
+    listener_error: str = "error"
+    listener_quarantine: str = "quarantine"
+    listener_poll_seconds: float = 10.0
+    listener_stable_polls: int = 2        # size/etag unchanged across this many polls = upload done
+    listener_lease_seconds: int = 900
+    listener_max_bytes: int = 50_000_000
+    listener_patterns: tuple[str, ...] = ("*.pdf", "*.png", "*.jpg", "*.jpeg", "*.tif", "*.tiff")
+    listener_max_attempts: int = 3        # hard cap, also enforced by a DB CHECK
+    listener_pipeline: str = "inline"     # inline = run every stage in the listener | celery
+    listener_retry_base_seconds: int = 60 # recovery agent back-off: base * 2^(attempt-1)
+    graph_tenant_id: str = ""
+    graph_client_id: str = ""
+    graph_client_secret: str = ""         # prefer certificate auth in production
+    graph_cert_path: str = ""
+    graph_cert_thumbprint: str = ""
+    graph_drive_id: str = ""              # OneDrive: the drive id (or leave blank + graph_user_id)
+    graph_user_id: str = ""
+    graph_site_id: str = ""               # SharePoint: site id; library resolved to its default drive
+
+    # --- FHIR builder agent + blob store (E17) ---
+    fhir_agent_poll_seconds: float = 5.0
+    fhir_agent_max_attempts: int = 3
+
+    # --- downstream screen dispatch (E20) - disabled per target until approved ---
+    dispatch_poll_seconds: float = 30.0
+    dispatch_max_attempts: int = 3
+
     # --- throughput ---
     job_max_workers: int = 5              # documents ingested/classified/OCR'd concurrently;
                                          # _cpu.py sizes native thread pools to

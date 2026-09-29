@@ -135,6 +135,7 @@ def ingest_bytes(
 
     try:
         rendered = render_pages(raw, mime)
+        held = quality_hold_reasons(rendered)
         with session_scope() as sess:
             for pg in rendered:
                 base = f"documents/{sha256[:2]}/{sha256}/pages/{pg.page_no:04d}"
@@ -142,6 +143,10 @@ def ingest_bytes(
                 thumb_uri = storage.put_bytes(
                     f"{base}.thumb.png", make_thumbnail(pg.png_bytes), "image/png"
                 )
+                if pg.src_png:
+                    # pixel-faithful render (deskewed, unfiltered) for crops + grounding
+                    pg.preproc["src_uri"] = storage.put_bytes(
+                        f"{base}.src.png", pg.src_png, "image/png")
                 repo.insert_document_page(
                     sess,
                     document_id=document_id,
@@ -153,16 +158,23 @@ def ingest_bytes(
                     dpi=pg.dpi,
                     preproc=pg.preproc,
                 )
+            status = "quality_hold" if held else "pages_rendered"
             repo.set_document_status(
-                sess, document_id, "pages_rendered", page_count=len(rendered)
+                sess, document_id, status, page_count=len(rendered),
+                error_detail=("rescan: " + " | ".join(held)) if held else None,
             )
             repo.finish_pipeline_run(
-                sess, run_id, status="ok", metrics={"pages": len(rendered)},
+                sess, run_id, status="ok",
+                metrics={"pages": len(rendered), "quality_hold": bool(held), "quality": held},
             )
             repo.write_audit(
                 sess, actor="ingest-svc", action="update", entity="source_document",
-                entity_id=str(document_id), detail={"pages": len(rendered)},
+                entity_id=str(document_id),
+                detail={"pages": len(rendered), "quality_hold": held or None},
             )
+        if held:
+            log.warning("ingest_quality_hold", document_id=str(document_id), reasons=held)
+            return IngestResult(str(document_id), sha256, False, len(rendered), "quality_hold")
         log.info("ingest_ok", document_id=str(document_id), pages=len(rendered))
         _enqueue_next(str(document_id))
         return IngestResult(str(document_id), sha256, False, len(rendered), "pages_rendered")
@@ -173,6 +185,19 @@ def ingest_bytes(
             repo.set_document_status(sess, document_id, "error", error_detail=str(exc))
             repo.finish_pipeline_run(sess, run_id, status="failed", error_detail=str(exc))
         raise
+
+
+def quality_hold_reasons(rendered: list) -> list[str]:
+    """Blocking quality reasons across pages ("p2: image too blurred ..."), or [] to proceed.
+    In ``warn`` mode the verdict is recorded on each page but never blocks."""
+    if settings.quality_gate_mode != "enforce":
+        return []
+    out: list[str] = []
+    for pg in rendered:
+        q = (pg.preproc or {}).get("quality") or {}
+        if q and not q.get("passed", True):
+            out += [f"page {pg.page_no}: {r}" for r in q.get("reasons", [])]
+    return out
 
 
 def _ext_for(mime: str, filename: str | None) -> str:

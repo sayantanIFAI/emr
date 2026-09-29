@@ -182,6 +182,19 @@ def observation(f: dict[str, Any], urn: str, patient_ref: str, enc_ref: str | No
     return r
 
 
+def service_request(f: dict[str, Any], urn: str, patient_ref: str, enc_ref: str | None,
+                    requester_ref: str | None) -> dict[str, Any]:
+    """A test / imaging ordered on the prescription (not a result). Panels stay panels."""
+    r = _base_clin("ServiceRequest", urn, "ServiceRequest", patient_ref, enc_ref)
+    r["status"] = "active"
+    r["intent"] = "order"
+    r["code"] = codeable(f.get("code_system"), f.get("code"), f.get("code_display"),
+                         f.get("value_text") or f.get("local_text"))
+    if requester_ref:
+        r["requester"] = {"reference": requester_ref}
+    return r
+
+
 def medication_request(f: dict[str, Any], md: dict[str, Any] | None, urn: str,
                        patient_ref: str, enc_ref: str | None,
                        requester_ref: str | None) -> dict[str, Any]:
