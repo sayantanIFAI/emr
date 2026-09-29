@@ -222,6 +222,55 @@ def test_hierarchy_indication_mismatch_blocks_medication():
     assert a.winning_candidate_ids == ["c1"]
 
 
+# ---------------- L8 adjudication (advisory) ----------------
+class _Adj:
+    def __init__(self, answers):
+        self.answers, self.prompts = list(answers), []
+
+    def vlm_generate(self, image, prompt, *, max_tokens=8, json_schema=None):
+        self.prompts.append(prompt)
+        return self.answers.pop(0)
+
+
+def test_adjudication_needs_both_orders_to_agree():
+    from cdi_adapter.recognition.adjudicate import adjudicate
+
+    texts = ["Pregabalin 75", "Pregabalin 150"]
+    c = _Adj(["A", "B"])            # A/B order picks #0, B/A order picks #0 -> consistent
+    a = adjudicate(b"png", texts, client=c)
+    assert a.verdict == "prefers" and a.preferred_text == "Pregabalin 75"
+    assert "A: Pregabalin 75" in c.prompts[0] and "A: Pregabalin 150" in c.prompts[1]
+    assert adjudicate(b"png", texts, client=_Adj(["A", "A"])).verdict == "inconsistent"
+    assert adjudicate(b"png", texts, client=_Adj(["NEITHER", "neither."])).verdict == "neither"
+    assert adjudicate(b"png", texts, client=_Adj(["???", "B"])).verdict == "inconsistent"
+
+
+def test_adjudication_failure_is_harmless():
+    from cdi_adapter.recognition.adjudicate import adjudicate
+
+    class Boom:
+        def vlm_generate(self, *a, **k):
+            raise RuntimeError("gateway down")
+
+    a = adjudicate(b"png", ["x 1", "x 2"], client=Boom())
+    assert a.verdict == "failed" and a.preferred_index is None
+
+
+def test_adjudication_never_resolves_disagreement():
+    f = {"fact_type": "medication", "local_text": "Pregabalin 75"}
+    md = {"drug_text": "Pregabalin", "strength_num": 75, "frequency_code": "0-0-1"}
+    blk = {"text": "Pregabalin 75 0-0-1 ⟂ Pregabalin 150 0-0-1", "observation_ids": [],
+           "recognition": {"state": "disagree",
+                           "engines": {"trocr": "Pregabalin 75 0-0-1",
+                                       "qwen2.5-vl": "Pregabalin 150 0-0-1"},
+                           "adjudication": {"verdict": "prefers", "preferred_index": 0,
+                                            "preferred_text": "Pregabalin 75 0-0-1"}}}
+    a = assess_fact(f, md, [blk], [])
+    msg = next(m for s, c, m in a.findings if c == "engine-disagreement")
+    assert a.evidence_state == "disagree" and "advisory" in msg
+    assert rule_for("medication", a.evidence_state).action == "review"
+
+
 # ---------------- quality gate + regions ----------------
 def _page(text_lines, blur=0):
     im = Image.new("RGB", (1400, 900), "white")

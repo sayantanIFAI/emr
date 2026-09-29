@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # an engine reading is "the same" as another when, after numeric-context
     # normalisation, every number matches exactly AND the text similarity is >= this
     engine_agree_similarity: float = 0.85
+    # L8 Qwen adjudication of a disagreement - ADVISORY: orders the two readings for the
+    # reviewer, never resolves the disagreement (the fact still goes to review)
+    qwen_adjudication_enabled: bool = False
+    qwen_adjudication_max_tokens: int = 8
 
     # --- image quality gate (E2-S12) ---
     quality_gate_mode: str = "enforce"    # enforce = hold for rescan | warn = record only | off

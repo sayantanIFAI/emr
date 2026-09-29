@@ -1714,6 +1714,7 @@ upload / listener ──► S1 ingest ── OpenCV quality gate ──► quali
 | Quality gate | `recognition/quality.py`, `ingest/pages.py`, `ingest/service.py` | blur (Laplacian var @1200 px), glare (only on non-white paper), dark fraction, short side, rotated-90 warning; `CDI_QUALITY_GATE_MODE=enforce|warn|off` |
 | Regions | `recognition/regions.py` | RapidOCR coverage/confidence + stroke-width CV; unexplained ink ⇒ handwritten; unexplained RapidOCR lines kept as printed |
 | Disagreement | `recognition/disagreement.py` | material = any number differs (after O→0-style normalisation inside numbers) or similarity < 0.85 |
+| L8 adjudication | `recognition/adjudicate.py` | `CDI_QWEN_ADJUDICATION_ENABLED` (off by default). On a disagreement only: Qwen sees the crop + both readings, asked in both A/B orders; a preference counts only if both orders agree. **Advisory** - puts the preferred reading first and records an `qwen2.5-vl-adjudicator` observation; the fact still goes to review |
 | Grammar | `recognition/grammar.py` | strength, dose pattern (d-d-d(-d), ½), frequency closed set, duration; validator only (no grammar-locked decoding yet) |
 | Grounding | `recognition/grounding.py` | numbers must be present in the pixels' readings (multiset), names similarity ≥ 0.72; optional margin re-read |
 | Alias cascade | `recognition/alias.py`, `recognition/interpret.py` | L1 exact, L2 normalised, L3 fuzzy (numbers never fuzzed); class C (this doctor) > A > B; collision margin 0.03 |

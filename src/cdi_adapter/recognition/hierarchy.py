@@ -72,8 +72,13 @@ def assess_fact(f: dict[str, Any], md: dict[str, Any] | None, blocks: list[dict[
                                "engines": r.get("engines")} for b, r in zip(blocks, rec)]})
     if state == "disagree":
         dis = [r.get("engines") for r in rec if r.get("state") == "disagree"]
+        prefs = [(r.get("adjudication") or {}) for r in rec if r.get("state") == "disagree"]
+        hint = "; ".join(f"adjudicator (advisory) prefers {p['preferred_text']!r}"
+                         for p in prefs if p.get("verdict") == "prefers")
         a.findings.append(("blocker", "engine-disagreement",
-                           f"handwriting engines disagree: {dis}"))
+                           f"handwriting engines disagree: {dis}" + (f" - {hint}" if hint else "")))
+        a.trace.append({"tier": 1, "check": "qwen_adjudication", "advisory": True,
+                        "results": prefs})
     elif state == "no_reading":
         a.findings.append(("blocker", "no-reading", "no engine produced a reading for this line"))
     elif state == "single_engine":

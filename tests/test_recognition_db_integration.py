@@ -150,6 +150,36 @@ def test_recognize_document_states_and_evidence(sess_scope, fake_store, monkeypa
     assert allo > cur
 
 
+def test_adjudication_orders_but_keeps_disagreement(sess_scope, fake_store, monkeypatch):
+    from cdi_adapter import repo
+    from cdi_adapter.config import settings
+    from cdi_adapter.ml import client as mlc
+    from cdi_adapter.recognition import engines, ocrhost_client, pipeline
+
+    class Adj:        # prefers the Qwen reading (#1) in both option orders
+        def vlm_generate(self, image, prompt, *, max_tokens=8, json_schema=None):
+            return "A" if "A: Pregabalin 150" in prompt else "B"
+
+    monkeypatch.setattr(settings, "qwen_adjudication_enabled", True)
+    monkeypatch.setattr(mlc, "get_client", lambda: Adj())
+    monkeypatch.setattr(engines.QwenLineEngine, "recognize", lambda self, crops: [
+        engines.Reading("qwen2.5-vl", "fake-qwen", "Pregabalin 150", None) for _ in crops])
+    did, _ = _doc(sess_scope, fake_store)
+    ocrhost_client.set_ocr_host(_FakeHost("Pregabalin 75"))
+    try:
+        pipeline.recognize_document(did)
+    finally:
+        ocrhost_client.set_ocr_host(None)
+    with sess_scope() as s:
+        blocks = repo.list_ocr_blocks(s, did)
+        obs = repo.list_current_observations(s, did, engine="qwen2.5-vl-adjudicator")
+    b = next(b for b in blocks if (b["recognition"] or {}).get("state") == "disagree")
+    assert b["text"] == "Pregabalin 150 ⟂ Pregabalin 75"          # preferred first
+    assert b["recognition"]["adjudication"]["verdict"] == "prefers"
+    assert b["recognition"]["adjudication"]["advisory"] is True
+    assert obs and obs[0]["raw_text"] == "B / A"                  # both orders -> reading #1
+
+
 # ---------------- listener ----------------
 def test_listener_lifecycle_and_three_retries(sess_scope, tmp_path, monkeypatch):
     from cdi_adapter.config import settings
@@ -285,10 +315,9 @@ def test_full_chain_prescription_governance(sess_scope, fake_store, monkeypatch)
     flagged by context; the handwritten Pregabalin line the engines disagree on is held."""
     import json as _json
 
-    from cdi_adapter import ml
     from cdi_adapter.ml import client as mlc
     from cdi_adapter.listener.service import run_pipeline
-    from cdi_adapter.recognition import engines, ocrhost_client
+    from cdi_adapter.recognition import ocrhost_client
 
     monkeypatch.setattr("cdi_adapter.ingest.service._enqueue_next", lambda d: None)
     monkeypatch.setattr("cdi_adapter.ocr.service._enqueue_extract", lambda d: None)

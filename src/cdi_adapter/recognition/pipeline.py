@@ -146,8 +146,25 @@ def recognize_page(*, document_id: str, page: dict[str, Any], rapid_lines: list[
                 "raw_confidence": rd.conf, "token_confidences": rd.token_confidences or None,
                 "error": rd.error, "run_id": run_id,
             })
+        adj = None
+        if verdict.state == DISAGREE and settings.qwen_adjudication_enabled:
+            # L8, advisory: orders the two readings, never resolves the disagreement
+            from .adjudicate import ENGINE, adjudicate, prompt_hash
+
+            texts = list(verdict.detail.get("texts") or [])
+            adj = adjudicate(crops[i], texts)
+            obs_rows.append({
+                "document_id": document_id, "page_id": page["id"], "line_key": key,
+                "region_kind": r.kind, "bbox": r.bbox, "crop_hash": crop_hash,
+                "engine": ENGINE, "engine_version": settings.vlm_model_id,
+                "prompt_hash": prompt_hash(), "raw_text": " / ".join(adj.answers),
+                "raw_confidence": None, "error": adj.error, "run_id": run_id,
+            })
+            if adj.preferred_index == 1 and len(texts) == 2:
+                verdict.display_text = f"{texts[1]} ⟂ {texts[0]}"
         printed_txt = " ".join(ln.text for ln in r.ocr_lines).strip()
         rec = {"state": verdict.state, "region_kind": r.kind,
+               "adjudication": adj.as_dict() if adj else None,
                "engines": {rd.engine: rd.text for rd in readings if rd.ok},
                "errors": {rd.engine: rd.error for rd in readings if not rd.ok} or None,
                "engine_conf": {rd.engine: rd.conf for rd in readings},
