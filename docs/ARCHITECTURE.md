@@ -1724,7 +1724,7 @@ upload / listener ──► S1 ingest ── OpenCV quality gate ──► quali
 | Doctor master | `recognition/practitioner.py` | reg-no regex, initial-aware Jaro–Winkler, specialty tie-break; ambiguous initials never auto-link; evidence keeps extracted **and** DB name |
 | Normalised store | `persist/normalized.py` | `rx_prescription` + `rx_medication_order` / `rx_investigation_order` / `rx_diagnosis` / `rx_complaint` / `rx_vital` / `rx_advice`; `v_rx_governed_medication` |
 | FHIR agent | `agents/fhir_builder.py` | `FOR UPDATE SKIP LOCKED`, max 3 attempts, back-off, dead-letter; immutable versioned blobs `fhir/<patient>/<doc>/<artifact>/v<n>.json` |
-| Listener | `listener/connectors.py`, `listener/service.py`, `listener/recovery.py` | local / OneDrive / SharePoint (Graph + MSAL app-only); stability polls, lease, dedupe, completed/error/quarantine, `.error.txt` notes; recovery agent max 3 retries; data errors never retried |
+| Listener | `listener/connectors.py`, `listener/service.py`, `listener/recovery.py`; full guide `docs/LISTENER.md` | connector **registry chosen by config only**: local / OneDrive / SharePoint (Graph + MSAL, app-only or device-code sign-in) / Google Drive (Drive v3) / `pkg.module:Class` plug-ins; stability polls, lease, dedupe; **batches of 3 run concurrently** (`CDI_LISTENER_BATCH_SIZE`, partial batch flushed after `..._BATCH_WAIT_SECONDS`); `success`/`error`/`quarantine` folders + a failure-only `log/` folder (`<file>.<utc>.run<N>.log`); recovery agent max 3 retries with back-off; data errors never retried; `--check` / `--login`; SIGTERM drains the batch |
 | Dispatch | `agents/dispatch.py` | versioned mapping registry, REST/UI adapters, idempotent `dispatch_key`, targets disabled until approved (DB CHECK), docs with open review never sent |
 | Schema | `db/alembic/versions/0005_recognition_v2.py` | append-only `ocr_observation` / `verified_fact` / `fhir_bundle_blob` (trigger; erasure only with `SET LOCAL cdi.allow_evidence_erasure='on'`), sample doctor master (25), sample KB (drugs, lab orders, indication groups) |
 
@@ -1735,7 +1735,7 @@ bash /workspace/cdi/infra/runpod/start_all.sh        # now also starts ocrhost (
 curl -s http://127.0.0.1:8079/healthz                  # rapidocr true, trocr {model, loaded}
 # first TrOCR request downloads microsoft/trocr-base-handwritten (~1.3 GB) to /workspace/hf-cache
 CDI_START_LISTENER=1 bash infra/runpod/start_all.sh    # also run the file listener
-python -m cdi_adapter.listener.service --once          # one poll (local: ./data/listener/inbox)
+python -m cdi_adapter.listener.service --once          # one poll (local: ./data/listener/inbox); --check / --login for cloud drives
 python -m cdi_adapter.agents.fhir_builder --once       # drain the FHIR outbox
 python -m cdi_adapter.agents.dispatch preview <target> <screen> <document_id>
 ```

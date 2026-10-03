@@ -118,14 +118,17 @@ class Settings(BaseSettings):
     practitioner_min_link_conf: float = 0.90
 
     # --- file listener (E16) ---
-    listener_connector: str = "local"     # local | onedrive | sharepoint
-    listener_root: str = "./data/listener"            # local: folder; graph: folder path in the drive
-    listener_inbox: str = "inbox"
+    listener_connector: str = "local"     # local | onedrive | sharepoint | gdrive | pkg.module:Class
+    listener_root: str = "./data/listener"            # local: folder; graph/gdrive: folder path in the drive
+    listener_inbox: str = "inbox"         # "." = the root folder itself is the inbox
     listener_processing: str = "processing"
-    listener_completed: str = "completed"
+    listener_completed: str = "success"   # logical name stays "completed"
     listener_error: str = "error"
     listener_quarantine: str = "quarantine"
+    listener_log: str = "log"             # failure-reason notes only
     listener_poll_seconds: float = 10.0
+    listener_batch_size: int = 3          # files picked and processed together as one batch
+    listener_batch_wait_seconds: float = 60.0   # a partial batch is flushed after this long (0 = never wait)
     listener_stable_polls: int = 2        # size/etag unchanged across this many polls = upload done
     listener_lease_seconds: int = 900
     listener_max_bytes: int = 50_000_000
@@ -133,6 +136,9 @@ class Settings(BaseSettings):
     listener_max_attempts: int = 3        # hard cap, also enforced by a DB CHECK
     listener_pipeline: str = "inline"     # inline = run every stage in the listener | celery
     listener_retry_base_seconds: int = 60 # recovery agent back-off: base * 2^(attempt-1)
+    graph_auth: str = "app"               # app (client credentials, admin consent) | device_code (sign in once)
+    graph_scopes: tuple[str, ...] = ("Files.ReadWrite",)   # delegated scopes (device_code only)
+    graph_token_cache: str = "./data/graph_token_cache.json"   # device_code: refresh-token cache (keep on a persistent disk)
     graph_tenant_id: str = ""
     graph_client_id: str = ""
     graph_client_secret: str = ""         # prefer certificate auth in production
@@ -141,6 +147,15 @@ class Settings(BaseSettings):
     graph_drive_id: str = ""              # OneDrive: the drive id (or leave blank + graph_user_id)
     graph_user_id: str = ""
     graph_site_id: str = ""               # SharePoint: site id; library resolved to its default drive
+    # Google Drive connector (CDI_LISTENER_CONNECTOR=gdrive; pip install '.[gdrive]')
+    gdrive_auth: str = "service_account"  # service_account | oauth
+    gdrive_credentials_file: str = ""     # service-account key (JSON)
+    gdrive_impersonate_user: str = ""     # domain-wide delegation: act as this user
+    gdrive_client_id: str = ""            # oauth mode
+    gdrive_client_secret: str = ""
+    gdrive_refresh_token: str = ""
+    gdrive_root_folder_id: str = ""       # listener root folder id (else CDI_LISTENER_ROOT as a path)
+    gdrive_drive_id: str = ""             # a shared drive id (optional)
 
     # --- FHIR builder agent + blob store (E17) ---
     fhir_agent_poll_seconds: float = 5.0

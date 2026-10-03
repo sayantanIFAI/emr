@@ -188,6 +188,7 @@ def test_listener_lifecycle_and_three_retries(sess_scope, tmp_path, monkeypatch)
 
     monkeypatch.setattr(settings, "listener_stable_polls", 2)
     monkeypatch.setattr(settings, "listener_retry_base_seconds", 0)
+    monkeypatch.setattr(settings, "listener_batch_wait_seconds", 0)      # flush partial batches
     conn = LocalConnector(str(tmp_path))
     conn.ensure_folders()
     tag = uuid.uuid4().hex[:8]
@@ -202,9 +203,13 @@ def test_listener_lifecycle_and_three_retries(sess_scope, tmp_path, monkeypatch)
 
     monkeypatch.setattr(service, "run_pipeline", fake_pipeline)
     assert service.poll_once(conn) == []                 # first sighting: not stable yet
-    assert sorted(service.poll_once(conn)) == ["completed", "error"]
-    assert (tmp_path / "completed" / f"ok-{tag}.png").exists()
-    assert (tmp_path / "error" / f"bad-{tag}.png.error.txt").exists()
+    assert sorted(service.poll_once(conn)) == ["completed", "error"]     # one batch of 2 (partial: flushed)
+    assert (tmp_path / "success" / f"ok-{tag}.png").exists()
+    assert (tmp_path / "error" / f"bad-{tag}.png").exists()
+    assert not list((tmp_path / "error").glob("*.txt"))                 # reasons live in log/ only
+    notes = list((tmp_path / "log").glob(f"bad-{tag}.png.*.run1.log"))
+    assert len(notes) == 1 and "model gateway timeout" in notes[0].read_text()
+    assert not list((tmp_path / "log").glob(f"ok-{tag}*"))              # successes write no log
 
     results = []
     for _ in range(3):
@@ -224,6 +229,7 @@ def test_listener_data_error_is_not_retried(sess_scope, tmp_path, monkeypatch):
     from cdi_adapter.listener.connectors import LocalConnector
 
     monkeypatch.setattr(settings, "listener_stable_polls", 1)
+    monkeypatch.setattr(settings, "listener_batch_wait_seconds", 0)
     conn = LocalConnector(str(tmp_path))
     conn.ensure_folders()
     name = f"blurry-{uuid.uuid4().hex[:8]}.jpg"
@@ -233,7 +239,8 @@ def test_listener_data_error_is_not_retried(sess_scope, tmp_path, monkeypatch):
     service.poll_once(conn)
     service.poll_once(conn)
     assert (tmp_path / "error" / name).exists()
-    assert "rescan" in (tmp_path / "error" / f"{name}.error.txt").read_text()
+    note = next((tmp_path / "log").glob(f"{name}.*.log")).read_text()
+    assert "rescan" in note and "NO automatic retry" in note
     assert recovery.run_once(conn) == []
 
 

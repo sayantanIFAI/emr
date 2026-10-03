@@ -27,7 +27,7 @@ from .service import WORKER, _event, process
 log = get_logger(__name__)
 
 
-def _due() -> list[dict[str, Any]]:
+def _due(connector: str) -> list[dict[str, Any]]:
     with session_scope() as sess:
         rows = sess.execute(text(
             """
@@ -36,13 +36,13 @@ def _due() -> list[dict[str, Any]]:
                    updated_at = now(), history = history || CAST(:h AS jsonb)
              WHERE id IN (
                 SELECT id FROM listener_file
-                 WHERE attempts < :max AND (
+                 WHERE connector = :c AND attempts < :max AND (
                        (state = 'error' AND coalesce(error_class,'') <> 'data'
                         AND next_attempt_at IS NOT NULL AND next_attempt_at <= now())
                     OR (state = 'processing' AND lease_until < now()))
                  ORDER BY updated_at LIMIT 10 FOR UPDATE SKIP LOCKED)
             RETURNING *
-            """), {"w": WORKER, "l": settings.listener_lease_seconds,
+            """), {"w": WORKER, "l": settings.listener_lease_seconds, "c": connector,
                    "max": settings.listener_max_attempts,
                    "h": _event("retry_claimed", worker=WORKER)}).mappings().all()
         return [dict(r) for r in rows]
@@ -60,7 +60,7 @@ def _locate(conn: Connector, row: dict[str, Any]):
 def run_once(conn: Connector | None = None) -> list[dict[str, Any]]:
     conn = conn or get_connector()
     out = []
-    for row in _due():
+    for row in _due(conn.name):       # only this connector's files: switching drives must not touch the old drive's rows
         f = _locate(conn, row)
         if f is None:
             with session_scope() as sess:

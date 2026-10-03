@@ -62,6 +62,11 @@ trocr = [
 listener = [
   "msal>=1.28",
 ]
+# Google Drive connector (CDI_LISTENER_CONNECTOR=gdrive)
+gdrive = [
+  "google-auth>=2.30",
+  "requests>=2.31",
+]
 
 [project.scripts]
 cdi-ingest-watch = "cdi_adapter.ingest.watcher:main"

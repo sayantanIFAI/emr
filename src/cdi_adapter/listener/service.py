@@ -1,29 +1,45 @@
-"""File listener (E16): OneDrive / SharePoint / local folder -> full pipeline.
+"""File listener (E16): OneDrive / SharePoint / Google Drive / local folder -> full pipeline.
+
+The drive is chosen by configuration only (``CDI_LISTENER_CONNECTOR``, see connectors.py).
 
 Lifecycle of one file version (``listener_file`` row, unique on connector+id+etag):
 
-    inbox ──(unchanged for N polls)──► claim (lease) ──► processing/ ──► pipeline
-       │                                                      │
-       │                                         ok ──────────┴──► completed/
-       │                                         data error ──────► error/  + .error.txt
-       │                                                            (no retry: rescan etc.)
-       │                                         other error ─────► error/  + .error.txt
-       │                                                            recovery agent retries
-       │                                                            up to 3 times, then
-       └── too big / empty / unsupported ─────────────────────────► quarantine/
+    inbox ──(unchanged for N polls)──► BATCH of up to 3 ──► claim (lease) ──► processing/ ──► pipeline
+       │                                                                           │
+       │                                                       ok ────────────────┴──► success/
+       │                                                       data error ────────────► error/
+       │                                                                                (no retry:
+       │                                                                                 rescan etc.)
+       │                                                       other error ───────────► error/
+       │                                                                                recovery agent
+       │                                                                                retries <=3x,
+       │                                                                                then quarantine/
+       └── every failed run writes ONE reason note into log/  (successes write nothing there)
+
+Batching: the listener takes up to ``CDI_LISTENER_BATCH_SIZE`` (3) stable files together and
+runs them concurrently as one batch; the next batch starts when the whole batch is done. If
+fewer files are waiting, the partial batch is flushed after ``CDI_LISTENER_BATCH_WAIT_SECONDS``.
 
 Guarantees: a file is processed only after its size/etag stops changing (no half
 uploads); one worker holds a lease per file (crash -> lease expires -> recovered);
 re-dropping identical bytes dedupes on sha256 in ingest; every transition is appended
-to ``listener_file.history``; nothing is ever deleted from the drive.
+to ``listener_file.history``; a file moves to success/ only after its pipeline run is
+durably recorded; SIGTERM drains the running batch and exits; nothing is deleted from the drive.
+
+Run:  python -m cdi_adapter.listener.service [--once | --check | --login]
 """
 from __future__ import annotations
 
 import argparse
 import json
+import signal
 import socket
+import threading
 import time
 import traceback
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
@@ -31,10 +47,11 @@ from sqlalchemy import text
 from ..config import settings
 from ..db import session_scope
 from ..logging import get_logger
-from .connectors import Connector, RemoteFile, get_connector, sha256
+from .connectors import FOLDERS, Connector, RemoteFile, folder_name, get_connector, sha256
 
 log = get_logger(__name__)
 WORKER = f"listener@{socket.gethostname()}"
+_STOP = threading.Event()
 
 
 class DataError(Exception):
@@ -76,14 +93,14 @@ def observe(conn: Connector) -> list[dict[str, Any]]:
                 continue
             if row["state"] != "seen":
                 continue
-            sess.execute(text("UPDATE listener_file SET stable_polls = stable_polls + 1, "
+            sess.execute(text("UPDATE listener_file SET stable_polls = LEAST(stable_polls + 1, 1000), "
                               "updated_at = now() WHERE id = :i"), {"i": row["id"]})
             if row["stable_polls"] + 1 >= settings.listener_stable_polls:
                 ready.append({**row, "_file": f})
     return ready
 
 
-def _claim(row_id: Any, state_from: str) -> bool:
+def _claim(row_id: Any, state_from: str, batch_id: str | None = None) -> bool:
     with session_scope() as sess:
         n = sess.execute(text(
             "UPDATE listener_file SET state='processing', lease_owner=:w, "
@@ -91,7 +108,7 @@ def _claim(row_id: Any, state_from: str) -> bool:
             "history = history || CAST(:h AS jsonb) "
             "WHERE id = :i AND state = :s"),
             {"w": WORKER, "l": settings.listener_lease_seconds, "i": row_id, "s": state_from,
-             "h": _event("claimed", worker=WORKER)}).rowcount
+             "h": _event("claimed", worker=WORKER, batch=batch_id)}).rowcount
     return n == 1
 
 
@@ -138,19 +155,53 @@ def run_pipeline(raw: bytes, filename: str, *, source_channel: str = "listener")
             "auto_accepted": v.auto_accepted, "in_review": v.in_review}
 
 
+_DATA_CLASSES = {"FileDataError", "UnidentifiedImageError", "DecompressionBombError", "EmptyFileError"}
+_DATA_HINTS = ("failed to open", "cannot open broken", "cannot identify image", "not a pdf",
+               "no objects found", "format error", "corrupt", "decode", "unsupported", "truncated")
+_TRANSIENT_HINTS = ("timeout", "timed out", "connection", "503", "429", "temporarily", "unavailable")
+
+
 def _classify_error(exc: BaseException) -> str:
+    """data = the file itself is the problem (never retried); transient = the system was
+    briefly unavailable (retried); code = anything else (retried, then a person looks)."""
     if isinstance(exc, DataError):
         return "data"
     msg = str(exc).lower()
-    if isinstance(exc, (ValueError,)) and ("decode" in msg or "unsupported" in msg or "pdf" in msg):
+    if type(exc).__name__ in _DATA_CLASSES:
         return "data"
-    if isinstance(exc, (TimeoutError, ConnectionError, OSError)) or "timeout" in msg \
-            or "connection" in msg or "503" in msg or "429" in msg:
+    if isinstance(exc, (TimeoutError, ConnectionError)) or any(h in msg for h in _TRANSIENT_HINTS):
+        return "transient"
+    if any(h in msg for h in _DATA_HINTS):                  # e.g. PyMuPDF "Failed to open stream"
+        return "data"
+    if isinstance(exc, OSError):
         return "transient"
     return "code"
 
 
-def process(conn: Connector, row: dict[str, Any], f: RemoteFile, *, is_retry: bool) -> str:
+def _failure_note(conn: Connector, f: RemoteFile, exc: BaseException, *, klass: str, attempts: int,
+                  final: bool, dest: str, batch_id: str | None, delay: int) -> str:
+    runs_total = settings.listener_max_attempts + 1
+    if klass == "data":
+        action = "NO automatic retry: the file itself needs fixing (rescan / re-export)"
+    elif final:
+        action = f"retries exhausted: parked in {folder_name(dest)}/ for a person to look at"
+    else:
+        action = (f"automatic retry {attempts + 1} of {settings.listener_max_attempts} "
+                  f"in about {delay}s (recovery agent)")
+    return (f"time (UTC):    {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())}\n"
+            f"file:          {f.name}\n"
+            f"connector:     {conn.name}\n"
+            f"batch:         {batch_id or '-'}\n"
+            f"run:           {attempts + 1} of {runs_total} (1 first run + {settings.listener_max_attempts} retries)\n"
+            f"error class:   {klass}\n"
+            f"reason:        {type(exc).__name__}: {exc}\n"
+            f"moved to:      {folder_name(dest)}/\n"
+            f"next:          {action}\n\n"
+            f"--- traceback (tail) ---\n{traceback.format_exc()[-3000:]}")
+
+
+def process(conn: Connector, row: dict[str, Any], f: RemoteFile, *, is_retry: bool,
+            batch_id: str | None = None) -> str:
     """Run one claimed file through the pipeline and file it by outcome."""
     rid = row["id"]
     try:
@@ -165,72 +216,154 @@ def process(conn: Connector, row: dict[str, Any], f: RemoteFile, *, is_retry: bo
         done = conn.move(f, "completed")
         _set(rid, state="completed", remote_id=done.remote_id, sha256=sha256(raw),
              document_id=result.get("document_id"), last_error=None, error_class=None,
-             _event=_event("completed", **{k: v for k, v in result.items() if k != "document_id"},
+             _event=_event("completed", batch=batch_id,
+                           **{k: v for k, v in result.items() if k != "document_id"},
                            document_id=result.get("document_id")))
-        log.info("listener_completed", file=f.name, **result)
+        log.info("listener_completed", file=f.name, batch=batch_id, **result)
         return "completed"
     except Exception as exc:  # noqa: BLE001
         klass = _classify_error(exc)
         attempts = int(row.get("attempts") or 0)
-        final = klass == "data" or (is_retry and attempts >= settings.listener_max_attempts)
-        dest = "quarantine" if (is_retry and attempts >= settings.listener_max_attempts) else "error"
-        note = (f"file: {f.name}\nconnector: {conn.name}\nerror_class: {klass}\n"
-                f"attempts (agent retries): {attempts}/{settings.listener_max_attempts}\n"
-                f"error: {type(exc).__name__}: {exc}\n\n"
-                + ("no automatic retry - " + ("needs a rescan / fixed file" if klass == "data"
-                                              else "retries exhausted") if final
-                   else "the recovery agent will retry automatically") + "\n\n"
-                + traceback.format_exc()[-3000:])
+        exhausted = is_retry and attempts >= settings.listener_max_attempts
+        final = klass == "data" or exhausted
+        dest = "quarantine" if exhausted else "error"
+        delay = settings.listener_retry_base_seconds * (2 ** attempts)
+        remote = f.remote_id
         try:
             moved = conn.move(f, dest)
-            conn.write_note(dest, moved.name + ".error.txt", note)
             remote = moved.remote_id
+            # failure reasons go to the log folder ONLY (never next to the file)
+            conn.write_note("log", f"{moved.name}.{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}"
+                                   f".run{attempts + 1}.log",
+                            _failure_note(conn, f, exc, klass=klass, attempts=attempts, final=final,
+                                          dest=dest, batch_id=batch_id, delay=delay))
         except Exception as mv_exc:  # noqa: BLE001 - leave it where it is; lease expiry recovers
             log.error("listener_move_failed", file=f.name, error=str(mv_exc)[:200])
-            remote = f.remote_id
-        delay = settings.listener_retry_base_seconds * (2 ** attempts)
-        _set(rid, state="quarantine" if dest == "quarantine" else "error", remote_id=remote,
+        _set(rid, state="quarantine" if exhausted else "error", remote_id=remote,
              error_class=klass, last_error=f"{type(exc).__name__}: {exc}"[:1000],
              next_attempt_at=None if final else _in(delay),
-             _event=_event("failed", error_class=klass, to=dest, error=str(exc)[:300]))
-        log.error("listener_failed", file=f.name, error_class=klass, to=dest,
+             _event=_event("failed", error_class=klass, to=dest, batch=batch_id, error=str(exc)[:300]))
+        log.error("listener_failed", file=f.name, error_class=klass, to=dest, batch=batch_id,
                   error=str(exc)[:200])
         return dest
 
 
 def _in(seconds: int) -> Any:
-    from datetime import datetime, timedelta, timezone
+    from datetime import timedelta
 
-    return datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    return datetime.now(UTC) + timedelta(seconds=seconds)
 
 
-def poll_once(conn: Connector | None = None) -> list[str]:
+# --------------------------------------------------------------------------- #
+# batching
+# --------------------------------------------------------------------------- #
+def select_batch(ready: list[dict[str, Any]], *, flush: bool = False,
+                 now: datetime | None = None) -> list[dict[str, Any]]:
+    """Pick the next batch: ``batch_size`` stable files (oldest first). A short batch is only
+    released once its oldest file has waited ``batch_wait_seconds`` (or ``flush``)."""
+    if not ready:
+        return []
+    ready = sorted(ready, key=lambda r: r["first_seen_at"])
+    size = max(1, settings.listener_batch_size)
+    if len(ready) >= size:
+        return ready[:size]
+    now = now or datetime.now(UTC)
+    waited = (now - ready[0]["first_seen_at"]).total_seconds()
+    return ready if (flush or waited >= settings.listener_batch_wait_seconds) else []
+
+
+def run_batch(conn: Connector, batch: list[dict[str, Any]]) -> list[str]:
+    """Claim every file of the batch, then run them concurrently; return outcomes in order."""
+    batch_id = uuid.uuid4().hex[:8]
+    claimed = [r for r in batch if _claim(r["id"], "seen", batch_id)]
+    if not claimed:
+        return []
+    log.info("listener_batch_started", batch=batch_id, files=[r["name"] for r in claimed])
+
+    def one(r: dict[str, Any]) -> str:
+        try:
+            return process(conn, r, r["_file"], is_retry=False, batch_id=batch_id)
+        except Exception as exc:  # noqa: BLE001 - lease expiry hands it to the recovery agent
+            log.error("listener_batch_item_crashed", file=r["name"], batch=batch_id, error=str(exc)[:200])
+            return "crashed"
+
+    with ThreadPoolExecutor(max_workers=len(claimed), thread_name_prefix=f"batch-{batch_id}") as ex:
+        results = list(ex.map(one, claimed))
+    log.info("listener_batch_finished", batch=batch_id,
+             completed=results.count("completed"), error=results.count("error"),
+             quarantine=results.count("quarantine"), crashed=results.count("crashed"))
+    return results
+
+
+def poll_once(conn: Connector | None = None, *, flush: bool = False) -> list[str]:
     conn = conn or get_connector()
-    out = []
-    for row in observe(conn):
-        if _claim(row["id"], "seen"):
-            out.append(process(conn, row, row["_file"], is_retry=False))
-    return out
+    batch = select_batch(observe(conn), flush=flush)
+    return run_batch(conn, batch) if batch else []
+
+
+# --------------------------------------------------------------------------- #
+def check(conn: Connector) -> dict[str, Any]:
+    """Self-test: authenticate, create/resolve every lifecycle folder, count what is in them."""
+    conn.ensure_folders()
+    return {
+        "connector": conn.name,
+        "root": settings.listener_root,
+        "folders": {f: ("." if folder_name(f).strip() in ("", ".") else folder_name(f)) for f in FOLDERS},
+        "files_waiting": {f: len(conn.list(f)) for f in FOLDERS if f != "log"},
+        "batch_size": settings.listener_batch_size,
+        "batch_wait_seconds": settings.listener_batch_wait_seconds,
+        "max_retries": settings.listener_max_attempts,
+        "ok": True,
+    }
+
+
+def _install_signal_handlers() -> None:
+    def _stop(signum: int, _frame: Any) -> None:
+        log.info("listener_draining", signal=signum)
+        _STOP.set()
+    for s in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(s, _stop)
+        except ValueError:                    # not the main thread (tests)
+            pass
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="CDI file listener (local | onedrive | sharepoint)")
-    ap.add_argument("--once", action="store_true", help="poll once (stability still needs "
-                    "CDI_LISTENER_STABLE_POLLS polls; set it to 1 for a one-shot drain)")
+    ap = argparse.ArgumentParser(
+        description="CDI file listener (local | onedrive | sharepoint | gdrive | pkg.module:Class)")
+    ap.add_argument("--once", action="store_true", help="poll once and flush a partial batch "
+                    "(stability still needs CDI_LISTENER_STABLE_POLLS polls; use 1 for a drain)")
+    ap.add_argument("--check", action="store_true", help="authenticate, create/resolve the folders, "
+                    "print what is waiting, and exit (non-zero on failure)")
+    ap.add_argument("--login", action="store_true", help="one-time interactive sign-in "
+                    "(OneDrive/SharePoint with CDI_GRAPH_AUTH=device_code)")
     a = ap.parse_args()
     conn = get_connector()
+    if a.login:
+        conn.login() if hasattr(conn, "login") else print("this connector needs no interactive sign-in")
+        return
+    if a.check:
+        try:
+            print(json.dumps(check(conn), indent=2))
+        except Exception as exc:
+            print(json.dumps({"connector": getattr(conn, "name", "?"), "ok": False,
+                              "error": f"{type(exc).__name__}: {exc}"[:500]}, indent=2))
+            raise SystemExit(1) from exc
+        return
     conn.ensure_folders()
     log.info("listener_started", connector=conn.name, root=settings.listener_root,
-             poll=settings.listener_poll_seconds, worker=WORKER)
+             poll=settings.listener_poll_seconds, batch=settings.listener_batch_size, worker=WORKER)
     if a.once:
-        print(json.dumps(poll_once(conn)))
+        print(json.dumps(poll_once(conn, flush=True)))
         return
-    while True:
+    _install_signal_handlers()
+    while not _STOP.is_set():
         try:
             poll_once(conn)
         except Exception as exc:  # noqa: BLE001 - a drive outage must not kill the listener
             log.error("listener_poll_failed", error=str(exc)[:300])
-        time.sleep(settings.listener_poll_seconds)
+        _STOP.wait(settings.listener_poll_seconds)
+    log.info("listener_stopped")
 
 
 if __name__ == "__main__":
