@@ -51,7 +51,8 @@ exist yet can be plugged in without touching this code: `CDI_LISTENER_CONNECTOR=
 
 ## OneDrive for Business (Microsoft Graph)
 
-Folder: `…/Documents/OCR` of `sayantan_choudhury@innofissionai.com` →
+Example folder: `…/personal/<owner>/Documents/OCR` (the owner's OneDrive; the account's e-mail cannot be read back from
+that URL because `.` and `@` both become `_`, which is why Option A below needs no e-mail at all) →
 `CDI_LISTENER_ROOT=OCR`, `CDI_LISTENER_INBOX=.` (prescriptions go straight into `OCR`; the other
 folders are created beside them).
 
@@ -78,7 +79,7 @@ folders are created beside them).
 
 App registration → **Application** permission `Files.ReadWrite.All` (OneDrive) or `Sites.Selected`
 (SharePoint) → admin consent → certificate (`CDI_GRAPH_CERT_PATH`/`_THUMBPRINT`) or secret
-(`CDI_GRAPH_CLIENT_SECRET`); `CDI_GRAPH_USER_ID=sayantan_choudhury@innofissionai.com`
+(`CDI_GRAPH_CLIENT_SECRET`); `CDI_GRAPH_USER_ID=<the owner's user principal name>`
 (or `CDI_GRAPH_DRIVE_ID`; SharePoint: `CDI_GRAPH_SITE_ID`).
 
 ## Google Drive
