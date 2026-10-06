@@ -251,6 +251,11 @@ class Settings(BaseSettings):
     dispatch_max_attempts: int = 3
 
     # --- throughput ---
+    # an interrupted web upload (restart, crash) is picked up again on start; after this many pick-ups a
+    # document that still does not finish is parked as an error (OUT-S3)
+    resume_on_start: bool = True
+    resume_max_attempts: int = 3
+    resume_batch: int = 50
     job_max_workers: int = 5              # documents ingested/classified/OCR'd concurrently;
                                          # _cpu.py sizes native thread pools to
                                          # (cpu_budget - 1) / this  (keep them in sync)

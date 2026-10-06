@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 from typing import Any
@@ -32,7 +33,15 @@ from .upload_page import ADMIN_PAGE as UPLOAD_ONLY_PAGE
 log = get_logger(__name__)
 # the interactive API docs list every route: only a dev environment shows them
 _DEV = settings.env.strip().lower() == "dev"
-app = FastAPI(title="CDI-Adapter - scanned docs -> ABDM FHIR", version=__version__,
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    from .resume import start_in_background
+
+    start_in_background()          # pick up uploads a restart interrupted (OUT-S3)
+    yield
+
+
+app = FastAPI(title="CDI-Adapter - scanned docs -> ABDM FHIR", version=__version__, lifespan=_lifespan,
               docs_url="/docs" if _DEV else None, redoc_url=None,
               openapi_url="/openapi.json" if _DEV else None)
 app.add_middleware(SurfaceMiddleware)         # sign-in + closed paths (webapp/surface.py)

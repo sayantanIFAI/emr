@@ -16,6 +16,8 @@ from ..extract.service import extract_document
 from ..fhir.service import project_patient
 from ..ingest.service import ingest_bytes
 from ..logging import get_logger
+from sqlalchemy import text
+
 from ..mpi.service import (IdentityCandidate, dob_match, merge_identity_evidence,
                            names_match, parse_age, parse_dob)
 from ..ocr.service import ocr_document
@@ -63,6 +65,7 @@ class DocProg:
     # the untouched originals this document was assembled from (UP-S1 "one prescription"); never
     # part of the public job view
     parts: list[tuple[str, bytes]] | None = None
+    job_id: str | None = None       # the Send this document belongs to (saved with the document)
 
     def stage(self, name: str, state: str) -> None:
         self.stages[name] = state
@@ -127,12 +130,23 @@ def create_job(abha: str | None, files: list[tuple[str, bytes]],
             if idempotency_key in _idem:
                 return _idem[idempotency_key][1]
             _idem[idempotency_key] = (now, jid)        # reserve before any slow work
+        bound = _durable_key(idempotency_key, jid)
+        if bound != jid:                               # the same Send was already accepted (even before a restart)
+            with _lock:
+                _idem[idempotency_key] = (now, bound)
+            return bound
     try:
         return _create_job(jid, abha, files, patient_ref, parts)
     except Exception:
         if idempotency_key:
             with _lock:
                 _idem.pop(idempotency_key, None)       # a failed start may be retried
+            try:
+                with session_scope() as sess:
+                    sess.execute(text("DELETE FROM upload_idempotency WHERE idem_key = :k"),
+                                 {"k": idempotency_key})
+            except Exception:  # noqa: BLE001
+                pass
         raise
 
 
@@ -140,7 +154,7 @@ def _create_job(jid: str, abha: str | None, files: list[tuple[str, bytes]],
                 patient_ref: str | None,
                 parts: list[list[tuple[str, bytes]] | None] | None) -> str:
     job = Job(id=jid, abha=(abha or "").strip() or None)
-    job.docs = [DocProg(filename=fn, parts=(parts[i] if parts else None))
+    job.docs = [DocProg(filename=fn, parts=(parts[i] if parts else None), job_id=jid)
                 for i, (fn, _) in enumerate(files)]
 
     ref = (patient_ref or "").strip()
@@ -168,7 +182,72 @@ def _create_job(jid: str, abha: str | None, files: list[tuple[str, bytes]],
 
 
 def get_job(jid: str) -> Job | None:
-    return _jobs.get(jid)
+    return _jobs.get(jid) or _job_from_db(jid)        # a job survives a restart: rebuilt from what was saved
+
+
+_DONE = ("validated", "projected", "normalized")
+_FAILED = ("error", "quality_hold")
+
+
+def _job_from_db(jid: str) -> Job | None:
+    """Rebuild a job's view from its documents (after a restart the in-memory job is gone). Only
+    documents that were saved can be listed: a file that never got that far left nothing behind."""
+    try:
+        with session_scope() as sess:
+            rows = sess.execute(text(
+                "SELECT id, original_filename, status, error_detail FROM source_document "
+                "WHERE upload_job_id = :j ORDER BY ingested_at, id"), {"j": jid}).mappings().all()
+    except Exception as exc:  # noqa: BLE001 - e.g. a database without migration 0008
+        log.warning("job_lookup_failed", job=jid, error=str(exc)[:150])
+        return None
+    if not rows:
+        return None
+    job = Job(id=jid, abha=None)
+    for r in rows:
+        done, failed = r["status"] in _DONE, r["status"] in _FAILED
+        d = DocProg(filename=r["original_filename"] or "document", document_id=str(r["id"]),
+                    status="done" if done else "error" if failed else "running",
+                    error=(r["error_detail"] if failed else None), job_id=jid)
+        for s in STAGES:
+            d.stage(s, "done" if done else "pending")
+        job.docs.append(d)
+    if any(d.status == "running" for d in job.docs):
+        job.state = "running"
+    elif any(d.status == "done" for d in job.docs):
+        job.state = "review" if settings.review_ui_enabled else "done"
+    else:
+        job.state = "error"
+    _refresh_result(job)
+    return job
+
+
+def _durable_key(key: str, jid: str) -> str:
+    """The job id this Idempotency-Key is bound to, saved in the database so it holds across restarts
+    (``jid`` if the key is new). A database without the table falls back to the in-memory rule."""
+    try:
+        with session_scope() as sess:
+            sess.execute(text("DELETE FROM upload_idempotency WHERE created_at < now() - interval '1 day'"))
+            got = sess.execute(text(
+                "INSERT INTO upload_idempotency (idem_key, job_id) VALUES (:k, :j) "
+                "ON CONFLICT (idem_key) DO NOTHING RETURNING job_id"), {"k": key, "j": jid}).first()
+            if got:
+                return jid
+            return sess.execute(text("SELECT job_id FROM upload_idempotency WHERE idem_key = :k"),
+                                {"k": key}).scalar_one()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("idempotency_store_unavailable", error=str(exc)[:150])
+        return jid
+
+
+def _tag_document(document_id: str, job_id: str | None) -> None:
+    if not job_id:
+        return
+    try:
+        with session_scope() as sess:
+            sess.execute(text("UPDATE source_document SET upload_job_id = :j WHERE id = :d"),
+                         {"j": job_id, "d": document_id})
+    except Exception as exc:  # noqa: BLE001
+        log.warning("job_tag_failed", document_id=document_id, error=str(exc)[:150])
 
 
 # --------------------------------------------------------------------------- #
@@ -179,6 +258,7 @@ def _stage1(prog: DocProg, fn: str, raw: bytes, abha: str | None) -> None:
         prog.stage("ingest", "running")
         res = ingest_bytes(raw, filename=fn, source_channel="webapp", legacy_patient_ref=abha)
         prog.document_id = res.document_id
+        _tag_document(res.document_id, prog.job_id)
         if prog.parts and not res.deduplicated:
             # one prescription built from several pictures: keep each original untouched
             from .upload import store_parts
