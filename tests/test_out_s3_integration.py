@@ -82,11 +82,12 @@ def _doc(status: str, store: dict, *, job: str | None = None, channel: str = "we
     from cdi_adapter import repo
 
     raw = _png()
-    store["documents/x/original.png"] = raw
+    key = f"documents/{uuid.uuid4().hex}/original.png"
+    store[key] = raw
     with __import__("cdi_adapter.db", fromlist=["session_scope"]).session_scope() as s:
         did = str(repo.insert_source_document(
             s, sha256=__import__("hashlib").sha256(raw).hexdigest(), mime_type="image/png",
-            object_uri="s3://t/documents/x/original.png", byte_size=len(raw), source_channel=channel,
+            object_uri=f"s3://t/{key}", byte_size=len(raw), source_channel=channel,
             original_filename="rx.png"))
         s.execute(text("UPDATE source_document SET status=:st, upload_job_id=:j, resume_attempts=:a WHERE id=:d"),
                   {"st": status, "j": job, "a": attempts, "d": did})
