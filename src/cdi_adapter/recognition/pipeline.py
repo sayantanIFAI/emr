@@ -27,7 +27,7 @@ from ..db import session_scope
 from ..logging import get_logger
 from ..ocr.rapid import OcrLine
 from .disagreement import AGREE, DISAGREE, NONE, SINGLE, compare_engines
-from .engines import QwenLineEngine, Reading
+from .engines import QwenLineEngine, Reading, is_fallback_model
 from .ocrhost_client import get_ocr_host
 from .regions import PRINTED, Region, crop_png, detect_regions
 
@@ -170,6 +170,11 @@ def recognize_page(*, document_id: str, page: dict[str, Any], rapid_lines: list[
                "engine_conf": {rd.engine: rd.conf for rd in readings},
                "rapidocr": printed_txt or None, "detail": verdict.detail,
                "features": r.features}
+        served_fb = next((rd.engine_version for rd in readings if is_fallback_model(rd.engine_version)),
+                         None)
+        if served_fb:
+            # the gateway answered this crop with the OOM fallback model: S6 never auto-accepts it
+            rec["fallback_model"] = served_fb
         text_out = verdict.display_text or printed_txt
         if not text_out:
             continue

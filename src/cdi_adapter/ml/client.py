@@ -71,8 +71,17 @@ def extract_json(text: str) -> dict[str, Any]:
         pass
     m = _JSON_RE.search(text)
     if not m:
-        raise MLError(f"no JSON object in model output: {text[:200]!r}")
+        # never quote the output: it is a reading of a patient's document, and this message
+        # reaches logs, the listener's failure notes and error_detail
+        raise MLError(f"no JSON object in model output ({len(text)} chars)")
     return json.loads(m.group(0))
+
+
+def error_location(exc: jsonschema.ValidationError) -> str:
+    """Where a schema check failed (``tests/0/name``), never what was there: a jsonschema message
+    quotes the offending value (``['Anil Mehra'] is not of type 'string'``), which for a clinical
+    document is patient data, and logs are shipped to a log store."""
+    return "/".join(str(p) for p in exc.absolute_path)[:80] or "<root>"
 
 
 def _stub_classify(prompt: str) -> dict[str, Any]:
@@ -172,11 +181,28 @@ class _BaseClient:
     ) -> str:
         raise NotImplementedError
 
+    def vlm_generate_ex(
+        self, image: bytes | str, prompt: str, *, max_tokens: int = 512,
+        json_schema: dict | None = None,
+    ) -> tuple[str, str | None]:
+        """``(text, model that answered)``. The gateway names the model per response, so a request
+        served by the OOM fallback model is recorded as such. A client that cannot say returns
+        ``None``."""
+        return self.vlm_generate(image, prompt, max_tokens=max_tokens, json_schema=json_schema), None
+
     def vlm_json(
         self, image: bytes | str, prompt: str, schema: dict, *,
         max_tokens: int = 900, retries: int = 2, lenient: bool = True,
     ) -> dict[str, Any]:
-        """Return a schema-conforming object. With ``lenient`` (default), a repair
+        return self.vlm_json_ex(image, prompt, schema, max_tokens=max_tokens, retries=retries,
+                                lenient=lenient)[0]
+
+    def vlm_json_ex(
+        self, image: bytes | str, prompt: str, schema: dict, *,
+        max_tokens: int = 900, retries: int = 2, lenient: bool = True,
+    ) -> tuple[dict[str, Any], str | None]:
+        """``(object, model that answered the last attempt)``: a schema-conforming object. With
+        ``lenient`` (default), a repair
         pass fixes common model slips (value in the wrong key, missing confidence,
         stray keys); if it still won't validate after retries, the repaired
         best-effort object is returned with ``_partial=True`` instead of raising -
@@ -184,8 +210,9 @@ class _BaseClient:
         last: Exception | None = None
         best: dict[str, Any] | None = None
         hint = ""
+        served: str | None = None
         for attempt in range(retries + 1):
-            raw = self.vlm_generate(
+            raw, served = self.vlm_generate_ex(
                 image, prompt + hint, max_tokens=max_tokens, json_schema=schema
             )
             try:
@@ -200,19 +227,23 @@ class _BaseClient:
             best = obj
             try:
                 validate_schema(obj, schema)
-                return obj
+                return obj, served
             except jsonschema.ValidationError as exc:
                 last = exc
                 hint = (
                     "\n\nYour previous answer failed schema validation: "
                     f"{str(exc).splitlines()[0][:160]}. Fix ONLY that and resend the full JSON."
                 )
-                log.warning("vlm_json_retry", attempt=attempt, error=str(exc).splitlines()[0][:160])
+                log.warning("vlm_json_retry", attempt=attempt, error_at=error_location(exc))
         if lenient and isinstance(best, dict):
             best["_partial"] = True
-            log.warning("vlm_json_partial", error=str(last).splitlines()[0][:160] if last else None)
-            return best
-        raise MLError(f"vlm_json failed after {retries + 1} attempts: {last}")
+            log.warning("vlm_json_partial",
+                        error_at=error_location(last) if isinstance(last, jsonschema.ValidationError)
+                        else type(last).__name__)
+            return best, served
+        # a schema message quotes the offending value (patient data): say where, not what
+        why = error_location(last) if isinstance(last, jsonschema.ValidationError) else str(last)
+        raise MLError(f"vlm_json failed after {retries + 1} attempts: {why}")
 
     def healthz(self) -> dict[str, Any]:
         raise NotImplementedError
@@ -232,6 +263,13 @@ class HttpMLClient(_BaseClient):
         self, image: bytes | str, prompt: str, *, max_tokens: int = 512,
         json_schema: dict | None = None,
     ) -> str:
+        return self.vlm_generate_ex(image, prompt, max_tokens=max_tokens,
+                                    json_schema=json_schema)[0]
+
+    def vlm_generate_ex(
+        self, image: bytes | str, prompt: str, *, max_tokens: int = 512,
+        json_schema: dict | None = None,
+    ) -> tuple[str, str | None]:
         payload = {
             "image_b64": _b64(image),
             "prompt": prompt,
@@ -243,7 +281,9 @@ class HttpMLClient(_BaseClient):
             r.raise_for_status()
         except httpx.HTTPError as exc:
             raise MLError(f"mlserve request failed: {exc}") from exc
-        return r.json()["text"]
+        body = r.json()
+        model = body.get("model")
+        return body["text"], model if isinstance(model, str) and model else None
 
 
 class StubMLClient(_BaseClient):
@@ -264,6 +304,13 @@ class StubMLClient(_BaseClient):
         if json_schema and json_schema.get("$id") == "cdi:classification.v1":
             return json.dumps(_stub_classify(prompt))
         return "STUB TRANSCRIPTION\nline one\nline two"
+
+    def vlm_generate_ex(
+        self, image: bytes | str, prompt: str, *, max_tokens: int = 512,
+        json_schema: dict | None = None,
+    ) -> tuple[str, str | None]:
+        text = self.vlm_generate(image, prompt, max_tokens=max_tokens, json_schema=json_schema)
+        return text, "stub"
 
 
 def get_client() -> _BaseClient:

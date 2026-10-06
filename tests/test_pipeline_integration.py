@@ -7,27 +7,22 @@ from __future__ import annotations
 
 import os
 
-import pymupdf as fitz
 import pytest
+
+from cdi_adapter.ingest.pdfgen import make_text_pdf
 
 pytestmark = pytest.mark.integration
 
 
 def _lab_pdf() -> bytes:
-    doc = fitz.open()
-    pg = doc.new_page(width=600, height=400)
-    pg.insert_text(
-        (40, 60),
-        "CITY CARE HOSPITAL - BIOCHEMISTRY REPORT\n"
-        "Patient: Test Only   MRN: LG-1\n"
-        "TEST            RESULT   UNIT     REF. RANGE   FLAG\n"
-        "HbA1c           7.8      %        4.0 - 5.6     H\n"
-        "Creatinine      0.9      mg/dL    0.7 - 1.3     N\n",
-        fontsize=11,
-    )
-    data = doc.tobytes()
-    doc.close()
-    return data
+    lines = [
+        "CITY CARE HOSPITAL - BIOCHEMISTRY REPORT",
+        "Patient: Test Only   MRN: LG-1",
+        "TEST            RESULT   UNIT     REF. RANGE   FLAG",
+        "HbA1c           7.8      %        4.0 - 5.6     H",
+        "Creatinine      0.9      mg/dL    0.7 - 1.3     N",
+    ]
+    return make_text_pdf([lines], width=600, height=400, x=40, y_top=60, leading=14, font_size=11)
 
 
 def test_ingest_classify_ocr(infra):

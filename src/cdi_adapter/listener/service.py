@@ -155,7 +155,10 @@ def run_pipeline(raw: bytes, filename: str, *, source_channel: str = "listener")
             "auto_accepted": v.auto_accepted, "in_review": v.in_review}
 
 
-_DATA_CLASSES = {"FileDataError", "UnidentifiedImageError", "DecompressionBombError", "EmptyFileError"}
+# PdfReadError: pypdfium2 corrupt / password-protected / zero-sized / oversized PDF (ingest/pages.py);
+# its messages do not all contain a data hint, so it is matched by class
+_DATA_CLASSES = {"FileDataError", "UnidentifiedImageError", "DecompressionBombError", "EmptyFileError",
+                 "PdfReadError"}
 _DATA_HINTS = ("failed to open", "cannot open broken", "cannot identify image", "not a pdf",
                "no objects found", "format error", "corrupt", "decode", "unsupported", "truncated")
 _TRANSIENT_HINTS = ("timeout", "timed out", "connection", "503", "429", "temporarily", "unavailable")
@@ -171,7 +174,7 @@ def _classify_error(exc: BaseException) -> str:
         return "data"
     if isinstance(exc, (TimeoutError, ConnectionError)) or any(h in msg for h in _TRANSIENT_HINTS):
         return "transient"
-    if any(h in msg for h in _DATA_HINTS):                  # e.g. PyMuPDF "Failed to open stream"
+    if any(h in msg for h in _DATA_HINTS):                  # e.g. a corrupt-file message
         return "data"
     if isinstance(exc, OSError):
         return "transient"

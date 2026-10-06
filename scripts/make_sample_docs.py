@@ -13,9 +13,11 @@ import random
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import pymupdf as fitz
 import numpy as np
 from PIL import Image
+
+from cdi_adapter.ingest.pages import render_pdf_pngs
+from cdi_adapter.ingest.pdfgen import make_text_pdf
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -79,13 +81,12 @@ NAMES = ["Anjali Das", "Rahul Verma", "Meera Nair", "Sofia Khan", "Arjun Rao"]
 
 
 def _text_to_pdf_bytes(text: str, *, rotate: float, noise: float) -> bytes:
-    doc = fitz.open()
-    page = doc.new_page(width=595, height=842)  # A4 pt
-    page.insert_text((54, 70), text, fontsize=11, fontname="courier")
-    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-    doc.close()
+    """Render the text to a page image (pypdfium2), rotate + speckle it, and wrap the image in an
+    image-only PDF (Pillow), i.e. a PDF with no text layer, like a scanner's output."""
+    pdf = make_text_pdf([text.splitlines()], x=54, y_top=70, leading=14, font_size=11)
+    png = render_pdf_pngs(pdf, 144)[0]  # A4 pt at 2x, as before
 
-    img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
+    img = Image.open(io.BytesIO(png)).convert("L")
     if abs(rotate) > 0.01:
         img = img.rotate(rotate, expand=True, fillcolor=255, resample=Image.BICUBIC)
     if noise > 0:
@@ -93,15 +94,9 @@ def _text_to_pdf_bytes(text: str, *, rotate: float, noise: float) -> bytes:
         arr = arr + np.random.normal(0, noise, arr.shape).astype(np.int16)
         img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
 
-    out = fitz.open()
-    rect = fitz.Rect(0, 0, img.width, img.height)
-    pg = out.new_page(width=img.width, height=img.height)
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    pg.insert_image(rect, stream=buf.getvalue())
-    data = out.tobytes()
-    out.close()
-    return data
+    img.save(buf, format="PDF", resolution=72.0)  # one page, 1 pixel = 1 pt
+    return buf.getvalue()
 
 
 def main() -> None:

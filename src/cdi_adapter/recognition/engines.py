@@ -41,6 +41,12 @@ class EngineUnavailable(RuntimeError):
     pass
 
 
+def is_fallback_model(model: str | None) -> bool:
+    """True when ``model`` is the OOM fallback the gateway loaded instead of the primary
+    (``vlm_fallback_model_id``). Anything it read is held for review (``gate_fallback_review``)."""
+    return bool(model) and model != settings.vlm_model_id and model == settings.vlm_fallback_model_id
+
+
 def _load_trocr_processor(model_id: str, processor_cls: Any) -> Any:
     """TrOCRProcessor, robust to transformers 5.x: its auto-loader only looks for a
     ``tokenizer.json``, which the Microsoft TrOCR repos do not ship (they ship the BPE
@@ -188,6 +194,8 @@ class QwenLineEngine:
 
     @property
     def version(self) -> str:
+        """The configured model. A reading carries the model the gateway REPORTED for it: after
+        an out-of-memory load that is the fallback, and recording the primary would be false."""
         return settings.vlm_model_id
 
     def recognize(self, crops_png: list[bytes]) -> list[Reading]:
@@ -203,10 +211,10 @@ class QwenLineEngine:
         out: list[Reading] = []
         for png in crops_png:
             try:
-                txt = client.vlm_generate(png, QWEN_LINE_PROMPT,
-                                          max_tokens=settings.qwen_line_max_tokens)
+                txt, served = client.vlm_generate_ex(png, QWEN_LINE_PROMPT,
+                                                     max_tokens=settings.qwen_line_max_tokens)
                 line = next((s.strip() for s in (txt or "").splitlines() if s.strip()), "")
-                out.append(Reading(self.name, self.version, line, None, prompt_hash=ph))
+                out.append(Reading(self.name, served or self.version, line, None, prompt_hash=ph))
             except Exception as exc:  # noqa: BLE001
                 out.append(Reading(self.name, self.version, "", None, prompt_hash=ph,
                                    error=str(exc)[:200]))

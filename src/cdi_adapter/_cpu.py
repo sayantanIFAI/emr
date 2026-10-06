@@ -3,7 +3,7 @@
 RunPod reports the host core count (`os.cpu_count()` == 128 on the pilot pod) but
 the cgroup pins the container to a fraction of that (`cpu.max` = "1360000 100000"
 => ~13.6 CPUs). Every native library - OpenMP, OpenBLAS, MKL, NumExpr, the Rust
-`rayon` pool behind PyMuPDF, ONNXRuntime - otherwise spins up ~128 threads *each*,
+PDFium (pypdfium2), ONNXRuntime - otherwise spins up ~128 threads *each*,
 and the web-app's Phase-1 pool runs several of them at once (ingest render +
 RapidOCR per document), so hundreds of threads thrash ~13 cores. Observed: ingest
 spiking from <1 s to 16 s under a 3-document job.

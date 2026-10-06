@@ -366,7 +366,7 @@ def test_failure_note_is_actionable():
 def test_corrupt_files_are_data_errors_and_outages_are_transient():
     from cdi_adapter.listener.service import DataError, _classify_error
 
-    class FileDataError(RuntimeError):          # what PyMuPDF raises for a corrupt PDF
+    class FileDataError(RuntimeError):          # what a corrupt-PDF library raises
         pass
 
     class UnidentifiedImageError(OSError):      # what Pillow raises for a corrupt image

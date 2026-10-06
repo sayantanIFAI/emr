@@ -4,19 +4,15 @@ Run:  make up  &&  CDI_DATABASE_URL=... CDI_S3_ENDPOINT_URL=... pytest -m integr
 """
 from __future__ import annotations
 
-import pymupdf as fitz
 import pytest
+
+from cdi_adapter.ingest.pdfgen import make_text_pdf
 
 pytestmark = pytest.mark.integration
 
 
 def _pdf(text: str) -> bytes:
-    doc = fitz.open()
-    pg = doc.new_page(width=420, height=300)
-    pg.insert_text((36, 60), text, fontsize=12)
-    data = doc.tobytes()
-    doc.close()
-    return data
+    return make_text_pdf([text.splitlines()], width=420, height=300, x=36, y_top=60, leading=15)
 
 
 def test_ingest_creates_rows_and_pages(infra):

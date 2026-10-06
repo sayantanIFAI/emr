@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -54,7 +55,12 @@ class Settings(BaseSettings):
     mlserve_port: int = 8077
     mlserve_backend: str = "stub"          # stub | hf | vllm
     vlm_model_id: str = "Qwen/Qwen2.5-VL-7B-Instruct"
-    vlm_fallback_model_id: str = "Qwen/Qwen2.5-VL-3B-Instruct"
+    vlm_fallback_model_id: str = "Qwen/Qwen2-VL-7B-Instruct"   # OOM-only; replaced the 3B (licence)
+    # The OOM fallback is as large as the primary: in bf16 it would run out of memory in exactly
+    # the situation it exists for, so it loads in 8-bit (bitsandbytes LLM.int8, hf backend only;
+    # "" = bf16, for a host that can hold two bf16 7B models in turn). Not measured on the target
+    # GPU yet: docs/fallback-model.md.
+    vlm_fallback_quantize: Literal["", "8bit"] = "8bit"
     vlm_max_pixels_classify: int = 1_000_000
     vlm_max_pixels_ocr: int = 2_000_000   # keep activations modest on a 24 GB card
     vlm_dtype: str = "bfloat16"
@@ -182,6 +188,10 @@ class Settings(BaseSettings):
     gate_auto_accept_conf: float = 0.985  # >= this AND clean -> auto_accepted
     gate_audit_conf: float = 0.95         # >= this AND clean -> auto_accepted + audit sample
     gate_review_floor: float = 0.85       # < gate_audit_conf -> in_review
+    # Anything the OOM fallback model read is never auto-accepted: it is an older model
+    # generation, loaded in 8-bit, and not benchmarked on handwritten prescriptions. Turn off
+    # only after the benchmark in docs/fallback-model.md shows parity with the primary.
+    gate_fallback_review: bool = True
     gate_partial_penalty: float = 0.30    # confidence subtracted when extraction was _partial
     gate_medication_always_review: bool = True   # any med line with missing dose/route/freq -> review
     gate_local_only_review_types: tuple[str, ...] = ("condition", "medication", "allergy", "procedure")

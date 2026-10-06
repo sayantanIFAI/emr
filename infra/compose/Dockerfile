@@ -4,7 +4,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# opencv (libGL/glib), PyMuPDF wheels need nothing extra, psql client for db/apply.sh
+# opencv (libGL/glib), pypdfium2 wheels need nothing extra, psql client for db/apply.sh
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libgl1 libglib2.0-0 postgresql-client curl \
     && rm -rf /var/lib/apt/lists/*

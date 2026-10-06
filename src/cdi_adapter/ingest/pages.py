@@ -1,7 +1,7 @@
 """Page rendering + image normalization.
 
-- PDFs -> one PNG per page at a target DPI (PyMuPDF).
-- Images -> a single normalized PNG.
+- PDFs -> one PNG per page at a target DPI (pypdfium2 / PDFium, Apache-2.0 / BSD-3).
+- Images -> a single normalized PNG (Pillow; EXIF orientation applied, never through PDFium).
 - Normalization: grayscale -> deskew (min-area-rect on ink pixels) -> optional
   denoise -> CLAHE contrast. The ORIGINAL bytes are never altered; these are
   derived render artifacts used by OCR/VLM downstream.
@@ -9,13 +9,16 @@
 from __future__ import annotations
 
 import io
+import math
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
 import cv2
 import numpy as np
-import pymupdf as fitz
-from PIL import Image
+import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_c
+from PIL import Image, ImageOps
 
 from .._cpu import THREADS_PER_TASK
 from ..config import settings
@@ -27,6 +30,25 @@ except Exception:  # noqa: BLE001
 from ..logging import get_logger
 
 log = get_logger(__name__)
+
+# A PDF page that would need more pixels than this at the render DPI is refused instead of
+# allocating gigabytes (a 14400 x 14400 pt page at 200 dpi is ~1.6 gigapixels). A0 at 200 dpi is
+# ~62 megapixels, so real documents are never affected.
+MAX_PDF_PAGE_PIXELS = 100_000_000
+
+# PDFium is not thread-safe (pypdfium2 README): the API, the worker pool and Celery all ingest on
+# threads, so every call into the library is serialised by this lock. PNG encoding is the slow
+# part and happens outside it.
+_PDFIUM_LOCK = threading.Lock()
+
+# Intermediate page PNGs are read once by normalize_with_source() and thrown away, so they are
+# written at the fastest zlib level (measured on a local PC: level 6 / 1 = 696 / 240 ms per page).
+INTERMEDIATE_PNG_LEVEL = 1
+
+
+class PdfReadError(ValueError):
+    """The PDF is corrupt, password-protected, zero-sized or too large to render.
+    A property of the file, so retrying cannot help (the listener classifies it as data)."""
 
 
 @dataclass
@@ -42,9 +64,9 @@ class RenderedPage:
     src_png: bytes | None = None
 
 
-def _pil_to_png(img: Image.Image) -> bytes:
+def _pil_to_png(img: Image.Image, compress_level: int = 6) -> bytes:
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    img.save(buf, format="PNG", compress_level=compress_level)
     return buf.getvalue()
 
 
@@ -121,34 +143,100 @@ def normalize_with_source(png_bytes: bytes) -> tuple[bytes, bytes, dict[str, Any
     return _np_to_png(gray), _np_to_png(arr), meta
 
 
+def _upright(img: Image.Image) -> Image.Image:
+    """Apply the EXIF Orientation tag. A phone photo of a prescription is often stored sideways
+    with only the tag saying so; the OCR models read the raw pixels and never see the tag.
+    Best effort: a damaged EXIF block leaves the pixels as they are."""
+    try:
+        return ImageOps.exif_transpose(img)
+    except Exception:  # noqa: BLE001
+        return img
+
+
+def _open_pdf(raw: bytes) -> pdfium.PdfDocument:
+    """Open ``raw`` (caller holds the PDFium lock); unreadable input becomes ``PdfReadError``."""
+    try:
+        doc = pdfium.PdfDocument(raw)
+    except pdfium.PdfiumError as exc:
+        # pypdfium2 4.x sets no usable error code for this case: fall back to the message text
+        if (
+            getattr(exc, "err_code", None) == pdfium_c.FPDF_ERR_PASSWORD
+            or "password" in str(exc).lower()
+        ):
+            raise PdfReadError("PDF is password-protected") from exc
+        raise PdfReadError(f"cannot open PDF: {exc}") from exc
+    try:
+        if doc.get_formtype() != pdfium_c.FORMTYPE_NONE:
+            doc.init_forms()  # draw filled AcroForm / XFA field values onto the page image
+    except pdfium.PdfiumError:
+        pass  # form drawing is best effort: the page content itself still renders
+    return doc
+
+
+def _render_pdf_page(doc: pdfium.PdfDocument, index: int, scale: float) -> Image.Image:
+    """Render page ``index`` (0-based) at ``scale`` (caller holds the PDFium lock)."""
+    page = doc[index]
+    try:
+        width, height = page.get_size()  # points, after the page's own /Rotate
+        if width <= 0 or height <= 0:
+            raise PdfReadError(f"PDF page {index + 1} has no size")
+        pixels = math.ceil(width * scale) * math.ceil(height * scale)
+        if pixels > MAX_PDF_PAGE_PIXELS:
+            raise PdfReadError(
+                f"PDF page {index + 1} is too large to render ({pixels:,} pixels at this DPI)"
+            )
+        bitmap = page.render(scale=scale)
+        try:
+            return bitmap.to_pil().convert("RGB")  # convert() returns a copy: safe after close()
+        finally:
+            bitmap.close()
+    except pdfium.PdfiumError as exc:
+        raise PdfReadError(f"cannot render PDF page {index + 1}: {exc}") from exc
+    finally:
+        page.close()
+
+
+def render_pdf_pngs(raw: bytes, dpi: int) -> list[bytes]:
+    """One intermediate PNG per page (at most ``max_pages``). A page is ``ceil(points * dpi / 72)``
+    pixels on each side."""
+    # PDF user space is 72 units per inch. The tiny factor stops float rounding from adding a pixel
+    # when points * dpi / 72 is an exact integer (US Letter at 150 dpi is 1650 px, not 1651).
+    scale = dpi / 72.0 * (1 - 1e-9)
+    with _PDFIUM_LOCK:
+        doc = _open_pdf(raw)
+        count = min(len(doc), settings.max_pages)
+    pngs: list[bytes] = []
+    try:
+        for index in range(count):
+            with _PDFIUM_LOCK:
+                image = _render_pdf_page(doc, index, scale)
+            # outside the lock; one page in memory at a time
+            pngs.append(_pil_to_png(image, INTERMEDIATE_PNG_LEVEL))
+    finally:
+        with _PDFIUM_LOCK:
+            doc.close()
+    return pngs
+
+
 def render_pages(raw: bytes, mime_type: str, *, dpi: int | None = None) -> list[RenderedPage]:
     dpi = dpi or settings.page_dpi
     pages: list[RenderedPage] = []
 
     if mime_type == "application/pdf" or raw[:5] == b"%PDF-":
-        doc = fitz.open(stream=raw, filetype="pdf")
-        try:
-            n = min(doc.page_count, settings.max_pages)
-            zoom = dpi / 72.0
-            mat = fitz.Matrix(zoom, zoom)
-            for i in range(n):
-                pix = doc.load_page(i).get_pixmap(matrix=mat, alpha=False)
-                png = pix.tobytes("png")
-                norm, src, meta = normalize_with_source(png)
-                meta["source"] = "pdf"
-                pages.append(
-                    RenderedPage(
-                        page_no=i + 1,
-                        png_bytes=norm,
-                        width_px=meta["width_px"],
-                        height_px=meta["height_px"],
-                        dpi=dpi,
-                        preproc=meta,
-                        src_png=src,
-                    )
+        for i, png in enumerate(render_pdf_pngs(raw, dpi)):
+            norm, src, meta = normalize_with_source(png)
+            meta["source"] = "pdf"
+            pages.append(
+                RenderedPage(
+                    page_no=i + 1,
+                    png_bytes=norm,
+                    width_px=meta["width_px"],
+                    height_px=meta["height_px"],
+                    dpi=dpi,
+                    preproc=meta,
+                    src_png=src,
                 )
-        finally:
-            doc.close()
+            )
         return pages
 
     if mime_type.startswith("image/") or _looks_like_image(raw):
@@ -156,15 +244,16 @@ def render_pages(raw: bytes, mime_type: str, *, dpi: int | None = None) -> list[
         if getattr(img, "n_frames", 1) > 1:  # multi-page TIFF
             for i in range(img.n_frames):
                 img.seek(i)
-                frame = img.convert("RGB")
-                norm, src, meta = normalize_with_source(_pil_to_png(frame))
+                frame = _upright(img).convert("RGB")
+                norm, src, meta = normalize_with_source(
+                    _pil_to_png(frame, INTERMEDIATE_PNG_LEVEL))
                 meta["source"] = "tiff"
                 pages.append(
                     RenderedPage(i + 1, norm, meta["width_px"], meta["height_px"], dpi, meta, src)
                 )
         else:
-            frame = img.convert("RGB")
-            norm, src, meta = normalize_with_source(_pil_to_png(frame))
+            frame = _upright(img).convert("RGB")
+            norm, src, meta = normalize_with_source(_pil_to_png(frame, INTERMEDIATE_PNG_LEVEL))
             meta["source"] = "image"
             pages.append(RenderedPage(1, norm, meta["width_px"], meta["height_px"], dpi, meta, src))
         return pages

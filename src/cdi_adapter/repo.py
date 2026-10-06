@@ -217,6 +217,23 @@ def finish_pipeline_run(
     )
 
 
+def set_run_model_version(sess: Session, run_id: UUID | str, model_version: str | None) -> None:
+    """Record which model actually answered (the gateway reports it per response)."""
+    sess.execute(text("UPDATE pipeline_run SET model_version = :v WHERE id = :id"),
+                 {"v": model_version, "id": str(run_id)})
+
+
+def get_extraction_model(sess: Session, document_id: UUID | str) -> str | None:
+    """The model that answered S4 for this document's latest extraction (None = not recorded)."""
+    return sess.execute(
+        text("""
+            SELECT pr.model_version FROM extraction e
+              JOIN pipeline_run pr ON pr.id = e.model_run_id
+             WHERE e.document_id = :d
+             ORDER BY e.created_at DESC LIMIT 1
+        """), {"d": str(document_id)}).scalar_one_or_none()
+
+
 # --------------------------------------------------------------------------- #
 # extraction
 # --------------------------------------------------------------------------- #

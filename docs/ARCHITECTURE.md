@@ -205,7 +205,7 @@ ingest-only API; `cdi_adapter.ingest.watcher` watches a drop folder.
 > classifier reads real OCR text and the page is never OCR'd twice. The S-numbers
 > below are stage identities, not run order.
 
-| S1 | Ingest & normalize | `ingest/pages.py`, `ingest/service.py` | PyMuPDF render; OpenCV deskew (min-area-rect) + denoise + CLAHE; SHA-256 dedupe (race-safe: `IntegrityError` → reuse existing row) | `source_document`, `document_page`, original+pages → MinIO |
+| S1 | Ingest & normalize | `ingest/pages.py`, `ingest/service.py` | pypdfium2 render (PDF) / Pillow (images, EXIF-upright); OpenCV deskew (min-area-rect) + denoise + CLAHE; SHA-256 dedupe (race-safe: `IntegrityError` → reuse existing row) | `source_document`, `document_page`, original+pages → MinIO |
 | S2 | Classify | `classify/service.py`, `classify/prompt.py` | **scored keyword heuristic** over the S3 OCR text (`_heuristic_classify`): a type only when it scores ≥5 *and* leads the runner-up by ≥3 on a legible page (≥180 chars, ≥75% alnum); otherwise Qwen2.5-VL, schema `classification.v1` | `doc_classification` |
 | S3 | OCR / layout | `ocr/service.py`, `ocr/rapid.py`, `ocr/vlm_ocr.py` | **runs before classify.** printed → RapidOCR (boxes+conf+reading order); a page the classifier later calls handwritten gets a second VLM-transcription pass that replaces the blocks. `ocr_document(force_engine="rapidocr"|"vlm")`. *Target (§15, not built): per-region printed/handwritten routing, TrOCR + Qwen on line crops, append-only `ocr_observation`.* | `ocr_block` |
 | S4 | Extract | `extract/service.py`, `extract/prompt.py` | Qwen2.5-VL, schema-locked JSON per `doc_type`, evidence = OCR block ids; **repair + one retry + lenient fallback** (marks `_partial`); re-extract purges the prior attempt's rows first | `extraction`, `clinical_fact` (+ `medication_detail`), `fact_provenance`, `patient_identity`, `encounter` |
@@ -254,7 +254,7 @@ GET  /healthz       → { status, backend, model, device, loaded, configured_bac
 
 | Backend (`CDI_MLSERVE_BACKEND`) | Use |
 |---|---|
-| `hf` *(current; to be deprecated)* | transformers `AutoModelForImageTextToText` = Qwen2.5-VL-7B, bf16, `attn_implementation="sdpa"`, `max_pixels` capped (2 MP) to bound VRAM; **lazy-load on first request**, 7B→3B fallback on OOM. One forward pass at a time — this is why Phase 2 (extract) is serialised. |
+| `hf` *(current; to be deprecated)* | transformers `AutoModelForImageTextToText` = Qwen2.5-VL-7B, bf16, `attn_implementation="sdpa"`, `max_pixels` capped (2 MP) to bound VRAM; **lazy-load on first request**; on a failed (OOM) load the gateway loads the fallback model (Qwen2-VL-7B, 8-bit) and every fact it reads is held for review (`docs/fallback-model.md`). One forward pass at a time — this is why Phase 2 (extract) is serialised. |
 | `vllm` *(built + A/B tested, then reverted — see below)* | `AsyncLLMEngine`, Qwen2.5-VL, paged KV cache + continuous batching, `guided_json` / XGrammar grammar-locked decoding. 32 GB ⇒ ~15 GB weights + ~12–14 GB KV ⇒ **3–4 concurrent page extractions**. Long image prefill still serialises on compute, so the projected Phase-2 gain was 2–3×, not 5×. **Measured result: no improvement** — the same 3-doc job stayed at 72–74 s wall. Root cause: the per-request compute floor (§7.4) is unchanged by batching when documents arrive too sparsely to actually batch, XGrammar adds token-level decode overhead, and the Phase-2 fan-out (`_extract_sem`/`_stage2_pool` in `webapp/jobs.py`) only overlapped 2 of the 3 documents in practice. `CDI_MLSERVE_BACKEND` was reverted to `hf`; the `vllm` code stays in the tree, dormant, not the active path. |
 | `stub` | deterministic keyword responder — CI / no-GPU |
 
@@ -432,8 +432,11 @@ section as the **longitudinal/review** layer built alongside it.
 2. Store original bytes → `s3://cdi-documents/documents/<sha[:2]>/<sha>/original.<ext>`.
 3. Insert `source_document` (status `received`), audit `create`.
 4. Open `pipeline_run(stage='ingest')`.
-5. `render_pages(raw, mime)` — PyMuPDF for PDF (one PNG/page at `CDI_PAGE_DPI`=200),
-   Pillow for images, multi-frame TIFF supported.
+5. `render_pages(raw, mime)` — pypdfium2 for PDF (one PNG/page at `CDI_PAGE_DPI`=200;
+   `ceil(points x dpi / 72)` px per side; every PDFium call under one lock because PDFium is not
+   thread-safe; a page above `MAX_PDF_PAGE_PIXELS` or a corrupt / password-protected PDF raises
+   `PdfReadError`, which the listener treats as a data error and never retries). Images never
+   go through PDFium: Pillow, EXIF orientation applied, multi-frame TIFF supported.
 6. `normalize_image(png)` per page: grayscale → **deskew** (`cv2.minAreaRect` on
    Otsu-thresholded ink pixels; rotate if `0.15° < |skew| ≤ 15°`) → `fastNlMeansDenoising`
    → CLAHE. `preproc` jsonb records `skew_deg` + `steps`. Original bytes are never
@@ -960,7 +963,9 @@ Postgres.
 | `CDI_WEBAPP_PORT` | **8888** | the RunPod-proxied port |
 | `CDI_MLSERVE_URL` / `_PORT` | `http://127.0.0.1:8077` / 8077 | model gateway |
 | `CDI_MLSERVE_BACKEND` | `hf` | `hf` \| `stub` (`vllm` planned — §7.4) |
-| `CDI_VLM_MODEL_ID` / `_FALLBACK_MODEL_ID` | `Qwen/Qwen2.5-VL-7B-Instruct` / `…-3B-…` | VLM + OOM fallback |
+| `CDI_VLM_MODEL_ID` / `_FALLBACK_MODEL_ID` | `Qwen/Qwen2.5-VL-7B-Instruct` / `Qwen/Qwen2-VL-7B-Instruct` | VLM (main) + OOM-only fallback |
+| `CDI_VLM_FALLBACK_QUANTIZE` | `8bit` | the fallback loads in 8-bit (bitsandbytes); `""` = bf16 |
+| `CDI_GATE_FALLBACK_REVIEW` | `true` | S6: every fact the fallback read goes to review |
 | `CDI_VLM_MAX_PIXELS_OCR` | 2 000 000 | processor cap (VRAM bound) |
 | `CDI_FAST_CLASSIFY` | `true` | S2 scored heuristic first; VLM only on ambiguous/handwritten |
 | `CDI_EXTRACT_RETRIES` | `1` | S4 VLM re-tries on schema failure (schemas relaxed → rare) |

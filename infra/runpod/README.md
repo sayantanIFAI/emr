@@ -62,7 +62,9 @@ Full-precision 7B VLM + 7B DSLM will **not** co-reside in 24 GB. Use one of:
 
 - **AWQ / GPTQ 4-bit**: `Qwen2.5-VL-7B-Instruct-AWQ` (~7 GB) + `Qwen2.5-7B-Instruct-AWQ` (~5 GB)
   + SapBERT (~0.5 GB) — fits with ~16k context, load both via vLLM `--enable-lora`.
-- **3B tier**: `Qwen2.5-VL-3B-Instruct` for classify+OCR, 3B DSLM — full precision, roomy.
+- **8-bit tier**: `Qwen2.5-VL-7B-Instruct` loaded with bitsandbytes LLM.int8 (~9-11 GB) for
+  classify+OCR + a 4-bit DSLM. (The Qwen2.5-VL-3B tier was dropped: its licence is
+  non-commercial.)
 - **One-at-a-time**: single vLLM process, hot-swap model per pipeline stage.
 
 ```bash

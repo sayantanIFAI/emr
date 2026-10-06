@@ -12,6 +12,7 @@ from .. import repo
 from ..config import settings
 from ..db import session_scope
 from ..logging import get_logger
+from ..recognition.engines import is_fallback_model
 from ..recognition.hierarchy import assess_fact
 from ..recognition.interpret import fact_candidates
 from . import rules as R
@@ -61,6 +62,23 @@ def _dominant_kind(findings_by_fact: dict[str, list[R.Finding]]) -> str:
     return "low_confidence"
 
 
+def fallback_findings(extraction_model: str | None, blocks: list[dict[str, Any]]) -> list[R.Finding]:
+    """A blocker for anything the OOM fallback model read (``gate_fallback_review``).
+
+    The fallback is another model generation, loaded in 8-bit, and not yet benchmarked on
+    handwritten prescriptions, so a person looks at everything it read: the S4 extraction (the
+    model recorded on its pipeline run) and any line crop it transcribed (``recognition.
+    fallback_model``). The model is decided from recorded provenance, never guessed."""
+    if not settings.gate_fallback_review:
+        return []
+    models = [extraction_model] if is_fallback_model(extraction_model) else []
+    models += [m for b in blocks
+               if is_fallback_model(m := (b.get("recognition") or {}).get("fallback_model"))]
+    if not models:
+        return []
+    return [("blocker", "fallback-model", f"read by the fallback model {models[0]}")]
+
+
 def validate_document(document_id: str | UUID) -> ValidateResult:
     document_id = str(document_id)
     auto = review = conflicts = blockers_total = 0
@@ -80,6 +98,7 @@ def validate_document(document_id: str | UUID) -> ValidateResult:
             {"d": document_id},
         ).scalar_one_or_none()
         partial = bool(isinstance(ext, dict) and ext.get("_partial"))
+        extraction_model = repo.get_extraction_model(sess, document_id)
 
         enc_cache: dict[str, dict[str, Any]] = {}
 
@@ -102,10 +121,13 @@ def validate_document(document_id: str | UUID) -> ValidateResult:
             md = repo.get_medication_detail(sess, fid) if f["fact_type"] == "medication" else None
             prov = repo.get_fact_provenance(sess, fid)
             enc = enc_of(f)
+            fact_blocks = repo.get_blocks_by_ids(
+                sess, [b for p in prov for b in (p.get("ocr_block_ids") or [])])
 
             findings: list[R.Finding] = []
             findings += R.check_value_range(f)
             findings += R.check_unit_present(f)
+            findings += fallback_findings(extraction_model, fact_blocks)
             findings += R.check_dates(f, enc)
             findings += R.check_evidence(f, prov)
             findings += R.check_terminology(f, settings.gate_local_only_review_types)
@@ -116,9 +138,7 @@ def validate_document(document_id: str | UUID) -> ValidateResult:
             assessment = None
             rule = None
             if settings.recognition_v2:
-                blocks = repo.get_blocks_by_ids(
-                    sess, [b for p in prov for b in (p.get("ocr_block_ids") or [])])
-                assessment = assess_fact(f, md, blocks, fact_candidates(sess, fid))
+                assessment = assess_fact(f, md, fact_blocks, fact_candidates(sess, fid))
                 findings += assessment.findings
                 if settings.gate_policy_enabled:
                     rule = rule_for(f["fact_type"], assessment.evidence_state)

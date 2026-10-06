@@ -3,22 +3,17 @@ from __future__ import annotations
 
 import io
 
-import pymupdf as fitz
 import numpy as np
 import pytest
 from PIL import Image
 
 from cdi_adapter.ingest import pages
+from cdi_adapter.ingest.pdfgen import make_text_pdf
 
 
 def _make_pdf(text: str = "Hello Clinic\nMetformin 500 mg BD", pages_n: int = 1) -> bytes:
-    doc = fitz.open()
-    for _ in range(pages_n):
-        pg = doc.new_page(width=400, height=300)
-        pg.insert_text((40, 60), text, fontsize=14)
-    data = doc.tobytes()
-    doc.close()
-    return data
+    return make_text_pdf([text.splitlines()] * pages_n, width=400, height=300, x=40, y_top=60,
+                         leading=17, font_size=14)
 
 
 def _make_png(w: int = 300, h: int = 200) -> bytes:

@@ -506,9 +506,10 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
     image = storage.get_bytes(storage.key_from_uri(pages[0]["image_uri"]))
 
     try:
-        payload = client.vlm_json(image, prompt, schema,
-                                  max_tokens=max_tokens_for(cls["doc_type"]),
-                                  retries=settings.extract_retries)
+        # served_model = the model the gateway reports it used (the OOM fallback is recorded as such)
+        payload, served_model = client.vlm_json_ex(
+            image, prompt, schema, max_tokens=max_tokens_for(cls["doc_type"]),
+            retries=settings.extract_retries)
     except MLError as exc:
         with session_scope() as sess:
             repo.finish_pipeline_run(sess, run_id, status="failed", error_detail=str(exc)[:400])
@@ -577,6 +578,8 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
                 derived_from=[document_id], confidence=float(cls["confidence"]),
             ))
 
+        if served_model:
+            repo.set_run_model_version(sess, run_id, served_model)
         ext_id = repo.insert_extraction(
             sess, document_id=document_id, schema_name=schema_id,
             schema_version="v3", payload=payload,

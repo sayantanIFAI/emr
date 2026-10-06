@@ -72,7 +72,7 @@ See **[infra/runpod/README.md](infra/runpod/README.md)**. The current pilot pod 
 `/workspace` (MooseFS) holds the repo, venv, sample data, models and the **MinIO object
 store** (the real document bytes) plus a periodic `pg_dump`; the live Postgres cluster runs
 on the ephemeral overlay and is rebuilt/restored by `infra/runpod/bootstrap_pod.sh` on each
-restart. The 24 GB GPU means later model phases use a 4-bit (AWQ) 7B stack or 3B models,
+restart. The 24 GB GPU means later model phases use a 4-bit (AWQ) or 8-bit 7B stack,
 not full-precision co-resident 7B.
 
 ## Recognition v2 (handwriting, evidence, agents)

@@ -553,7 +553,7 @@ Nothing enters `v_problem_list` / `v_medication_list` / `v_allergy_list` unless 
                 ▼
         ┌───────────────┐   S2  CLASSIFY
         │ Classifier    │   doc_type · specialty · language · handwritten? · page spans
-        │ (VLM-3B / DiT)│   → doc_classification
+        │ (VLM-7B / DiT)│   → doc_classification
         └───────┬───────┘
                 ▼
         ┌───────────────┐   S3  OCR / LAYOUT / HANDWRITING  (evidence layer)
@@ -615,7 +615,7 @@ Everything containerized (Docker/Podman), orchestrated with Docker Compose for a
 
 | Stage | Primary (recommended) | License | Fallback / alt | Why |
 |---|---|---|---|---|
-| **Doc classifier** | Qwen2.5-VL-3B-Instruct, few-shot label prompt → later distilled to a **DiT / ViT** classifier on your labelled scans | Apache-2.0 | LayoutLMv3, or logistic head on Surya layout features | zero-shot to bootstrap, cheap CNN once you have ~2k labelled docs |
+| **Doc classifier** | Qwen2.5-VL-7B-Instruct (same gateway model; a keyword heuristic runs first), few-shot label prompt → later distilled to a **DiT / ViT** classifier on your labelled scans | Apache-2.0 | LayoutLMv3, or logistic head on Surya layout features | zero-shot to bootstrap, cheap CNN once you have ~2k labelled docs |
 | **OCR – printed + tables** | **PaddleOCR PP-StructureV3** (detection + recognition + layout + table structure) | Apache-2.0 | docTR, RapidOCR | best open table extraction; Indic + English models |
 | **Layout / reading order** | **Surya** | GPL-3.0 (check for prod; alt below) | PP-Structure layout, or `unstructured` | strong layout + order; if GPL is a blocker use PP-Structure only |
 | **Handwriting + context** | **Qwen2.5-VL-7B-Instruct** (32B for hard docs) | Apache-2.0 | InternVL2.5-8B, MiniCPM-V 2.6, TrOCR-large fine-tuned per-field | VLM reads messy handwriting *with* layout context; TrOCR as targeted field fallback |
@@ -768,7 +768,7 @@ Each phase: **scope → deliverables → models/data → acceptance gate**. Phas
 
 ### Phase 1 — Ingestion + Classification + OCR (1.5–2 wk)
 - **Scope:** S1–S3. Legacy connector (folder-watch first), PDF split, deskew/denoise, dedupe; classifier (VLM few-shot); OCR ensemble (PaddleOCR PP-StructureV3 + Surya + Qwen2.5-VL for handwriting) writing `ocr_block` with bbox.
-- **Models:** Qwen2.5-VL-3B (classify), PP-StructureV3, Surya, Qwen2.5-VL-7B (hand).
+- **Models:** Qwen2.5-VL-7B (classify + hand), PP-StructureV3, Surya.
 - **Gate:** doc-type accuracy ≥ 0.92 on gold; printed-text CER ≤ 0.03; table cell F1 ≥ 0.85; handwriting word accuracy ≥ 0.70 (baseline) with bbox for every block; full evidence viewer (image + overlaid boxes).
 
 ### Phase 2 — Evidence store + Structured extraction (2–3 wk)
