@@ -351,8 +351,11 @@ def main() -> None:
 
     from ..security import require_no_default_credentials
 
+    from ..compliance.models import require_registered
+
     require_auth_configured()
     require_no_default_credentials()
+    require_registered()
     uvicorn.run(app, host="0.0.0.0", port=settings.webapp_port,
                 log_level=settings.log_level.lower())
 

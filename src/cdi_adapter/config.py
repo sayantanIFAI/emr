@@ -109,6 +109,10 @@ class Settings(BaseSettings):
     # "" = bf16, for a host that can hold two bf16 7B models in turn). Not measured on the target
     # GPU yet: docs/fallback-model.md.
     vlm_fallback_quantize: Literal["", "8bit"] = "8bit"
+    # the model registry gate (compliance/models.json): a model that is not registered, licensed and pinned to an
+    # exact revision is refused, and downloaded files are checked against the registered sha256 before use
+    model_registry_enforce: bool = True
+    model_verify_checksums: bool = True
     vlm_max_pixels_classify: int = 1_000_000
     vlm_max_pixels_ocr: int = 2_000_000   # keep activations modest on a 24 GB card
     vlm_dtype: str = "bfloat16"

@@ -47,26 +47,26 @@ def is_fallback_model(model: str | None) -> bool:
     return bool(model) and model != settings.vlm_model_id and model == settings.vlm_fallback_model_id
 
 
-def _load_trocr_processor(model_id: str, processor_cls: Any) -> Any:
+def _load_trocr_processor(model_id: str, processor_cls: Any, revision: str | None = None) -> Any:
     """TrOCRProcessor, robust to transformers 5.x: its auto-loader only looks for a
     ``tokenizer.json``, which the Microsoft TrOCR repos do not ship (they ship the BPE
     ``vocab.json`` + ``merges.txt``). Fall back to building the RoBERTa tokenizer from those."""
     try:
-        return processor_cls.from_pretrained(model_id)
+        return processor_cls.from_pretrained(model_id, revision=revision)
     except Exception as exc:  # noqa: BLE001
         log.warning("trocr_processor_fallback", model=model_id, error=str(exc)[:120])
     from huggingface_hub import hf_hub_download
     from transformers import AutoImageProcessor
 
-    image_processor = AutoImageProcessor.from_pretrained(model_id)
+    image_processor = AutoImageProcessor.from_pretrained(model_id, revision=revision)
     try:   # base/large checkpoints: RoBERTa byte-level BPE
         from transformers import RobertaTokenizer
 
-        tok = RobertaTokenizer(vocab_file=hf_hub_download(model_id, "vocab.json"),
-                               merges_file=hf_hub_download(model_id, "merges.txt"))
+        tok = RobertaTokenizer(vocab_file=hf_hub_download(model_id, "vocab.json", revision=revision),
+                               merges_file=hf_hub_download(model_id, "merges.txt", revision=revision))
         return processor_cls(image_processor=image_processor, tokenizer=tok)
     except Exception:  # noqa: BLE001 - small checkpoints: raw sentencepiece
-        return _SpmProcessor(image_processor, hf_hub_download(model_id, "sentencepiece.bpe.model"))
+        return _SpmProcessor(image_processor, hf_hub_download(model_id, "sentencepiece.bpe.model", revision=revision))
 
 
 class _SpmProcessor:
@@ -123,9 +123,13 @@ class TrOCREngine:
                 import torch
                 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
+                from ..compliance.models import prepare_load
+
+                revision = prepare_load(self.model_id, setting_name="CDI_TROCR_MODEL_ID")   # registry gate
                 torch.set_num_threads(max(1, THREADS_PER_TASK))
-                self._processor = _load_trocr_processor(self.model_id, TrOCRProcessor)
-                model = VisionEncoderDecoderModel.from_pretrained(self.model_id)
+                self._processor = _load_trocr_processor(self.model_id, TrOCRProcessor, revision)
+                model = VisionEncoderDecoderModel.from_pretrained(
+                    self.model_id, revision=revision, trust_remote_code=False, use_safetensors=True)
                 model.eval()
                 self._device = self._pick_device(torch)
                 model.to(self._device)

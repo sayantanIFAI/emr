@@ -79,6 +79,9 @@ cdi-dispatch = "cdi_adapter.agents.dispatch:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+cdi_adapter = ["compliance/*.json", "compliance/licences/*.txt"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

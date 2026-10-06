@@ -5,7 +5,7 @@
   "description": "One JSON per document. STRICT: no field that is not listed is allowed (additionalProperties: false everywhere), unknown is null, every category is a fixed list, and every value carries its status. A new field means a new schema version.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "document_id", "filename", "source", "refusal", "links", "doc_type", "is_handwritten",
+  "required": ["schema_version", "document_id", "filename", "source", "refusal", "links", "provenance", "doc_type", "is_handwritten",
                "page_count", "status", "needs_check_count", "quality", "extraction_incomplete", "flags", "patient",
                "doctor", "lab_tests", "lab_preparation", "retracted_preparation", "advice", "follow_up", "medications",
                "lab_results", "vitals", "diagnoses", "other", "not_extracted", "notice"],
@@ -31,6 +31,26 @@
     "links": {
       "type": "object", "additionalProperties": false, "required": ["original"],
       "properties": {"original": {"type": "string"}}
+    },
+    "provenance": {
+      "description": "What read this document: schema and prompt versions and the name + exact revision of every engine and model, as saved at the time (never recomputed).",
+      "type": "object", "additionalProperties": false, "required": ["schema_version", "prompt_version", "engines"],
+      "properties": {
+        "schema_version": {"type": ["string", "null"]}, "prompt_version": {"type": ["string", "null"]},
+        "engines": {
+          "type": "object", "additionalProperties": false,
+          "required": ["vlm_configured", "vlm_served", "vlm_revision", "trocr", "trocr_revision", "trocr_device", "printed_ocr",
+                       "pdf_renderer", "image_library", "qwen_line_mode", "recognition_v2"],
+          "properties": {
+            "vlm_configured": {"type": ["string", "null"]}, "vlm_served": {"type": ["string", "null"]},
+            "vlm_revision": {"type": ["string", "null"]}, "trocr": {"type": ["string", "null"]},
+            "trocr_revision": {"type": ["string", "null"]}, "trocr_device": {"type": ["string", "null"]},
+            "printed_ocr": {"type": ["string", "null"]}, "pdf_renderer": {"type": ["string", "null"]},
+            "image_library": {"type": ["string", "null"]}, "qwen_line_mode": {"type": ["string", "null"]},
+            "recognition_v2": {"type": ["boolean", "null"]}
+          }
+        }
+      }
     },
     "doc_type": {"enum": ["prescription", "lab_report", "radiology_report", "discharge_summary", "operative_note",
                           "opd_note", "vitals_sheet", "referral", "consent_form", "immunization_card", "other", null]},

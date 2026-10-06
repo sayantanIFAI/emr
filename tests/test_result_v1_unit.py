@@ -116,6 +116,20 @@ def test_a_changed_value_is_shown_and_the_older_reading_stays_referenced():     
     jc.validate_result(r2)
 
 
+def test_the_result_names_what_read_it():                           # SW-S1 AC4, SW-S2 AC2
+    inp = T._inputs([T.HBA], payload=T.PAYLOAD)
+    inp.extraction = {"schema_version": "v3", "prompt_version": "p-0123456789ab",
+                      "engine_versions": {"vlm_served": "Qwen/Qwen2.5-VL-7B-Instruct", "vlm_revision": "c" * 40,
+                                          "trocr": "microsoft/trocr-base-handwritten", "recognition_v2": True,
+                                          "not_in_the_schema": "dropped, never leaked"}}
+    r = jc.build_result(inp)
+    assert r["provenance"]["prompt_version"] == "p-0123456789ab" and r["provenance"]["schema_version"] == "v3"
+    assert r["provenance"]["engines"]["vlm_revision"] == "c" * 40 and "not_in_the_schema" not in r["provenance"]["engines"]
+    jc.validate_result(r)
+    none = jc.build_result(T._inputs([], status="quality_hold"))["provenance"]                # never read: all unknown, not guessed
+    assert none["prompt_version"] is None and set(none["engines"].values()) == {None}
+
+
 def test_where_a_dropped_file_came_from_is_recorded():
     inp = T._inputs([T.HBA], payload=T.PAYLOAD, doc_extra={"source_channel": "listener"})
     inp.source = {"connector": "onedrive", "name": "scan 17.pdf"}

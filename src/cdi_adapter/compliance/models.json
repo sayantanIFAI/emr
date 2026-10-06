@@ -1,0 +1,214 @@
+{
+ "version": 1,
+ "_comment": "Model registry (SW-S2). Edited by hand; the gate (compliance/models.py) refuses a model that is not here, has no licence text, is not pinned to an exact revision, or whose files do not match these checksums.",
+ "models": [
+  {
+   "role": "vlm",
+   "model_id": "Qwen/Qwen2.5-VL-7B-Instruct",
+   "revision": "cc594898137f460bfe9f0759e9844b3ce807cfb5",
+   "status": "champion",
+   "weights_format": "safetensors",
+   "trust_remote_code": false,
+   "files": {
+    "chat_template.json": {
+     "sha256": "ad60d90252ed0b0705ba14e2d0ad0fec0beac1ea955642b54059b36052d8bc96",
+     "bytes": 1050
+    },
+    "config.json": {
+     "sha256": "77d9ec7321cc572e3579e2c84799c9cadaded63c49ce93b101733349fc330c43",
+     "bytes": 1374
+    },
+    "generation_config.json": {
+     "sha256": "0a3aea82869fe29f20dc95ccf3e2bcff380eca1f5ad6447a4a4b37110b08e43e",
+     "bytes": 216
+    },
+    "merges.txt": {
+     "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+     "bytes": 1671839
+    },
+    "model-00001-of-00005.safetensors": {
+     "sha256": "e97b877e47fde53a6c6e77aafb36e58e91ee9d95c4a3eeac6f1b5c0e6a1c986e",
+     "bytes": 3900233256
+    },
+    "model-00002-of-00005.safetensors": {
+     "sha256": "a9a300a43b4724eee2abe7c18ceb26768d0ab011eb0cad19d9bfd2476a24d024",
+     "bytes": 3864726320
+    },
+    "model-00003-of-00005.safetensors": {
+     "sha256": "111223d173e00bbee81cba1216fad28668df3476706b7fd26f4d5b50f8b3a507",
+     "bytes": 3864726424
+    },
+    "model-00004-of-00005.safetensors": {
+     "sha256": "ef47f634fa57d46ee134edcc09f34085a47da1e16c12a2abe0d67118be6d72ed",
+     "bytes": 3864733680
+    },
+    "model-00005-of-00005.safetensors": {
+     "sha256": "0c859795ad3a627a9b95bcb762e059d5b768a4a36fdd4affeff269d93fdecc67",
+     "bytes": 1089994880
+    },
+    "model.safetensors.index.json": {
+     "sha256": "73b333b0b16e5286ddba615d2caebcd495cf7e616f52eb217a81781393d79de9",
+     "bytes": 57619
+    },
+    "preprocessor_config.json": {
+     "sha256": "f2058c716eef96ccaed1cc1e2d0c08306b62586d535b28d9d08e691b2fab7ca0",
+     "bytes": 350
+    },
+    "tokenizer.json": {
+     "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+     "bytes": 7031645
+    },
+    "tokenizer_config.json": {
+     "sha256": "4abd3520120e266da84c0864fee064d1fb10806f02225911a47253dd38dc5f56",
+     "bytes": 5702
+    },
+    "vocab.json": {
+     "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+     "bytes": 2776833
+    }
+   },
+   "checksum_basis": "sha256 computed on the deployed pod and equal to the hub's LFS sha256",
+   "licence": {
+    "name": "Apache-2.0",
+    "spdx": "Apache-2.0",
+    "text_file": "licences/Apache-2.0.txt",
+    "checked_on": "2026-10-06",
+    "source": "hub model card tag 'apache-2.0'; the repo ships no LICENSE file, so licences/ holds the standard text",
+    "commercial_use": true,
+    "notice_line": null
+   },
+   "trained_on": "as stated by the maker on the model card (not restated here): https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct",
+   "served_by": "mlserve hf backend, bf16",
+   "gpu_memory_gb": {
+    "value": 17.1,
+    "label": "MEASURED 2026-10-06 on an NVIDIA L4 (23 GB): the gateway process after load, bf16"
+   },
+   "prompt_version": "computed at run time (provenance.prompt_version)",
+   "schema_version": "v3",
+   "notes": "Reads handwriting lines and fills the form (extraction)."
+  },
+  {
+   "role": "vlm",
+   "model_id": "Qwen/Qwen2-VL-7B-Instruct",
+   "revision": "eed13092ef92e448dd6875b2a00151bd3f7db0ac",
+   "status": "fallback",
+   "weights_format": "safetensors",
+   "trust_remote_code": false,
+   "files": {
+    "model-00001-of-00005.safetensors": {
+     "sha256": "eab4f4dc1abf860794c98ce3759b4ace1059fc0fc041ede76b88988b3557c132",
+     "bytes": 3898649896
+    },
+    "model-00002-of-00005.safetensors": {
+     "sha256": "0546b7cd070ff239de0f61a28770de6a0ac517ad313071e151653e38911ffb25",
+     "bytes": 3864726320
+    },
+    "model-00003-of-00005.safetensors": {
+     "sha256": "11368ea1e9c0039ca54012a74ac32d543a9e9d980b2d0ad7e93af0341ace1fe6",
+     "bytes": 3864726424
+    },
+    "model-00004-of-00005.safetensors": {
+     "sha256": "381e110d74db594cc24956af0e74a01ae02104497113a78926990c5bd1f395f6",
+     "bytes": 3864733680
+    },
+    "model-00005-of-00005.safetensors": {
+     "sha256": "e76ec4dc2e7c0dcbe3432e58fae08e62204a2ef2323069d85c8fa0affb87332a",
+     "bytes": 1089994880
+    }
+   },
+   "checksum_basis": "sha256 from the hub's LFS metadata (weights not downloaded here, so not re-hashed)",
+   "licence": {
+    "name": "Apache-2.0",
+    "spdx": "Apache-2.0",
+    "text_file": "licences/Apache-2.0.txt",
+    "checked_on": "2026-10-06",
+    "source": "hub model card tag 'apache-2.0'; LICENSE file in the repo",
+    "commercial_use": true,
+    "notice_line": null
+   },
+   "trained_on": "as stated by the maker on the model card (not restated here): https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct",
+   "served_by": "mlserve hf backend, 8-bit (bitsandbytes), only when the champion cannot load",
+   "gpu_memory_gb": {
+    "value": null,
+    "label": "NOT MEASURED (8-bit fallback has not run on a GPU yet)"
+   },
+   "prompt_version": "computed at run time (provenance.prompt_version)",
+   "schema_version": "v3",
+   "notes": "Out-of-memory fallback; every fact it reads is held for review (docs/fallback-model.md)."
+  },
+  {
+   "role": "handwriting_line",
+   "model_id": "microsoft/trocr-base-handwritten",
+   "revision": "eaacaf452b06415df8f10bb6fad3a4c11e609406",
+   "status": "champion",
+   "weights_format": "safetensors",
+   "trust_remote_code": false,
+   "files": {
+    "config.json": {
+     "sha256": "4c779f24e063c437c3dafd5b2e6c9f59f2fa2bd1dbb4ae6a30153bbbbf19e647",
+     "bytes": 4165
+    },
+    "generation_config.json": {
+     "sha256": "41149cdcffec4d657f32dfcddd9b208037f01286c9e07945c724908c58ed0193",
+     "bytes": 190
+    },
+    "merges.txt": {
+     "sha256": "1ce1664773c50f3e0cc8842619a93edc4624525b728b188a9e0be33b7726adc5",
+     "bytes": 456318
+    },
+    "model.safetensors": {
+     "sha256": "25a40cddc7e6120140a3d5b9e3dd3878a92ada7b4f312953ab22edc19c2a5acc",
+     "bytes": 1333384464
+    },
+    "preprocessor_config.json": {
+     "sha256": "2fcc0da9466ee00be0403b26027373039e032820ebac409e207b32e52e52119d",
+     "bytes": 224
+    },
+    "special_tokens_map.json": {
+     "sha256": "c611b1f7d416eb001ee4f293d903ea8c88e703463f1d403f1866a0352743fd00",
+     "bytes": 772
+    },
+    "tokenizer_config.json": {
+     "sha256": "5a1356884c6ae736a621841535264ba7c5bebd52f169258add2c48fcbb32d50a",
+     "bytes": 1118
+    },
+    "vocab.json": {
+     "sha256": "06b4d46c8e752d410213d9548eb27a54db70fda0319b6271fb8d59dead5e1cab",
+     "bytes": 898822
+    }
+   },
+   "checksum_basis": "sha256 computed on the deployed pod and equal to the hub's LFS sha256",
+   "licence": {
+    "name": "MIT",
+    "spdx": "MIT",
+    "text_file": "licences/MIT-trocr.txt",
+    "checked_on": "2026-10-06",
+    "source": "hub model card tag 'mit'; the repo ships no LICENSE file, so licences/ holds the standard text",
+    "commercial_use": true,
+    "notice_line": null
+   },
+   "trained_on": "as stated by the maker on the model card (not restated here): https://huggingface.co/microsoft/trocr-base-handwritten",
+   "served_by": "ocrhost, transformers, GPU (CDI_TROCR_DEVICE=cuda)",
+   "gpu_memory_gb": {
+    "value": 1.6,
+    "label": "MEASURED 2026-10-06 on an NVIDIA L4: growth of GPU memory when it loaded next to Qwen2.5-VL-7B (includes the CUDA context)"
+   },
+   "prompt_version": "computed at run time (provenance.prompt_version)",
+   "schema_version": "v3",
+   "notes": "English handwriting (IAM). Reads each handwriting line crop in parallel with Qwen."
+  }
+ ],
+ "components": [
+  {
+   "role": "printed_ocr",
+   "name": "rapidocr-onnxruntime",
+   "status": "champion",
+   "licence": {
+    "name": "Apache-2.0",
+    "checked_on": "2026-10-06",
+    "source": "pip package metadata"
+   },
+   "notes": "ONNX PP-OCR models bundled in the package; the package version is the revision (see provenance)."
+  }
+ ]
+}

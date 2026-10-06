@@ -31,10 +31,14 @@ def prompt_version() -> str:
 def engine_versions(served_vlm: str | None = None) -> dict[str, Any]:
     """The component and model identities in force. ``served_vlm`` is what the model gateway
     reported for the call (it can differ from the setting when the OOM fallback answered)."""
+    from .compliance.models import pinned_revision
+
     return {
         "vlm_configured": settings.vlm_model_id,
         "vlm_served": served_vlm,
+        "vlm_revision": pinned_revision(served_vlm or settings.vlm_model_id),
         "trocr": settings.trocr_model_id if settings.trocr_enabled else None,
+        "trocr_revision": pinned_revision(settings.trocr_model_id) if settings.trocr_enabled else None,
         "trocr_device": settings.trocr_device if settings.trocr_enabled else None,
         "printed_ocr": f"rapidocr-onnxruntime {_dist_version('rapidocr-onnxruntime') or '?'}",
         "pdf_renderer": f"pypdfium2 {_dist_version('pypdfium2') or '?'}",

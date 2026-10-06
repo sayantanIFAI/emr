@@ -203,7 +203,8 @@ def test_gather_reads_the_document_facts_payload_and_the_ocr_blocks(monkeypatch)
             return self
 
         def first(self):
-            return {"connector": "local", "name": "scan 1.pdf"}
+            return {"connector": "local", "name": "scan 1.pdf", "schema_version": "v3", "prompt_version": "p-abc",
+                    "engine_versions": {"vlm_served": "Qwen/Qwen2.5-VL-7B-Instruct"}}
 
         def all(self):
             return [{"fact_id": "f1", "original_value": "Metfomin", "reviewer_id": "dr.rao"}]
@@ -220,7 +221,7 @@ def test_gather_reads_the_document_facts_payload_and_the_ocr_blocks(monkeypatch)
     monkeypatch.setattr(jc.repo, "list_ocr_blocks", lambda s, d: BLOCKS)
     inp = jc.gather(Sess(), DOC)
     assert inp.payload == PAYLOAD and inp.blocks == BLOCKS
-    assert inp.source == {"connector": "local", "name": "scan 1.pdf"}
+    assert inp.source["connector"] == "local" and inp.extraction["prompt_version"] == "p-abc"
     assert inp.corrections[0]["original_value"] == "Metfomin"
     assert inp.facts[0]["medication"] == {"drug_text": "Metformin"} and "medication" not in inp.facts[1]
     monkeypatch.setattr(jc.repo, "get_document", lambda s, d: None)

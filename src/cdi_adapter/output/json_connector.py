@@ -132,6 +132,7 @@ class ResultInputs:
     blocks: list[dict[str, Any]] = field(default_factory=list)  # OCR blocks, in the order the prompt numbered them
     source: dict[str, Any] = field(default_factory=dict)        # where a dropped file came from (listener_file)
     corrections: list[dict[str, Any]] = field(default_factory=list)  # earlier readings a person replaced
+    extraction: dict[str, Any] = field(default_factory=dict)         # which models / prompt / schema produced it
 
 
 def _quality(pages: list[dict[str, Any]], doc: dict[str, Any]) -> dict[str, Any]:
@@ -168,6 +169,18 @@ def _doc_date(doc: dict[str, Any]) -> date:
 def _applies(prep: dict[str, Any], test_text: str) -> bool:
     t = prep["applies_to"]
     return t == ["all"] or (isinstance(t, list) and test_text in t)
+
+
+ENGINE_KEYS = ("vlm_configured", "vlm_served", "vlm_revision", "trocr", "trocr_revision", "trocr_device", "printed_ocr",
+               "pdf_renderer", "image_library", "qwen_line_mode", "recognition_v2")
+
+
+def _provenance(ext: dict[str, Any]) -> dict[str, Any]:
+    """Which models, prompt and schema produced the values (saved with the extraction, never recomputed from
+    today's settings): the answer to "what read this?" for an audit or a rollback."""
+    eng = ext.get("engine_versions") or {}
+    return {"schema_version": ext.get("schema_version"), "prompt_version": ext.get("prompt_version"),
+            "engines": {k: eng.get(k) for k in ENGINE_KEYS}}
 
 
 def build_result(inp: ResultInputs) -> dict[str, Any]:
@@ -225,6 +238,7 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         "refusal": {"refused": refused,
                     "reason": (doc.get("error_detail") or "; ".join(quality["reasons"]) or None) if refused else None},
         "links": {"original": f"api/documents/{doc['id']}/original"},
+        "provenance": _provenance(inp.extraction),
         "doc_type": cls.get("doc_type"),
         "is_handwritten": cls.get("is_handwritten"),
         "page_count": doc.get("page_count"),
@@ -297,6 +311,9 @@ def gather(sess: Any, document_id: str) -> ResultInputs | None:
     src = sess.execute(
         text("SELECT connector, name FROM listener_file WHERE document_id = :d ORDER BY first_seen_at LIMIT 1"),
         {"d": document_id}).mappings().first()
+    ext = sess.execute(
+        text("SELECT schema_version, prompt_version, engine_versions FROM extraction WHERE document_id = :d "
+             "ORDER BY created_at DESC LIMIT 1"), {"d": document_id}).mappings().first()
     corrections = sess.execute(
         text("SELECT fact_id, original_value, reviewer_id FROM correction WHERE document_id = :d "
              "ORDER BY created_at, id"), {"d": document_id}).mappings().all()
@@ -304,7 +321,7 @@ def gather(sess: Any, document_id: str) -> ResultInputs | None:
                         repo.list_document_pages(sess, document_id),
                         payload if isinstance(payload, dict) else {}, facts,
                         repo.list_ocr_blocks(sess, document_id),
-                        dict(src) if src else {}, [dict(c) for c in corrections])
+                        dict(src) if src else {}, [dict(c) for c in corrections], dict(ext) if ext else {})
 
 
 class OutputConnector(Protocol):

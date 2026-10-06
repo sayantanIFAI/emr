@@ -1,0 +1,35 @@
+{
+  "_comment": "The licence policy the build gate enforces. NOT legal advice: counsel signs off this file and every 'review' decision. 'proposed' means the engineering team's reading, waiting for that sign-off.",
+  "version": 1,
+  "banned": [
+    {"name": "AGPL", "pattern": "\\bagpl\\b|affero", "why": "network copyleft: would oblige us to publish our own source (the reason PyMuPDF and MinIO were replaced)"},
+    {"name": "GPL", "pattern": "(?<![a-z])gpl(?!.*lgpl)|gnu general public(?! lesser)", "why": "strong copyleft"},
+    {"name": "SSPL", "pattern": "\\bsspl\\b|server side public", "why": "not an open-source licence: service-provider copyleft"},
+    {"name": "BUSL", "pattern": "\\bbusl\\b|business source", "why": "source-available, production use restricted"},
+    {"name": "Commons Clause", "pattern": "commons clause", "why": "commercial use restricted"},
+    {"name": "Non-commercial", "pattern": "non-?commercial|\\bcc-by-nc\\b|\\bnc\\b license", "why": "not allowed in a sold product"},
+    {"name": "Research-only", "pattern": "research[- ]only|research purposes only|qwen-research|research license", "why": "not allowed in a sold product"},
+    {"name": "Elastic", "pattern": "elastic license|\\belv2\\b", "why": "service-provider restriction"}
+  ],
+  "allowed": [
+    {"name": "MIT", "pattern": "\\bmit\\b|mit license|mit-cmu|\\bhpnd\\b"},
+    {"name": "BSD", "pattern": "\\bbsd\\b|3-clause|2-clause|new bsd|simplified bsd"},
+    {"name": "Apache-2.0", "pattern": "apache"},
+    {"name": "ISC", "pattern": "\\bisc\\b"},
+    {"name": "PSF", "pattern": "\\bpsf\\b|python software foundation|cnri-python|\\bpython-2\\.0"},
+    {"name": "Boost", "pattern": "\\bbsl-1\\.0\\b|boost software"},
+    {"name": "Zlib", "pattern": "\\bzlib\\b|\\blibpng\\b"},
+    {"name": "0BSD", "pattern": "\\b0bsd\\b"},
+    {"name": "CC0", "pattern": "\\bcc0\\b|public domain|unlicense"},
+    {"name": "MPL-2.0", "pattern": "\\bmpl\\b|mozilla public license"},
+    {"name": "Dual", "pattern": "^dual license$"}
+  ],
+  "review": [
+    {"name": "LGPL", "pattern": "\\blgpl\\b|lesser general public"}
+  ],
+  "notice_duty": ["MIT", "BSD", "Apache-2.0", "ISC", "PSF", "Zlib", "MPL-2.0", "Dual"],
+  "decisions": {
+    "psycopg": {"status": "proposed", "reason": "LGPL-3.0, used unmodified as a separate library (pip package, dynamic linking); the licence allows this without opening our code. Counsel to confirm.", "by": "engineering", "date": "2026-10-06"},
+    "psycopg-binary": {"status": "proposed", "reason": "LGPL-3.0 binary wheel of psycopg, unmodified; same reading as psycopg. Counsel to confirm.", "by": "engineering", "date": "2026-10-06"}
+  }
+}

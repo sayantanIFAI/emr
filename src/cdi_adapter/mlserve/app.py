@@ -40,6 +40,9 @@ def vlm_generate(req: GenRequest) -> dict[str, Any]:
 def main() -> None:
     import uvicorn
 
+    from ..compliance.models import require_registered
+
+    require_registered()             # an unregistered / unlicensed model stops the service here, naming the setting
     uvicorn.run(
         app, host="127.0.0.1", port=settings.mlserve_port,
         log_level=settings.log_level.lower(),

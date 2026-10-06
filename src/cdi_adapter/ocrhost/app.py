@@ -72,6 +72,9 @@ def ocr_trocr(req: TrocrReq) -> dict[str, Any]:
 def main() -> None:
     import uvicorn
 
+    from ..compliance.models import require_registered
+
+    require_registered()
     uvicorn.run(app, host="127.0.0.1", port=settings.ocrhost_port,
                 log_level=settings.log_level.lower())
 

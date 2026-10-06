@@ -148,13 +148,18 @@ class HFQwenVLBackend(Backend):
         except ImportError:  # pragma: no cover - very old transformers
             from transformers import Qwen2_5_VLForConditionalGeneration as VLModel  # type: ignore
 
+        from ..compliance.models import prepare_load
+
+        # the registry gate: registered, licensed, pinned to an exact revision, files match their checksums
+        revision = prepare_load(model_id, setting_name="CDI_VLM_MODEL_ID")
         dtype = getattr(torch, settings.vlm_dtype, torch.bfloat16)
         quant = _quantize_for(model_id, settings)
-        log.info("hf_load_start", model_id=model_id, dtype=str(dtype), quantize=quant or None)
+        log.info("hf_load_start", model_id=model_id, revision=revision, dtype=str(dtype), quantize=quant or None)
         t0 = time.time()
         kwargs: dict[str, Any] = {
             "torch_dtype": dtype, "device_map": self._device,
             "attn_implementation": "sdpa", "low_cpu_mem_usage": True,
+            "revision": revision, "trust_remote_code": False, "use_safetensors": True,
         }
         if quant == "8bit":
             from transformers import BitsAndBytesConfig
@@ -163,7 +168,7 @@ class HFQwenVLBackend(Backend):
         self._model = VLModel.from_pretrained(model_id, **kwargs)
         self._model.eval()
         self._processor = AutoProcessor.from_pretrained(
-            model_id, max_pixels=settings.vlm_max_pixels_ocr
+            model_id, max_pixels=settings.vlm_max_pixels_ocr, revision=revision, trust_remote_code=False
         )
         self._model_id = model_id
         log.info("hf_load_done", model_id=model_id, seconds=round(time.time() - t0, 1))
