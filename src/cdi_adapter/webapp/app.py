@@ -70,6 +70,34 @@ def healthz() -> Any:
                                  "ig_package": settings.ig_package})
 
 
+@app.get("/metrics")
+def metrics() -> Response:
+    """Prometheus text (behind the same sign-in as everything else; Prometheus can use basic auth)."""
+    if settings.metrics_sink.strip().lower() == "none":
+        raise HTTPException(404, "metrics are switched off")
+    from ..ops.metrics import render
+
+    with session_scope() as sess:
+        body = render(sess)
+    return Response(content=body, media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
+@app.get("/status", response_class=HTMLResponse)
+def status_page() -> str:
+    from ..ops.status import collect, page
+
+    with session_scope() as sess:
+        return page(collect(sess))
+
+
+@app.get("/api/swap-points")
+def swap_points() -> dict[str, Any]:
+    """Every part that can be changed by one setting: the setting, what is in use, what else is available."""
+    from .. import swap
+
+    return {"swap_points": swap.describe()}
+
+
 @app.get("/api/listener/health")
 def listener_health() -> dict[str, Any]:
     """Last good poll, files waiting / in error / in quarantine, oldest waiting age, stalled or stopped."""
@@ -353,8 +381,11 @@ def main() -> None:
 
     from ..compliance.models import require_registered
 
+    from .. import swap
+
     require_auth_configured()
     require_no_default_credentials()
+    swap.check_all()                 # a wrong name or a missing library stops the service, naming the setting
     require_registered()
     uvicorn.run(app, host="0.0.0.0", port=settings.webapp_port,
                 log_level=settings.log_level.lower())

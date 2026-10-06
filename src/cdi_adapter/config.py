@@ -40,6 +40,19 @@ class Settings(BaseSettings):
     max_pages: int = 20
     allowed_mime_prefixes: tuple[str, ...] = ("image/", "application/pdf")
 
+    # --- swap points (SW-S1/S6): one setting picks each implementation; swap/points.py lists the choices ---
+    pdf_renderer: str = "pypdfium2"
+    object_store: str = "s3"                      # s3 (SeaweedFS / any S3 API) | filesystem
+    object_store_dir: str = "./data/objects"      # the folder when object_store=filesystem (an encrypted volume)
+    queue_backend: str = "redis"                  # redis (7.2 or older) | valkey
+    terminology_provider: str = "internal"
+    # External code systems that may be attached to a result. SNOMED CT and ICD are NOT in the default: they are
+    # enabled per customer who holds the licence (SW-S6); without them a value is saved as the text as written plus
+    # the canonical term, with no external code. LOINC and UCUM are free to use.
+    licensed_code_systems: tuple[str, ...] = ("LOINC", "UCUM")
+    signin_provider: str = "basic"
+    metrics_sink: str = "prometheus"
+
     # --- output connector (UP-S3): what a finished document is turned into for downstream ---
     output_connector: str = "json_placeholder"      # the real HIS / EMR contract replaces it (result.v2)
     # where the finished result JSON is also written when a document is validated (OUT-S2). Blank / false =
@@ -151,6 +164,11 @@ class Settings(BaseSettings):
     # RapidOCR on the GPU needs onnxruntime-gpu with a CUDA build that supports the card; if the
     # CUDA provider cannot start it falls back to the CPU and logs which one it is using.
     rapidocr_use_cuda: bool = False
+
+    @property
+    def handwriting_line_choice(self) -> str:
+        """The name of the handwriting-line reader in use, for the swap-point list ('trocr' | 'off')."""
+        return "trocr" if self.trocr_enabled else "off"
     # crop standard (IM-S3): what every handwriting crop looks like when it reaches a reader.
     # PLACEHOLDERS, not tuned: accuracy by crop size is not measured yet (the size of every crop is
     # recorded with the line so it can be). 0 turns the upscaling off.

@@ -295,6 +295,22 @@ def _render_pdf_page(doc: pdfium.PdfDocument, index: int, scale: float) -> Image
 
 
 def render_pdf_pngs(raw: bytes, dpi: int) -> list[bytes]:
+    """One intermediate PNG per page, by the renderer ``CDI_PDF_RENDERER`` names (swap point ``pdf_renderer``)."""
+    from .. import swap
+
+    return swap.resolve("pdf_renderer").render_pngs(raw, dpi)
+
+
+class PdfiumRenderer:
+    """The pypdfium2 adapter behind the ``PdfRenderer`` interface (the only renderer: no PyMuPDF option)."""
+
+    name = "pypdfium2"
+
+    def render_pngs(self, raw: bytes, dpi: int) -> list[bytes]:
+        return _pdfium_render_pngs(raw, dpi)
+
+
+def _pdfium_render_pngs(raw: bytes, dpi: int) -> list[bytes]:
     """One intermediate PNG per page. A PDF with more than ``max_pages`` pages is REFUSED (LS-S3), never
     cut short: a half-read prescription would look complete. A page is ``ceil(points * dpi / 72)``
     pixels on each side."""

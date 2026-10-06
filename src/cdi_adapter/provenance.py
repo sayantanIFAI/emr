@@ -9,6 +9,7 @@ import hashlib
 from importlib import metadata
 from typing import Any
 
+from . import swap
 from .config import settings
 
 
@@ -41,7 +42,7 @@ def engine_versions(served_vlm: str | None = None) -> dict[str, Any]:
         "trocr_revision": pinned_revision(settings.trocr_model_id) if settings.trocr_enabled else None,
         "trocr_device": settings.trocr_device if settings.trocr_enabled else None,
         "printed_ocr": f"rapidocr-onnxruntime {_dist_version('rapidocr-onnxruntime') or '?'}",
-        "pdf_renderer": f"pypdfium2 {_dist_version('pypdfium2') or '?'}",
+        "pdf_renderer": swap.current_version("pdf_renderer"),
         "image_library": f"Pillow {_dist_version('Pillow') or '?'}; opencv {_dist_version('opencv-python-headless') or '?'}",
         "qwen_line_mode": settings.qwen_line_mode,
         "recognition_v2": settings.recognition_v2,

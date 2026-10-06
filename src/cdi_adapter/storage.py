@@ -14,6 +14,16 @@ log = get_logger(__name__)
 _client = None
 
 
+def _fs():
+    """The folder store when ``CDI_OBJECT_STORE=filesystem`` (the second ObjectStore adapter), else None: the
+    S3 code below is used. Every caller keeps using this module's functions: nothing in ingest knows which."""
+    if (settings.object_store or "s3").strip().lower() == "filesystem":
+        from .storage_fs import FilesystemStore
+
+        return FilesystemStore()
+    return None
+
+
 def get_s3():
     global _client
     if _client is None:
@@ -40,6 +50,8 @@ def _code(exc: ClientError) -> str:
 
 
 def ensure_bucket() -> None:
+    if (fs := _fs()) is not None:
+        return fs.ensure()
     s3 = get_s3()
     try:
         s3.head_bucket(Bucket=settings.s3_bucket)
@@ -72,6 +84,8 @@ def ensure_bucket_when_ready(timeout_s: float = 60.0, every_s: float = 1.0) -> N
 
 
 def put_bytes(key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+    if (fs := _fs()) is not None:
+        return fs.put(key, data, content_type)
     get_s3().put_object(
         Bucket=settings.s3_bucket, Key=key, Body=data, ContentType=content_type
     )
@@ -79,20 +93,30 @@ def put_bytes(key: str, data: bytes, content_type: str = "application/octet-stre
 
 
 def get_bytes(key: str) -> bytes:
+    if (fs := _fs()) is not None:
+        return fs.get(key)
     obj = get_s3().get_object(Bucket=settings.s3_bucket, Key=key)
     return obj["Body"].read()
 
 
 def object_uri(key: str) -> str:
+    if (fs := _fs()) is not None:
+        return fs.uri(key)
     return f"s3://{settings.s3_bucket}/{key}"
 
 
 def key_from_uri(uri: str) -> str:
+    if uri.startswith("file://"):                 # a folder-store URI (kept readable after a switch back)
+        from .storage_fs import FilesystemStore
+
+        return FilesystemStore.key_from_uri(uri)
     prefix = f"s3://{settings.s3_bucket}/"
     return uri[len(prefix):] if uri.startswith(prefix) else uri
 
 
 def presign_get(key: str, expires: int = 3600) -> str:
+    if _fs() is not None:
+        raise NotImplementedError("the folder store has no pre-signed links: read the bytes with get_bytes()")
     return get_s3().generate_presigned_url(
         "get_object",
         Params={"Bucket": settings.s3_bucket, "Key": key},
@@ -105,6 +129,8 @@ def ping() -> bool:
     (``head_bucket``), so a least-privilege key scoped to that bucket passes: ``list_buckets``
     needs an account-wide permission. A missing bucket still counts as up (``ensure_bucket``
     creates it); a 403 (wrong or revoked key) or a connection failure does not."""
+    if (fs := _fs()) is not None:
+        return fs.ping()
     try:
         get_s3().head_bucket(Bucket=settings.s3_bucket)
         return True
@@ -116,6 +142,52 @@ def ping() -> bool:
 
 def stream(key: str) -> io.BytesIO:
     return io.BytesIO(get_bytes(key))
+
+
+class S3Store:
+    """The S3-API adapter behind the ``ObjectStore`` interface (swap/points.py). It calls this module's S3
+    code directly, whatever ``CDI_OBJECT_STORE`` says, so the contract test can run it next to the folder store."""
+
+    name = "s3"
+
+    def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+        get_s3().put_object(Bucket=settings.s3_bucket, Key=key, Body=data, ContentType=content_type)
+        return f"s3://{settings.s3_bucket}/{key}"
+
+    def get(self, key: str) -> bytes:
+        try:
+            return get_s3().get_object(Bucket=settings.s3_bucket, Key=key)["Body"].read()
+        except ClientError as exc:
+            if _code(exc) in ("NoSuchKey", "404", "NotFound"):
+                raise KeyError(key) from exc
+            raise
+
+    def uri(self, key: str) -> str:
+        return f"s3://{settings.s3_bucket}/{key}"
+
+    def key_from_uri(self, uri: str) -> str:
+        prefix = f"s3://{settings.s3_bucket}/"
+        return uri[len(prefix):] if uri.startswith(prefix) else uri
+
+    def ping(self) -> bool:
+        try:
+            get_s3().head_bucket(Bucket=settings.s3_bucket)
+            return True
+        except ClientError as exc:
+            return _code(exc) in _MISSING
+        except Exception:  # noqa: BLE001
+            return False
+
+    def ensure(self) -> None:
+        s3 = get_s3()
+        try:
+            s3.head_bucket(Bucket=settings.s3_bucket)
+        except ClientError:
+            try:
+                s3.create_bucket(Bucket=settings.s3_bucket)
+            except ClientError as exc:
+                if _code(exc) not in _RACE:
+                    raise
 
 
 if __name__ == "__main__":  # `python -m cdi_adapter.storage`: create the bucket (compose init job)

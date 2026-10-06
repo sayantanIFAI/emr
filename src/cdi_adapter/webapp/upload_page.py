@@ -70,6 +70,7 @@ _HTML = r"""<!doctype html>
     </div>
     <pre class="resjson" id="resjson" tabindex="0" aria-label="Result JSON"></pre>
   </div>
+  <p class="muted" style="text-align:center"><a href="/status">System status</a></p>
 </main>
 
 <script>

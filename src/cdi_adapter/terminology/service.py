@@ -48,8 +48,36 @@ def freq_per_day(freq_text: str | None) -> float | None:
     return None
 
 
+_SYSTEM_SHORT = {"http://snomed.info/sct": "SNOMED", "http://loinc.org": "LOINC",
+                 "http://hl7.org/fhir/sid/icd-10": "ICD10", "http://unitsofmeasure.org": "UCUM"}
+
+
+def system_short(system: str | None) -> str:
+    """``'SNOMED'`` for the SNOMED CT URL etc.; an unknown system keeps its own text, upper-cased."""
+    s = (system or "").strip()
+    return _SYSTEM_SHORT.get(s, s.upper())
+
+
+def licensed_only(up: dict[str, Any]) -> dict[str, Any]:
+    """SW-S6: an external code is attached only for a code system the customer is licensed for
+    (``CDI_LICENSED_CODE_SYSTEMS``). Otherwise the value keeps its text as written and the canonical term
+    (``code_display``), with no external code: nothing outside the internal vocabulary leaks into the result."""
+    from ..config import settings
+
+    if not up.get("code_system"):
+        return up
+    allowed = {s.upper() for s in settings.licensed_code_systems}
+    if system_short(up["code_system"]) in allowed:
+        return up
+    return {**up, "code_system": None, "code": None, "code_status": "local_only"}
+
+
 def bind_fact(fact: dict[str, Any]) -> dict[str, Any]:
-    """Return a dict of column updates for one clinical_fact row."""
+    """Return a dict of column updates for one clinical_fact row (external codes only where licensed)."""
+    return licensed_only(_bind_fact(fact))
+
+
+def _bind_fact(fact: dict[str, Any]) -> dict[str, Any]:
     ft = fact["fact_type"]
     keyraw = fact.get("value_code_display") or fact["local_text"] or ""
     key = _norm(keyraw)
