@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     # --- output connector (UP-S3): what a finished document is turned into for downstream ---
     output_connector: str = "json_placeholder"      # the real HIS / EMR contract (OUT-S2) replaces it
 
+    # --- correction loop: human corrections -> per-doctor lexicon -> class-C alias ---
+    correction_max_len: int = 500
+    # a doctor's "X means Y" becomes an alias for that doctor after this many confirmations by
+    # reviewers (and only if Y names exactly one concept). PLACEHOLDER: tune on real corrections.
+    doctor_alias_min_verified: int = 3
+    profile_cache_ttl_s: int = 300        # Redis read cache of a doctor's lexicon; the database stays the source of truth
+
     # --- upload screen (UP-S1) ---
     # What the web upload accepts, decided from the file's bytes (never its name): JPG, PNG, TIFF, PDF.
     upload_mime_types: tuple[str, ...] = ("application/pdf", "image/png", "image/jpeg", "image/tiff")

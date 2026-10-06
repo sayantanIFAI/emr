@@ -24,12 +24,14 @@ from .review_page import REVIEW_PAGE
 from .reviewer import router as reviewer_router
 from .reviewer_page import REVIEWER_PAGE
 from .admin import router as admin_router
+from .corrections_api import router as corrections_router
 from .admin_page import ADMIN_PAGE
 
 log = get_logger(__name__)
 app = FastAPI(title="CDI-Adapter - scanned docs -> ABDM FHIR", version=__version__)
 app.include_router(reviewer_router)
 app.include_router(admin_router)
+app.include_router(corrections_router)
 
 
 @app.get("/", response_class=HTMLResponse)
