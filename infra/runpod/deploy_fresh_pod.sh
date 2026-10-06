@@ -14,7 +14,7 @@ REPO=$WS/cdi
 URL="${CDI_REPO_URL:-https://github.com/sayantanIFAI/emr.git}"
 mkdir -p "$WS/logs" "$WS/secrets" "$WS/hf-cache"
 chmod 700 "$WS/secrets"
-export DEBIAN_FRONTEND=noninteractive HF_HOME="$WS/hf-cache"
+export DEBIAN_FRONTEND=noninteractive HF_HOME="$WS/hf-cache" PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore
 
 echo "== 1. code from git =="
 if [ -d "$REPO/.git" ]; then

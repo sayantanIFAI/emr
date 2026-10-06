@@ -19,6 +19,8 @@ REPO=$WS/cdi
 PGBIN=/usr/lib/postgresql/16/bin
 PGDATA=/var/lib/postgresql/16/cdi
 export DEBIAN_FRONTEND=noninteractive
+# a brand-new volume has none of these
+mkdir -p "$WS/redis" "$WS/backup" "$WS/logs" "$WS/data/inbox" "$WS/data/processed" "$WS/data/failed"
 
 echo "== 1/6 apt packages (ephemeral, reinstalled each boot) =="
 if ! command -v psql >/dev/null || ! command -v redis-server >/dev/null || ! command -v crontab >/dev/null; then
