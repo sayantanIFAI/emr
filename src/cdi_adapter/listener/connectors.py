@@ -35,7 +35,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import quote
 
 import httpx
@@ -55,6 +55,21 @@ class RemoteFile:
     etag: str               # version marker: changes whenever the content changes
     size: int
     folder: str             # which lifecycle folder it currently sits in
+
+
+class AuthRequired(RuntimeError):
+    """Sign-in is missing or has expired (a person must sign in again). The listener stops with this
+    reason instead of retrying forever (LS-S2)."""
+
+
+def retry_wait(headers: Any, attempt: int) -> float:
+    """Seconds to wait before trying again: the drive's own ``Retry-After`` (a number of seconds) when it
+    gives one, else a growing wait; never more than ``CDI_LISTENER_THROTTLE_MAX_WAIT_SECONDS``."""
+    try:
+        wait = float(headers.get("Retry-After"))
+    except (TypeError, ValueError):
+        wait = float(2 ** attempt)
+    return max(0.0, min(wait, settings.listener_throttle_max_wait_seconds))
 
 
 class Connector(Protocol):
@@ -222,11 +237,16 @@ class _RestConnector:
     def _req(self, method: str, url: str, **kw) -> httpx.Response:
         extra = kw.pop("headers", {})
         r: httpx.Response | None = None
-        for attempt in range(4):
+        tries = max(1, settings.listener_throttle_attempts)
+        for attempt in range(tries):
             r = self._http.request(method, url, headers={"Authorization": f"Bearer {self._bearer()}",
                                                          **extra}, **kw)
-            if r.status_code in self._RETRY:        # throttled / transient: honour Retry-After
-                time.sleep(min(60.0, float(r.headers.get("Retry-After", 2 ** attempt))))
+            if r.status_code == 401:
+                raise AuthRequired("the drive rejected the sign-in (401): sign in again")
+            if r.status_code in self._RETRY and attempt < tries - 1:   # throttled / busy: wait as told, try again
+                wait = retry_wait(r.headers, attempt)
+                log.warning("listener_throttled", status=r.status_code, wait_seconds=wait, attempt=attempt + 1)
+                time.sleep(wait)
                 continue
             r.raise_for_status()
             return r
@@ -319,13 +339,13 @@ class GraphConnector(_RestConnector):
             accounts = app.get_accounts()
             tok = app.acquire_token_silent(self._scopes(), account=accounts[0]) if accounts else None
             if not tok or "access_token" not in tok:
-                raise RuntimeError("OneDrive sign-in required (or expired): run "
+                raise AuthRequired("OneDrive sign-in required (or expired): run "
                                    "`python -m cdi_adapter.listener.service --login`")
             self._save_cache(cache)
         else:
             tok = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
             if "access_token" not in tok:
-                raise RuntimeError(f"graph auth failed: {tok.get('error_description') or tok}")
+                raise AuthRequired(f"graph auth failed: {str(tok.get('error') or 'no token')}")
         self._token = tok["access_token"]
         self._token_exp = time.time() + float(tok.get("expires_in", 3600))
         return self._token

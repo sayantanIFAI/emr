@@ -221,6 +221,12 @@ class Settings(BaseSettings):
     listener_max_attempts: int = 3        # hard cap, also enforced by a DB CHECK
     listener_pipeline: str = "inline"     # inline = run every stage in the listener | celery
     listener_retry_base_seconds: int = 60 # recovery agent back-off: base * 2^(attempt-1)
+    # the drive answers "too many requests" (429) / "busy" with a wait time: wait that long (up to this cap) and
+    # try again, up to this many tries; a throttle is never counted as a failed file (LS-S1)
+    listener_throttle_attempts: int = 6
+    listener_throttle_max_wait_seconds: float = 300.0
+    # no good poll for this long = stalled (health view and the alert rule; 300 is an ASSUMPTION, the owner sets it)
+    listener_stall_seconds: int = 300
     graph_auth: str = "app"               # app (client credentials, admin consent) | device_code (sign in once)
     graph_scopes: tuple[str, ...] = ("Files.ReadWrite",)   # delegated scopes (device_code only)
     graph_token_cache: str = "./data/graph_token_cache.json"   # device_code: refresh-token cache (keep on a persistent disk)

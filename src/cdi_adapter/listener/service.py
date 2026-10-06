@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import signal
 import socket
 import threading
@@ -47,8 +48,8 @@ from sqlalchemy import text
 from ..config import settings
 from ..db import session_scope
 from ..logging import get_logger
-from .connectors import (FOLDERS, Connector, RemoteFile, drain_ignored, folder_name, get_connector,
-                         reset_ignored, sha256)
+from .connectors import (FOLDERS, AuthRequired, Connector, RemoteFile, drain_ignored, folder_name,
+                         get_connector, reset_ignored, sha256)
 
 log = get_logger(__name__)
 WORKER = f"listener@{socket.gethostname()}"
@@ -189,6 +190,15 @@ def _classify_error(exc: BaseException) -> str:
     return "code"
 
 
+_QUOTED = re.compile(r"""(['"])(?:(?!\1).){1,400}\1""", re.DOTALL)
+
+
+def scrub(msg: str, limit: int = 300) -> str:
+    """A failure note says why, never what was read: text inside quotes (error messages quote the offending
+    value) is blanked. Reasons and technical details stay."""
+    return _QUOTED.sub(lambda m: m.group(1) + "..." + m.group(1), msg)[:limit]
+
+
 def _failure_note(conn: Connector, f: RemoteFile, exc: BaseException, *, klass: str, attempts: int,
                   final: bool, dest: str, batch_id: str | None, delay: int) -> str:
     runs_total = settings.listener_max_attempts + 1
@@ -205,10 +215,10 @@ def _failure_note(conn: Connector, f: RemoteFile, exc: BaseException, *, klass: 
             f"batch:         {batch_id or '-'}\n"
             f"run:           {attempts + 1} of {runs_total} (1 first run + {settings.listener_max_attempts} retries)\n"
             f"error class:   {klass}\n"
-            f"reason:        {type(exc).__name__}: {exc}\n"
+            f"reason:        {type(exc).__name__}: {scrub(str(exc))}\n"
             f"moved to:      {folder_name(dest)}/\n"
             f"next:          {action}\n\n"
-            f"--- traceback (tail) ---\n{traceback.format_exc()[-3000:]}")
+            f"--- traceback (tail) ---\n{scrub(traceback.format_exc()[-3000:], 3000)}")
 
 
 def process(conn: Connector, row: dict[str, Any], f: RemoteFile, *, is_retry: bool,
@@ -251,7 +261,7 @@ def process(conn: Connector, row: dict[str, Any], f: RemoteFile, *, is_retry: bo
         except Exception as mv_exc:  # noqa: BLE001 - leave it where it is; lease expiry recovers
             log.error("listener_move_failed", file=f.name, error=str(mv_exc)[:200])
         _set(rid, state="quarantine" if exhausted else "error", remote_id=remote,
-             error_class=klass, last_error=f"{type(exc).__name__}: {exc}"[:1000],
+             error_class=klass, last_error=f"{type(exc).__name__}: {scrub(str(exc))}"[:1000],
              next_attempt_at=None if final else _in(delay),
              _event=_event("failed", error_class=klass, to=dest, batch=batch_id, error=str(exc)[:300]))
         log.error("listener_failed", file=f.name, error_class=klass, to=dest, batch=batch_id,
@@ -328,6 +338,21 @@ def check(conn: Connector) -> dict[str, Any]:
     }
 
 
+def _beat(conn: Connector, *, ok: bool, error: str | None = None, stopped: str | None = None) -> None:
+    """Record the poll (LS-S9): health and the stall alert read this. Never raises."""
+    try:
+        with session_scope() as sess:
+            sess.execute(text(
+                "INSERT INTO listener_heartbeat (connector, worker, last_poll_at, last_poll_ok_at, last_error, "
+                "stopped_reason, updated_at) VALUES (:c, :w, now(), CASE WHEN :ok THEN now() END, :e, :s, now()) "
+                "ON CONFLICT (connector) DO UPDATE SET worker = :w, last_poll_at = now(), "
+                "last_poll_ok_at = CASE WHEN :ok THEN now() ELSE listener_heartbeat.last_poll_ok_at END, "
+                "last_error = :e, stopped_reason = :s, updated_at = now()"),
+                {"c": conn.name, "w": WORKER, "ok": ok, "e": error, "s": stopped})
+    except Exception as exc:  # noqa: BLE001
+        log.warning("heartbeat_failed", error=str(exc)[:150])
+
+
 def _install_signal_handlers() -> None:
     def _stop(signum: int, _frame: Any) -> None:
         log.info("listener_draining", signal=signum)
@@ -368,12 +393,22 @@ def main() -> None:
         print(json.dumps(poll_once(conn, flush=True)))
         return
     _install_signal_handlers()
+    _beat(conn, ok=False, error="starting")
     while not _STOP.is_set():
         try:
             poll_once(conn)
+            _beat(conn, ok=True)
+        except AuthRequired as exc:
+            # sign-in is gone: stop with the reason (a person must sign in again) instead of retrying forever
+            reason = f"sign-in missing or expired: {scrub(str(exc))}"
+            log.error("listener_auth_expired", error=reason)
+            _beat(conn, ok=False, error=reason, stopped=reason)
+            raise SystemExit(3) from exc
         except Exception as exc:  # noqa: BLE001 - a drive outage must not kill the listener
-            log.error("listener_poll_failed", error=str(exc)[:300])
+            log.error("listener_poll_failed", error=scrub(str(exc)))
+            _beat(conn, ok=False, error=scrub(str(exc)))
         _STOP.wait(settings.listener_poll_seconds)
+    _beat(conn, ok=False, error=None, stopped="stopped by request")
     log.info("listener_stopped")
 
 

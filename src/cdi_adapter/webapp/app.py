@@ -70,6 +70,27 @@ def healthz() -> Any:
                                  "ig_package": settings.ig_package})
 
 
+@app.get("/api/listener/health")
+def listener_health() -> dict[str, Any]:
+    """Last good poll, files waiting / in error / in quarantine, oldest waiting age, stalled or stopped."""
+    from ..listener.health import health
+
+    with session_scope() as sess:
+        return health(sess)
+
+
+@app.get("/api/documents")
+def find_documents_by_name(filename: str) -> dict[str, Any]:
+    """Find the result of an uploaded or dropped file by (part of) its file name."""
+    from ..listener.health import find_documents
+
+    name = filename.strip()
+    if len(name) < 2:
+        raise HTTPException(422, "Type at least two characters of the file name.")
+    with session_scope() as sess:
+        return {"documents": find_documents(sess, name[:200])}
+
+
 @app.get("/api/registry/lookup")
 def registry_lookup(q: str) -> dict[str, Any]:
     """Resolve an existing clinic patient by CareFlow id / ABHA id / mobile."""
