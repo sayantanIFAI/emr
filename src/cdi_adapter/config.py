@@ -41,7 +41,11 @@ class Settings(BaseSettings):
     allowed_mime_prefixes: tuple[str, ...] = ("image/", "application/pdf")
 
     # --- output connector (UP-S3): what a finished document is turned into for downstream ---
-    output_connector: str = "json_placeholder"      # the real HIS / EMR contract (OUT-S2) replaces it
+    output_connector: str = "json_placeholder"      # the real HIS / EMR contract replaces it (result.v2)
+    # where the finished result JSON is also written when a document is validated (OUT-S2). Blank / false =
+    # not written: the endpoint still builds it from the database on demand.
+    output_dir: str = ""
+    output_object_store: bool = False
 
     # --- correction loop: human corrections -> per-doctor lexicon -> class-C alias ---
     correction_max_len: int = 500

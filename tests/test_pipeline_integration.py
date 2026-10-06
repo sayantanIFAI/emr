@@ -25,7 +25,10 @@ def _lab_pdf() -> bytes:
     return make_text_pdf([lines], width=600, height=400, x=40, y_top=60, leading=14, font_size=11)
 
 
-def test_ingest_classify_ocr(infra):
+def test_ingest_classify_ocr(infra, monkeypatch):
+    from cdi_adapter.config import settings
+
+    monkeypatch.setattr(settings, "recognition_v2", False)     # this test covers the legacy page-level OCR path
     os.environ.setdefault("CDI_MLSERVE_BACKEND", "stub")
     pytest.importorskip("rapidocr_onnxruntime", reason="pip install .[ocr]")
 

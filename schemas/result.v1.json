@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cdi:result.v1",
+  "title": "CDI result for one document (result.v1)",
+  "description": "One JSON per document. STRICT: no field that is not listed is allowed (additionalProperties: false everywhere), unknown is null, every category is a fixed list, and every value carries its status. A new field means a new schema version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "document_id", "filename", "source", "refusal", "links", "doc_type", "is_handwritten",
+               "page_count", "status", "needs_check_count", "quality", "extraction_incomplete", "flags", "patient",
+               "doctor", "lab_tests", "lab_preparation", "retracted_preparation", "advice", "follow_up", "medications",
+               "lab_results", "vitals", "diagnoses", "other", "not_extracted", "notice"],
+  "properties": {
+    "schema_version": {"const": "result.v1"},
+    "document_id": {"type": "string"},
+    "filename": {"type": ["string", "null"]},
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["channel", "drive", "dropped_file_name", "original_filename"],
+      "properties": {
+        "channel": {"enum": ["webapp", "listener", "api", "folder_watch", "batch", "test", null]},
+        "drive": {"type": ["string", "null"]},
+        "dropped_file_name": {"type": ["string", "null"]},
+        "original_filename": {"type": ["string", "null"]}
+      }
+    },
+    "refusal": {
+      "description": "refused = the document was not read (quality hold or an error); nothing below is then a reading.",
+      "type": "object", "additionalProperties": false, "required": ["refused", "reason"],
+      "properties": {"refused": {"type": "boolean"}, "reason": {"type": ["string", "null"]}}
+    },
+    "links": {
+      "type": "object", "additionalProperties": false, "required": ["original"],
+      "properties": {"original": {"type": "string"}}
+    },
+    "doc_type": {"enum": ["prescription", "lab_report", "radiology_report", "discharge_summary", "operative_note",
+                          "opd_note", "vitals_sheet", "referral", "consent_form", "immunization_card", "other", null]},
+    "is_handwritten": {"type": ["boolean", "null"]},
+    "page_count": {"type": ["integer", "null"]},
+    "status": {"enum": ["held_for_rescan", "error", "processing", "needs_check", "incomplete", "complete"]},
+    "needs_check_count": {"type": "integer", "minimum": 0},
+    "quality": {
+      "type": "object", "additionalProperties": false,
+      "required": ["checked", "passed", "reasons", "reason_codes", "warnings"],
+      "properties": {
+        "checked": {"type": "boolean"},
+        "passed": {"type": ["boolean", "null"]},
+        "reasons": {"type": "array", "items": {"type": "string"}},
+        "reason_codes": {"type": "array", "items": {"type": "string"}},
+        "warnings": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "extraction_incomplete": {"type": "boolean"},
+    "flags": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["code", "line", "text"],
+        "properties": {"code": {"enum": ["prompt_injection_suspected"]}, "line": {"type": "integer"}, "text": {"type": "string"}}
+      }
+    },
+    "patient": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "age_text", "dob", "sex", "mrn", "phone", "address", "abha_id"],
+      "properties": {
+        "name": {"$ref": "#/$defs/value"}, "age_text": {"$ref": "#/$defs/value"}, "dob": {"$ref": "#/$defs/value"},
+        "sex": {"$ref": "#/$defs/value"}, "mrn": {"$ref": "#/$defs/value"}, "phone": {"$ref": "#/$defs/value"},
+        "address": {"$ref": "#/$defs/value"}, "abha_id": {"$ref": "#/$defs/value"}
+      }
+    },
+    "doctor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "reg_no", "department", "designation", "qualification", "clinic", "stamp_present", "signature_present"],
+      "properties": {
+        "name": {"$ref": "#/$defs/value"}, "reg_no": {"$ref": "#/$defs/value"}, "department": {"$ref": "#/$defs/value"},
+        "designation": {"$ref": "#/$defs/value"}, "qualification": {"$ref": "#/$defs/value"},
+        "clinic": {
+          "type": "object", "additionalProperties": false, "required": ["name", "address", "phone"],
+          "properties": {"name": {"$ref": "#/$defs/value"}, "address": {"$ref": "#/$defs/value"}, "phone": {"$ref": "#/$defs/value"}}
+        },
+        "stamp_present": {"$ref": "#/$defs/value"}, "signature_present": {"$ref": "#/$defs/value"}
+      }
+    },
+    "lab_tests": {"type": "array", "items": {"$ref": "#/$defs/lab_test"}},
+    "lab_preparation": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["type", "value", "unit", "text", "applies_to", "status", "reason", "evidence"],
+        "properties": {
+          "type": {"enum": ["fasting", "timing", "diet", "medicine_hold", "sample_collection", "bring_documents", "other", null]},
+          "value": {"type": ["number", "null"]}, "unit": {"type": ["string", "null"]}, "text": {"type": "string"},
+          "applies_to": {"type": "array", "items": {"type": "string"}},
+          "status": {"enum": ["checked", "needs_check"]}, "reason": {"type": ["string", "null"]},
+          "evidence": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "retracted_preparation": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": false, "required": ["text", "reason"],
+                "properties": {"text": {"type": "string"}, "reason": {"type": "string"}}}
+    },
+    "advice": {"type": "array", "items": {"$ref": "#/$defs/plain"}},
+    "follow_up": {
+      "type": "object", "additionalProperties": false,
+      "required": ["value", "status", "reason", "confidence", "text", "kind", "interval_value", "interval_unit",
+                   "interval_value_max", "date"],
+      "properties": {
+        "value": {"type": ["string", "null"]}, "status": {"$ref": "#/$defs/value_status"},
+        "reason": {"type": ["string", "null"]}, "confidence": {"type": ["number", "null"]},
+        "text": {"type": ["string", "null"]},
+        "kind": {"enum": ["interval", "date", "as_needed", null]},
+        "interval_value": {"type": ["number", "null"]},
+        "interval_unit": {"enum": ["days", "weeks", "months", "years", null]},
+        "interval_value_max": {"type": ["number", "null"]},
+        "date": {"type": ["string", "null"]}
+      }
+    },
+    "medications": {"type": "array", "items": {"$ref": "#/$defs/medication"}},
+    "lab_results": {"type": "array", "items": {"$ref": "#/$defs/lab_result"}},
+    "vitals": {"type": "array", "items": {"$ref": "#/$defs/vital"}},
+    "diagnoses": {"type": "array", "items": {"$ref": "#/$defs/plain"}},
+    "other": {"type": "array", "items": {"$ref": "#/$defs/plain"}},
+    "not_extracted": {"type": "array", "items": {"type": "string"}},
+    "notice": {"type": "string"}
+  },
+  "$defs": {
+    "value_status": {"enum": ["checked", "needs_check", "absent", "not_gated"]},
+    "item_status": {"enum": ["accepted", "needs_check", "rejected"]},
+    "value": {
+      "type": "object", "additionalProperties": false, "required": ["value", "status", "reason", "confidence"],
+      "properties": {
+        "value": {"type": ["string", "number", "boolean", "null"]}, "status": {"$ref": "#/$defs/value_status"},
+        "reason": {"type": ["string", "null"]}, "confidence": {"type": ["number", "null"]}
+      }
+    },
+    "earlier_readings": {
+      "description": "Readings a person replaced. They stay referenced; the current value is the corrected one.",
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": false, "required": ["value", "corrected_by"],
+                "properties": {"value": {"type": ["string", "null"]}, "corrected_by": {"type": ["string", "null"]}}}
+    },
+    "plain": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fact_id", "text", "status", "reason", "confidence"],
+      "properties": {
+        "fact_id": {"type": "string"}, "text": {"type": ["string", "null"]}, "status": {"$ref": "#/$defs/item_status"},
+        "reason": {"type": ["string", "null"]}, "confidence": {"type": ["number", "null"]},
+        "earlier_readings": {"$ref": "#/$defs/earlier_readings"}
+      }
+    },
+    "lab_test": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fact_id", "text", "as_written", "code", "code_system", "code_display", "code_status", "context",
+                   "preparation", "status", "reason", "confidence"],
+      "properties": {
+        "fact_id": {"type": "string"}, "text": {"type": ["string", "null"]}, "as_written": {"type": ["string", "null"]},
+        "code": {"type": ["string", "null"]}, "code_system": {"type": ["string", "null"]},
+        "code_display": {"type": ["string", "null"]},
+        "code_status": {"enum": ["unmapped", "candidate", "bound", "local_only", null]},
+        "context": {
+          "type": "array",
+          "items": {"type": "object", "additionalProperties": false, "required": ["text", "kind", "relation", "quote"],
+                    "properties": {"text": {"type": "string"}, "kind": {"enum": ["diagnosis", "complaint"]},
+                                   "relation": {"enum": ["same_line", "same_page"]}, "quote": {"type": ["string", "null"]}}}
+        },
+        "preparation": {"type": "array", "items": {"type": "string"}},
+        "status": {"$ref": "#/$defs/item_status"}, "reason": {"type": ["string", "null"]},
+        "confidence": {"type": ["number", "null"]}, "earlier_readings": {"$ref": "#/$defs/earlier_readings"}
+      }
+    },
+    "medication": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fact_id", "text", "drug", "strength", "strength_unit", "dose", "dose_unit", "route", "frequency",
+                   "duration_days", "instructions", "status", "reason", "confidence"],
+      "properties": {
+        "fact_id": {"type": "string"}, "text": {"type": ["string", "null"]}, "drug": {"type": ["string", "null"]},
+        "strength": {"type": ["number", "null"]}, "strength_unit": {"type": ["string", "null"]},
+        "dose": {"type": ["number", "null"]}, "dose_unit": {"type": ["string", "null"]},
+        "route": {"type": ["string", "null"]}, "frequency": {"type": ["string", "null"]},
+        "duration_days": {"type": ["number", "null"]}, "instructions": {"type": ["string", "null"]},
+        "status": {"$ref": "#/$defs/item_status"}, "reason": {"type": ["string", "null"]},
+        "confidence": {"type": ["number", "null"]}, "earlier_readings": {"$ref": "#/$defs/earlier_readings"}
+      }
+    },
+    "lab_result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fact_id", "text", "name", "value", "value_text", "unit", "ref_low", "ref_high", "ref_text", "flag",
+                   "code", "code_system", "status", "reason", "confidence"],
+      "properties": {
+        "fact_id": {"type": "string"}, "text": {"type": ["string", "null"]}, "name": {"type": ["string", "null"]},
+        "value": {"type": ["number", "null"]}, "value_text": {"type": ["string", "null"]},
+        "unit": {"type": ["string", "null"]}, "ref_low": {"type": ["number", "null"]},
+        "ref_high": {"type": ["number", "null"]}, "ref_text": {"type": ["string", "null"]},
+        "flag": {"type": ["string", "null"]}, "code": {"type": ["string", "null"]},
+        "code_system": {"type": ["string", "null"]}, "status": {"$ref": "#/$defs/item_status"},
+        "reason": {"type": ["string", "null"]}, "confidence": {"type": ["number", "null"]},
+        "earlier_readings": {"$ref": "#/$defs/earlier_readings"}
+      }
+    },
+    "vital": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fact_id", "text", "name", "value", "value_text", "unit", "status", "reason", "confidence"],
+      "properties": {
+        "fact_id": {"type": "string"}, "text": {"type": ["string", "null"]}, "name": {"type": ["string", "null"]},
+        "value": {"type": ["number", "null"]}, "value_text": {"type": ["string", "null"]},
+        "unit": {"type": ["string", "null"]}, "status": {"$ref": "#/$defs/item_status"},
+        "reason": {"type": ["string", "null"]}, "confidence": {"type": ["number", "null"]},
+        "earlier_readings": {"$ref": "#/$defs/earlier_readings"}
+      }
+    }
+  }
+}

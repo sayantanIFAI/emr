@@ -1,10 +1,10 @@
-"""JSON placeholder connector (UP-S3, for now).
+"""Result JSON (UP-S3 / OUT-S2): ``result.v1``.
 
 A *connector* turns one finished document into whatever a downstream system wants. The real
-downstream (HIS / EMR) is not chosen yet, so this placeholder emits a plain, versioned JSON that
-the upload screen shows and lets the person download. When the real contract (OUT-S2,
-``result.v1``) exists it replaces :class:`JsonPlaceholderConnector` behind the same interface;
-nothing else changes.
+downstream (HIS / EMR) is not chosen yet, so the format is this repo's own, versioned and STRICT:
+``schemas/result.v1.json`` (no field the schema does not list, ``null`` for unknown, fixed lists for
+every category) and every result is validated against it before anyone sees it. When the real
+downstream is chosen its field names change under a new version (``result.v2``); the interface does not.
 
 Scope (MLP1): patient, doctor, lab tests (with preparation and context), advice and follow-up.
 
@@ -28,6 +28,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Protocol
 
 from sqlalchemy import text
@@ -36,7 +38,7 @@ from .. import repo
 from ..db import session_scope
 from ..extract import fields as F
 
-SCHEMA_VERSION = "result.placeholder.v1"
+SCHEMA_VERSION = "result.v1"
 NOTICE = ("Read by a machine. Values marked needs a check must be verified by a person. "
           "Not for diagnosis.")        # PLACEHOLDER wording: the owner and a clinician approve the real text
 
@@ -128,6 +130,8 @@ class ResultInputs:
     payload: dict[str, Any] = field(default_factory=dict)       # latest extraction payload
     facts: list[dict[str, Any]] = field(default_factory=list)   # current facts, medication detail merged
     blocks: list[dict[str, Any]] = field(default_factory=list)  # OCR blocks, in the order the prompt numbered them
+    source: dict[str, Any] = field(default_factory=dict)        # where a dropped file came from (listener_file)
+    corrections: list[dict[str, Any]] = field(default_factory=list)  # earlier readings a person replaced
 
 
 def _quality(pages: list[dict[str, Any]], doc: dict[str, Any]) -> dict[str, Any]:
@@ -181,6 +185,15 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         t["context"] = context.get(key, [])
         t["preparation"] = [p["text"] for p in checks["preparation"] if _applies(p, key)]
 
+    earlier: dict[str, list[dict[str, Any]]] = {}
+    for c in inp.corrections:                      # the replaced reading stays referenced (OUT-S2 AC4)
+        earlier.setdefault(str(c["fact_id"]), []).append(
+            {"value": c.get("original_value"), "corrected_by": c.get("reviewer_id")})
+    for lst in (*buckets.values(), other):
+        for i in lst:
+            if i["fact_id"] in earlier:
+                i["earlier_readings"] = earlier[i["fact_id"]]
+
     items = [i for lst in (*buckets.values(), other) for i in lst]
     n_check = sum(1 for i in items if i["status"] == "needs_check") + len(checks["review"])
     quality = _quality(inp.pages, doc)
@@ -201,11 +214,17 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
     p, d = checks["patient"], checks["doctor"]
     fu = checks["follow_up"]
     cls = inp.classification or {}
+    refused = status in ("held_for_rescan", "error")
+    src = inp.source or {}
     return {
         "schema_version": SCHEMA_VERSION,
         "document_id": str(doc["id"]),
         "filename": doc.get("original_filename"),
-        "source": "upload_screen",
+        "source": {"channel": doc.get("source_channel"), "drive": src.get("connector"),
+                   "dropped_file_name": src.get("name"), "original_filename": doc.get("original_filename")},
+        "refusal": {"refused": refused,
+                    "reason": (doc.get("error_detail") or "; ".join(quality["reasons"]) or None) if refused else None},
+        "links": {"original": f"api/documents/{doc['id']}/original"},
         "doc_type": cls.get("doc_type"),
         "is_handwritten": cls.get("is_handwritten"),
         "page_count": doc.get("page_count"),
@@ -230,6 +249,35 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
     }
 
 
+class ResultInvalid(Exception):
+    """The built result does not match ``schemas/result.v1.json``: it is never handed out."""
+
+
+_SCHEMA_PATH = Path(__file__).resolve().parents[3] / "schemas" / "result.v1.json"
+
+
+@lru_cache(maxsize=1)
+def result_schema() -> dict[str, Any]:
+    return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def validate_result(result: dict[str, Any]) -> None:
+    """Raise :class:`ResultInvalid` unless ``result`` matches the strict schema (an unknown field fails)."""
+    import jsonschema
+
+    errors = sorted(jsonschema.Draft202012Validator(result_schema()).iter_errors(_as_json(result)),
+                    key=lambda e: list(e.absolute_path))
+    if errors:
+        e = errors[0]
+        where = ".".join(str(p) for p in e.absolute_path) or "(top)"
+        raise ResultInvalid(f"result does not match result.v1 at {where}: {e.message[:200]}")
+
+
+def _as_json(x: Any) -> Any:
+    """What the serialised JSON would contain (dates and UUIDs as text), so validation sees the same thing."""
+    return json.loads(json.dumps(x, default=str))
+
+
 def to_bytes(result: dict[str, Any]) -> bytes:
     """The one canonical serialisation: the screen shows it and the download is these exact bytes."""
     return (json.dumps(result, indent=2, ensure_ascii=False, default=str) + "\n").encode("utf-8")
@@ -246,10 +294,17 @@ def gather(sess: Any, document_id: str) -> ResultInputs | None:
     payload = sess.execute(
         text("SELECT payload FROM extraction WHERE document_id = :d ORDER BY created_at DESC LIMIT 1"),
         {"d": document_id}).scalar_one_or_none()
+    src = sess.execute(
+        text("SELECT connector, name FROM listener_file WHERE document_id = :d ORDER BY first_seen_at LIMIT 1"),
+        {"d": document_id}).mappings().first()
+    corrections = sess.execute(
+        text("SELECT fact_id, original_value, reviewer_id FROM correction WHERE document_id = :d "
+             "ORDER BY created_at, id"), {"d": document_id}).mappings().all()
     return ResultInputs(doc, repo.get_doc_classification(sess, document_id),
                         repo.list_document_pages(sess, document_id),
                         payload if isinstance(payload, dict) else {}, facts,
-                        repo.list_ocr_blocks(sess, document_id))
+                        repo.list_ocr_blocks(sess, document_id),
+                        dict(src) if src else {}, [dict(c) for c in corrections])
 
 
 class OutputConnector(Protocol):
@@ -264,7 +319,11 @@ class JsonPlaceholderConnector:
     def render(self, document_id: str) -> dict[str, Any] | None:
         with session_scope() as sess:
             inp = gather(sess, document_id)
-        return build_result(inp) if inp else None
+        if not inp:
+            return None
+        result = build_result(inp)
+        validate_result(result)              # a result that breaks the contract is never served
+        return result
 
 
 _CONNECTORS: dict[str, type] = {JsonPlaceholderConnector.name: JsonPlaceholderConnector}

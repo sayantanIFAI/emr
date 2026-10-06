@@ -304,6 +304,9 @@ def validate_document(document_id: str | UUID) -> ValidateResult:
 
     log.info("validated", document_id=document_id, auto_accepted=auto, in_review=review,
              conflicts=conflicts, blockers=blockers_total, partial=partial)
+    from ..output.store import write_result_quietly      # after the commit: the file is built from saved rows
+
+    write_result_quietly(document_id)
     return ValidateResult(document_id, auto, review, conflicts, blockers_total)
 
 

@@ -56,7 +56,7 @@ ADV = _fact("advice", "low salt diet")
 
 def test_every_value_carries_a_status():
     r = jc.build_result(_inputs([HBA, FBS, ADV], payload=PAYLOAD))
-    assert r["schema_version"] == "result.placeholder.v1" and r["document_id"] == DOC
+    assert r["schema_version"] == "result.v1" and r["document_id"] == DOC
     values = [*r["patient"].values(), *(v for k, v in r["doctor"].items() if k != "clinic"),
               *r["doctor"]["clinic"].values(), r["follow_up"]]
     for v in values:
@@ -199,6 +199,15 @@ def test_gather_reads_the_document_facts_payload_and_the_ocr_blocks(monkeypatch)
         def scalar_one_or_none(self):
             return PAYLOAD
 
+        def mappings(self):
+            return self
+
+        def first(self):
+            return {"connector": "local", "name": "scan 1.pdf"}
+
+        def all(self):
+            return [{"fact_id": "f1", "original_value": "Metfomin", "reviewer_id": "dr.rao"}]
+
     class Sess:
         def execute(self, *a, **k):
             return Res()
@@ -211,6 +220,8 @@ def test_gather_reads_the_document_facts_payload_and_the_ocr_blocks(monkeypatch)
     monkeypatch.setattr(jc.repo, "list_ocr_blocks", lambda s, d: BLOCKS)
     inp = jc.gather(Sess(), DOC)
     assert inp.payload == PAYLOAD and inp.blocks == BLOCKS
+    assert inp.source == {"connector": "local", "name": "scan 1.pdf"}
+    assert inp.corrections[0]["original_value"] == "Metfomin"
     assert inp.facts[0]["medication"] == {"drug_text": "Metformin"} and "medication" not in inp.facts[1]
     monkeypatch.setattr(jc.repo, "get_document", lambda s, d: None)
     assert jc.gather(Sess(), DOC) is None
