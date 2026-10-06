@@ -15,6 +15,7 @@ page-level VLM transcription, recorded with evidence state ``page_level``.
 from __future__ import annotations
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -116,8 +117,15 @@ def recognize_page(*, document_id: str, page: dict[str, Any], rapid_lines: list[
     crops = [p[0] for p in prepared]
     crop_info = [p[1] for p in prepared]
     host = get_ocr_host()
-    tro = host.trocr(crops) if crops else []
-    qwe = QwenLineEngine().recognize(crops) if crops else []
+    if crops:
+        # the two readers are independent (neither sees the other's answer) and sit on different
+        # servers, so they read the same crops at the same time
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="read") as ex:
+            f_tro = ex.submit(host.trocr, crops)
+            f_qwe = ex.submit(QwenLineEngine().recognize, crops)
+            tro, qwe = f_tro.result(), f_qwe.result()
+    else:
+        tro, qwe = [], []
     qwe_b: list[Reading] = []
     again: list[bytes] = []
     if crops and settings.qwen_self_consistency:

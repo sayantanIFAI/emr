@@ -342,7 +342,9 @@ def _run_job(jid: str, files: list[tuple[str, bytes]]) -> None:
             with session_scope() as sess:
                 job.patient = merge_identity_evidence(sess, job.patient_id, candidates)
 
-        job.state = "review" if any(d.status == "done" for d in job.docs) else "error"
+        ok = any(d.status == "done" for d in job.docs)
+        # with the review screens off the job simply ends: "done" (the result JSON is the output)
+        job.state = ("review" if settings.review_ui_enabled else "done") if ok else "error"
         _refresh_result(job)
         if job.state == "review":
             try:
@@ -357,6 +359,11 @@ def _run_job(jid: str, files: list[tuple[str, bytes]]) -> None:
 
 
 def _refresh_result(job: "Job") -> None:
+    if not settings.fhir_enabled:
+        # no FHIR is built until the owner asks for it: the result is the per-document JSON
+        job.result = {"patient": job.patient, "bundles": [], "artifact_count": 0,
+                      "ready_to_share": 0, "needs_review": 0}
+        return
     if not job.patient_id:
         job.result = {"patient": None, "bundles": [], "artifact_count": 0,
                       "ready_to_share": 0, "needs_review": 0}

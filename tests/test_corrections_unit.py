@@ -345,6 +345,7 @@ def client(sess, monkeypatch):
     monkeypatch.setattr(svc, "load_context", lambda s, d, f: ctx())
     monkeypatch.setattr(api.review, "submit_decision", lambda fact, action, **kw: applied.append({"fact": fact, "action": action, **kw}))
     monkeypatch.setattr(api.profile_cache, "get_cache", lambda: None)
+    monkeypatch.setattr(settings, "review_ui_enabled", True)     # these paths are closed by default
     c = TestClient(webapp.app)
     c.applied, c.sess = applied, sess
     return c

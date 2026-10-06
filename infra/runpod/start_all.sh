@@ -10,7 +10,8 @@
 #   - the model gateway (Qwen2.5-VL) process
 #   - the CPU OCR host (RapidOCR + TrOCR, recognition v2)
 #   - the web app process
-#   - background agents: FHIR builder, file listener + recovery, dispatch
+#   - background agents: file listener + recovery. The FHIR builder and dispatch agents start ONLY
+#     when the owner sets CDI_START_FHIR=1 / CDI_START_DISPATCH=1 (they are off by default).
 set -uo pipefail
 REPO=/workspace/cdi
 cd "$REPO"
@@ -55,7 +56,15 @@ done
 curl -s "http://127.0.0.1:${WBP}/healthz"; echo
 
 echo "########## 4. agents ##########"
-for mod in agents.fhir_builder listener.recovery; do
+# FHIR is built only when the owner says so: stop a leftover builder and do not start a new one
+pkill -f "cdi_adapter.agents.fhir_builder" 2>/dev/null || true
+if [ "${CDI_START_FHIR:-0}" = "1" ]; then
+  setsid nohup python -m cdi_adapter.agents.fhir_builder > /workspace/logs/fhir_builder.log 2>&1 < /dev/null &
+  echo "fhir_builder pid $!"
+else
+  echo "fhir_builder: not started (CDI_START_FHIR is not 1)"
+fi
+for mod in listener.recovery; do
   pkill -f "cdi_adapter.$mod" 2>/dev/null || true
   setsid nohup python -m "cdi_adapter.$mod" > "/workspace/logs/${mod##*.}.log" 2>&1 < /dev/null &
   echo "$mod pid $!"
@@ -66,10 +75,14 @@ if [ "${CDI_START_LISTENER:-0}" = "1" ]; then
   setsid nohup python -m cdi_adapter.listener.service > /workspace/logs/listener.log 2>&1 < /dev/null &
   echo "listener pid $!  (connector ${CDI_LISTENER_CONNECTOR:-local})"
 fi
-# dispatch sends nothing until a target is approved; safe to keep running
+# dispatch (downstream screens) is off unless the owner asks for it
 pkill -f "cdi_adapter.agents.dispatch" 2>/dev/null || true
-setsid nohup python -m cdi_adapter.agents.dispatch run > /workspace/logs/dispatch.log 2>&1 < /dev/null &
-echo "dispatch pid $!"
+if [ "${CDI_START_DISPATCH:-0}" = "1" ]; then
+  setsid nohup python -m cdi_adapter.agents.dispatch run > /workspace/logs/dispatch.log 2>&1 < /dev/null &
+  echo "dispatch pid $!"
+else
+  echo "dispatch: not started (CDI_START_DISPATCH is not 1)"
+fi
 
 POD=$(tr '\0' '\n' < /proc/1/environ | sed -n 's/^RUNPOD_POD_ID=//p')
 echo

@@ -39,8 +39,11 @@ def healthz() -> dict[str, Any]:
         rapid_ok = True
     except Exception:  # noqa: BLE001
         rapid_ok = False
-    return {"status": "ok", "device": "cpu", "rapidocr": rapid_ok,
-            "trocr": {"enabled": settings.trocr_enabled, **_trocr_engine().info()}}
+    info = _trocr_engine().info()
+    return {"status": "ok", "device": info.get("device") or "cpu", "rapidocr": rapid_ok,
+            "rapidocr_wants_cuda": settings.rapidocr_use_cuda,
+            "trocr": {"enabled": settings.trocr_enabled, "wants": settings.trocr_device,
+                      **info}}
 
 
 @app.post("/ocr/rapid")

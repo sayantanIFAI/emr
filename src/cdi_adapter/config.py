@@ -81,6 +81,16 @@ class Settings(BaseSettings):
 
     # --- web app (upload UI + FHIR API) ---
     webapp_port: int = 8080   # RunPod proxies external 8081 -> localhost:8080
+    # Deployment surface. Default = one admin who uploads images and reads the result JSON.
+    # The review / reviewer / correction screens and every FHIR path stay shut until the owner
+    # switches them on (webapp/surface.py answers 404 for them; the FHIR builder agent is not
+    # started and nothing is queued for it).
+    review_ui_enabled: bool = False
+    fhir_enabled: bool = False
+    # HTTP Basic sign-in in front of the whole web app (except /healthz). Blank = no sign-in, which
+    # is accepted only while CDI_ENV=dev: any other environment refuses to start without a password.
+    admin_user: str = "admin"
+    admin_password: str = ""
 
     # --- model gateway (cdi_adapter.mlserve) ---
     mlserve_url: str = "http://127.0.0.1:8077"
@@ -125,6 +135,12 @@ class Settings(BaseSettings):
     trocr_model_id: str = "microsoft/trocr-base-handwritten"   # English (IAM); Bengali is E2-S10
     trocr_max_new_tokens: int = 64
     trocr_batch_size: int = 8
+    # where TrOCR runs: cpu | cuda | auto (cuda when a GPU is visible). The pod puts it on the same
+    # GPU as Qwen (about 1.3 GB); a missing GPU with "cuda" falls back to the CPU and says so.
+    trocr_device: str = "cpu"
+    # RapidOCR on the GPU needs onnxruntime-gpu with a CUDA build that supports the card; if the
+    # CUDA provider cannot start it falls back to the CPU and logs which one it is using.
+    rapidocr_use_cuda: bool = False
     # crop standard (IM-S3): what every handwriting crop looks like when it reaches a reader.
     # PLACEHOLDERS, not tuned: accuracy by crop size is not measured yet (the size of every crop is
     # recorded with the line so it can be). 0 turns the upscaling off.

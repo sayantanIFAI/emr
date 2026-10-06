@@ -31,6 +31,37 @@ class OcrLine:
     polygon: list[list[int]]  # 4 points
 
 
+def _cuda_provider_ready() -> bool:
+    try:
+        import onnxruntime as ort
+
+        return "CUDAExecutionProvider" in ort.get_available_providers()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _build_engine(cls: Any) -> Any:
+    """RapidOCR on the GPU when asked and the CUDA provider exists; otherwise the CPU. Which one is
+    in use is logged, never assumed."""
+    use_cuda = bool(settings.rapidocr_use_cuda)
+    if use_cuda and not _cuda_provider_ready():
+        log.warning("rapidocr_cuda_provider_missing_using_cpu")
+        use_cuda = False
+    if use_cuda:
+        try:
+            eng = cls(det_use_cuda=True, cls_use_cuda=True, rec_use_cuda=True)
+            log.info("rapidocr_loaded", device="cuda")
+            return eng
+        except Exception as exc:  # noqa: BLE001 - the card/CUDA build may not be supported
+            log.warning("rapidocr_cuda_failed_using_cpu", error=str(exc)[:200])
+    try:
+        eng = cls(intra_op_num_threads=THREADS_PER_TASK, inter_op_num_threads=1)
+    except TypeError:  # older rapidocr without the kwargs
+        eng = cls()
+    log.info("rapidocr_loaded", device="cpu", intra_op_threads=THREADS_PER_TASK)
+    return eng
+
+
 def _get_engine():
     global _engine
     if _engine is None:
@@ -38,12 +69,7 @@ def _get_engine():
             if _engine is None:
                 from rapidocr_onnxruntime import RapidOCR
 
-                try:
-                    _engine = RapidOCR(intra_op_num_threads=THREADS_PER_TASK,
-                                       inter_op_num_threads=1)
-                except TypeError:  # older rapidocr without the kwargs
-                    _engine = RapidOCR()
-                log.info("rapidocr_loaded", intra_op_threads=THREADS_PER_TASK)
+                _engine = _build_engine(RapidOCR)
     return _engine
 
 

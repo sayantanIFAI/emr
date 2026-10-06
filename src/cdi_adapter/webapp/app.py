@@ -26,9 +26,16 @@ from .reviewer_page import REVIEWER_PAGE
 from .admin import router as admin_router
 from .corrections_api import router as corrections_router
 from .admin_page import ADMIN_PAGE
+from .surface import SurfaceMiddleware, require_auth_configured
+from .upload_page import ADMIN_PAGE as UPLOAD_ONLY_PAGE
 
 log = get_logger(__name__)
-app = FastAPI(title="CDI-Adapter - scanned docs -> ABDM FHIR", version=__version__)
+# the interactive API docs list every route: only a dev environment shows them
+_DEV = settings.env.strip().lower() == "dev"
+app = FastAPI(title="CDI-Adapter - scanned docs -> ABDM FHIR", version=__version__,
+              docs_url="/docs" if _DEV else None, redoc_url=None,
+              openapi_url="/openapi.json" if _DEV else None)
+app.add_middleware(SurfaceMiddleware)         # sign-in + closed paths (webapp/surface.py)
 app.include_router(reviewer_router)
 app.include_router(admin_router)
 app.include_router(corrections_router)
@@ -36,7 +43,8 @@ app.include_router(corrections_router)
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    return PAGE
+    # the full screen (patient look-up, reviewer links) only when the review screens are on
+    return PAGE if settings.review_ui_enabled else UPLOAD_ONLY_PAGE
 
 
 @app.get("/healthz")
@@ -310,6 +318,7 @@ def document_evidence(document_id: str) -> dict[str, Any]:
 def main() -> None:
     import uvicorn
 
+    require_auth_configured()
     uvicorn.run(app, host="0.0.0.0", port=settings.webapp_port,
                 log_level=settings.log_level.lower())
 

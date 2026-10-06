@@ -127,8 +127,11 @@ def sync_document(sess: Any, document_id: str) -> dict[str, int]:
 
 
 def enqueue_fhir(sess: Any, *, patient_id: str | None, document_id: str, reason: str) -> None:
-    """Queue (or re-arm) the document for the FHIR builder agent. One pending row per doc."""
-    if not patient_id:
+    """Queue (or re-arm) the document for the FHIR builder agent. One pending row per doc.
+    Does nothing unless ``CDI_FHIR_ENABLED`` is on: FHIR is built only when the owner says so."""
+    from ..config import settings
+
+    if not settings.fhir_enabled or not patient_id:
         return
     sess.execute(text(
         """

@@ -107,6 +107,7 @@ class TrOCREngine:
         self._processor = None
         self._lock = threading.Lock()
         self._load_error: str | None = None
+        self._device = "cpu"
 
     @property
     def version(self) -> str:
@@ -126,15 +127,28 @@ class TrOCREngine:
                 self._processor = _load_trocr_processor(self.model_id, TrOCRProcessor)
                 model = VisionEncoderDecoderModel.from_pretrained(self.model_id)
                 model.eval()
+                self._device = self._pick_device(torch)
+                model.to(self._device)
                 self._model = model
-                log.info("trocr_loaded", model=self.model_id, threads=THREADS_PER_TASK)
+                log.info("trocr_loaded", model=self.model_id, device=self._device,
+                         threads=THREADS_PER_TASK)
             except Exception as exc:  # noqa: BLE001 - missing torch/weights must not crash the pipeline
                 self._load_error = f"{type(exc).__name__}: {str(exc)[:200]}"
                 log.error("trocr_unavailable", model=self.model_id, error=self._load_error)
 
+    @staticmethod
+    def _pick_device(torch: Any) -> str:
+        want = (settings.trocr_device or "cpu").strip().lower()
+        if want in ("cuda", "auto"):
+            if torch.cuda.is_available():
+                return "cuda"
+            if want == "cuda":
+                log.warning("trocr_cuda_unavailable_using_cpu")
+        return "cpu"
+
     def info(self) -> dict[str, Any]:
         return {"model": self.model_id, "loaded": self._model is not None,
-                "error": self._load_error}
+                "device": getattr(self, "_device", None), "error": self._load_error}
 
     def recognize(self, crops_png: list[bytes]) -> list[Reading]:
         if not settings.trocr_enabled:
@@ -151,14 +165,14 @@ class TrOCREngine:
         bs = max(1, settings.trocr_batch_size)
         for i in range(0, len(crops_png), bs):
             batch = [Image.open(io.BytesIO(b)).convert("RGB") for b in crops_png[i:i + bs]]
-            pix = self._processor(images=batch, return_tensors="pt").pixel_values
+            pix = self._processor(images=batch, return_tensors="pt").pixel_values.to(self._device)
             with torch.inference_mode():
                 gen = self._model.generate(
                     pix, max_new_tokens=settings.trocr_max_new_tokens, num_beams=1,
                     do_sample=False, output_scores=True, return_dict_in_generate=True)
             texts = self._processor.batch_decode(gen.sequences, skip_special_tokens=True)
             trans = self._model.compute_transition_scores(
-                gen.sequences, gen.scores, normalize_logits=True)
+                gen.sequences, gen.scores, normalize_logits=True).float().cpu()
             pad_id = self._processor.tokenizer.pad_token_id
             for j, t in enumerate(texts):
                 toks: list[float] = []
