@@ -119,6 +119,14 @@ class Settings(BaseSettings):
     quality_gate_mode: str = "enforce"    # enforce = hold for rescan | warn = record only | off
     quality_min_blur_var: float = 25.0    # variance of the Laplacian; sharp 200-dpi scans >> 100
     quality_min_short_side_px: int = 600
+    # Text too small to read reliably (IM-S1): the p85 height of a glyph in pixels, measured on the page
+    # as sent to the readers. PLACEHOLDER, not tuned on real photos or handwriting. Basis: on clean
+    # SYNTHETIC printed text RapidOCR read >= 97% of characters down to a 8 px font (glyph p85 ~ 6 px),
+    # so 8 only rejects pictures far below that; handwriting very likely needs more. 0 turns the check off.
+    quality_min_text_height_px: int = 8
+    # a page looks sideways when the vertical-line score exceeds the horizontal-line score by this
+    # factor (synthetic pages: upright 0.08-0.31, turned 3.2-12; tune on real pictures)
+    quality_sideways_ratio: float = 2.0
     quality_max_glare_frac: float = 0.25  # share of page area in saturated blobs
     quality_max_dark_frac: float = 0.60   # share of page that is near-black (clipped/underexposed)
 
