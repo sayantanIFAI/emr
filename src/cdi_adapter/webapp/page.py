@@ -90,6 +90,17 @@ _HTML = r"""<!doctype html>
     </div>
   </div>
 
+  <div class="card" id="result-card" hidden>
+    <h2>Result (JSON)</h2>
+    <p class="hint" id="resnotice"></p>
+    <div class="res-top">
+      <select id="resdoc" aria-label="Document" hidden></select>
+      <span id="respill"></span>
+      <a class="btn btn-ghost btn-sm" id="resdl" href="#" download>Download JSON</a>
+    </div>
+    <pre class="resjson" id="resjson" tabindex="0" aria-label="Result JSON"></pre>
+  </div>
+
   <div class="card" id="sent-card" hidden>
     <h2>Sent to the reviewer</h2>
     <p class="hint" id="sentmsg">The extracted facts are now in the reviewer <b>workbasket</b>.
@@ -247,6 +258,28 @@ $("#go").onclick=async()=>{
   $("#emr-card").hidden=false; poll();
 };
 
+let RESULTS=[];
+async function loadResult(){            // the connector's JSON, shown as-is (UP-S3 placeholder)
+  let j;
+  try{ const r=await fetch("api/jobs/"+JOB+"/result.json"); if(!r.ok) throw 0; j=await r.json(); }
+  catch(e){ $("#resnotice").textContent="The result could not be loaded. Please try again in a moment."; $("#result-card").hidden=false; return; }
+  RESULTS=j.results||[];
+  const sel=$("#resdoc");
+  sel.innerHTML=RESULTS.map((r,i)=>'<option value="'+i+'">'+esc(r.filename||("Document "+(i+1)))+'</option>').join("");
+  sel.hidden=RESULTS.length<2; sel.onchange=()=>showResult(+sel.value);
+  $("#result-card").hidden=false; showResult(0);
+}
+function showResult(i){
+  const r=RESULTS[i]||{};
+  $("#resjson").textContent=JSON.stringify(r,null,2);
+  $("#resnotice").textContent=r.notice||"";
+  const n=r.needs_check_count||0;
+  $("#respill").innerHTML=r.status==="needs_check"||n?'<span class="pill warn">'+n+(n===1?" value needs":" values need")+' a check</span>'
+    :r.status==="complete"?'<span class="pill ok">all values accepted</span>':'<span class="pill">'+esc(r.status||"")+'</span>';
+  const dl=$("#resdl");
+  if(r.document_id){ dl.href="api/documents/"+r.document_id+"/result.json?download=true"; dl.hidden=false; } else dl.hidden=true;
+}
+
 function poll(){
   clearTimeout(TIMER);
   TIMER=setTimeout(async()=>{
@@ -264,6 +297,7 @@ function poll(){
       $("#sentmsg").innerHTML="<b>"+n+"</b> document"+(n===1?"":"s")+" processed. The extracted facts are"
         +" now in the reviewer <b>workbasket</b> — human review, correction, approval and ABDM FHIR"
         +" bundle generation all happen there.";
+      loadResult();
       $("#sent-card").hidden=false;
       $("#sent-card").scrollIntoView({behavior:"smooth"});
     } else if(j.state==="error"){ $("#hint").textContent="job error: "+(j.error||""); unlockAfterJob(); }
@@ -361,6 +395,11 @@ _UPLOAD_CSS = """
 .grouping{border:1px solid var(--line);border-radius:var(--r-ctl);margin:var(--sp-3) 0 0;padding:var(--sp-2) var(--sp-3)}
 .grouping legend{font-size:var(--fs-12);color:var(--muted);padding:0 var(--sp-1)}
 .grouping label{display:block;padding:var(--sp-1) 0}
+.res-top{display:flex;flex-wrap:wrap;gap:var(--sp-3);align-items:center;margin-bottom:var(--sp-3)}
+.res-top select{min-height:36px;border:1px solid var(--line-strong);border-radius:var(--r-ctl);padding:0 var(--sp-2);background:var(--surface)}
+.resjson{margin:0;max-height:440px;overflow:auto;background:var(--surface-2);border:1px solid var(--line);
+  border-radius:var(--r-ctl);padding:var(--sp-3);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  white-space:pre-wrap;overflow-wrap:anywhere}
 .up-err{margin-top:var(--sp-3);padding:var(--sp-2) var(--sp-3);color:var(--err);background:var(--err-bg);
   border:1px solid var(--err-line);border-radius:var(--r-ctl)}
 @media (max-width:560px){

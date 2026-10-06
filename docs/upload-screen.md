@@ -49,9 +49,22 @@ Free text: `abha` must be 14 digits (spaces / dashes allowed, stored as `XX-XXXX
   (`source_document` update, `original_parts`). The assembled PDF is a derived container, never the
   only copy.
 
+## UP-S3 as built: a JSON placeholder connector, shown on the screen
+
+The real downstream (HIS / EMR) is not chosen, so UP-S3 is a connector interface with one
+implementation, `json_placeholder` (`output/json_connector.py`, setting `CDI_OUTPUT_CONNECTOR`).
+When a job finishes the screen shows the connector's JSON for each document, with a **Download JSON**
+button that serves the same bytes (`GET /api/documents/{id}/result.json`, `?download=true`;
+`GET /api/jobs/{id}/result.json` for the whole job). Rules the JSON keeps: every value is
+`{value, status, reason, confidence}`; status is `accepted` / `needs_check` / `rejected`, or
+`not_gated` for identity and doctor fields read from the page; the document is `needs_check` while
+any value is; unknown is `null`; what is not extracted yet is listed in `not_extracted`; the
+same document gives the same bytes. The notice wording is a PLACEHOLDER pending owner and clinician
+approval. The four result cards, click-to-highlight evidence and "Report a wrong result" are not
+built (the real contract OUT-S2 replaces this connector).
+
 ## Not part of this story (still open)
 
 - Per-page quality reasons in plain words, "Retake this page", replace-one-page endpoint (UP-S2).
-- Result cards, JSON download, the "needs a check" tags (UP-S3; needs the OUT-S2 JSON contract first).
 - Extraction still reads page 1's image for the model call; pages 2..N reach it as OCR text only
   (`extract/service.py`). That is existing behaviour for any multi-page document.

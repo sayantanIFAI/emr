@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 from fastapi import Body, FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -16,6 +17,7 @@ from ..ml.client import get_client
 from ..storage import ping as s3_ping
 from . import review as review_svc
 from . import upload
+from ..output.json_connector import get_connector, to_bytes
 from .jobs import apply_edits_and_generate, create_job, get_job, job_facts
 from .page import PAGE
 from .review_page import REVIEW_PAGE
@@ -118,6 +120,41 @@ def job_status(job_id: str) -> dict[str, Any]:
     if not job:
         raise HTTPException(404, "unknown job")
     return job.public()
+
+
+def _doc_result(document_id: str) -> dict[str, Any] | None:
+    try:
+        uuid.UUID(document_id)
+    except ValueError:
+        return None
+    return get_connector().render(document_id)
+
+
+@app.get("/api/documents/{document_id}/result.json")
+def document_result(document_id: str, download: bool = False) -> Response:
+    """The connector's JSON for one document (UP-S3 placeholder). ``download=true`` = same bytes
+    as a file."""
+    result = _doc_result(document_id)
+    if result is None:
+        raise HTTPException(404, "document not found")
+    headers = {"Content-Disposition": f'attachment; filename="result_{document_id}.json"'} if download else {}
+    return Response(content=to_bytes(result), media_type="application/json", headers=headers)
+
+
+@app.get("/api/jobs/{job_id}/result.json")
+def job_result(job_id: str) -> Any:
+    """Every document of a job, for the screen. A document that failed before it had an id is listed
+    with its status so nothing disappears silently."""
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "unknown job")
+    results: list[dict[str, Any]] = []
+    for d in job.docs:
+        res = _doc_result(d.document_id) if d.document_id else None
+        results.append(res or {"filename": d.filename, "document_id": d.document_id,
+                               "status": "error" if d.status == "error" else d.status,
+                               "reason": d.error})
+    return {"job_id": job_id, "results": results}
 
 
 @app.get("/api/jobs/{job_id}/facts")

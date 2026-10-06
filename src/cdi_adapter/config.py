@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     max_pages: int = 200
     allowed_mime_prefixes: tuple[str, ...] = ("image/", "application/pdf")
 
+    # --- output connector (UP-S3): what a finished document is turned into for downstream ---
+    output_connector: str = "json_placeholder"      # the real HIS / EMR contract (OUT-S2) replaces it
+
     # --- upload screen (UP-S1) ---
     # What the web upload accepts, decided from the file's bytes (never its name): JPG, PNG, TIFF, PDF.
     upload_mime_types: tuple[str, ...] = ("application/pdf", "image/png", "image/jpeg", "image/tiff")
