@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -82,6 +83,48 @@ def error_location(exc: jsonschema.ValidationError) -> str:
     quotes the offending value (``['Anil Mehra'] is not of type 'string'``), which for a clinical
     document is patient data, and logs are shipped to a log store."""
     return "/".join(str(p) for p in exc.absolute_path)[:80] or "<root>"
+
+
+def salvage_truncated(text: str, max_tries: int = 400) -> dict[str, Any] | None:
+    """The complete part of an answer that was cut off by the length limit, or ``None``.
+
+    Cuts at the last comma that sits outside a string and closes the open brackets, so only elements
+    that were completely written are kept. The final element (which may itself be cut, such as a
+    dose of 12 that was going to be 125) is always dropped, and nothing is ever completed or guessed.
+    The caller marks the result incomplete."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    s = text[start:]
+    stack: list[str] = []
+    in_str = esc = False
+    cuts: list[tuple[int, str]] = []                  # (comma position, closers needed there)
+    for i, ch in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+        elif ch == "," and stack:
+            cuts.append((i, "".join(reversed(stack))))
+    for pos, closers in list(reversed(cuts))[:max_tries]:
+        try:
+            obj = json.loads(s[:pos] + closers)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
 
 
 def _stub_classify(prompt: str) -> dict[str, Any]:
@@ -174,7 +217,23 @@ def repair_payload(obj: Any, schema: dict | None = None) -> Any:
     return obj
 
 
+@dataclass
+class GenResult:
+    """One model answer with what is known about it."""
+
+    text: str
+    model: str | None = None
+    truncated: bool = False          # the answer hit the length limit: it is cut off, not finished
+
+
 class _BaseClient:
+    def vlm_generate_full(
+        self, image: bytes | str, prompt: str, *, max_tokens: int = 512,
+        json_schema: dict | None = None,
+    ) -> GenResult:
+        text, model = self.vlm_generate_ex(image, prompt, max_tokens=max_tokens, json_schema=json_schema)
+        return GenResult(text, model)
+
     def vlm_generate(
         self, image: bytes | str, prompt: str, *, max_tokens: int = 512,
         json_schema: dict | None = None,
@@ -211,22 +270,32 @@ class _BaseClient:
         best: dict[str, Any] | None = None
         hint = ""
         served: str | None = None
+        cut = marked = False
         for attempt in range(retries + 1):
-            raw, served = self.vlm_generate_ex(
-                image, prompt + hint, max_tokens=max_tokens, json_schema=schema
-            )
+            got = self.vlm_generate_full(image, prompt + hint, max_tokens=max_tokens, json_schema=schema)
+            raw, served, cut = got.text, got.model, got.truncated
+            if cut:
+                log.warning("vlm_json_truncated", attempt=attempt, max_tokens=max_tokens)
+            salvaged = False
             try:
                 obj = extract_json(raw)
             except (MLError, json.JSONDecodeError) as exc:
-                last = exc
-                hint = "\n\nReturn ONLY one valid JSON object, nothing else."
-                log.warning("vlm_json_parse_retry", attempt=attempt, error=str(exc)[:140])
-                continue
+                rescued = salvage_truncated(raw) if cut else None
+                if rescued is None:
+                    last = exc
+                    hint = "\n\nReturn ONLY one valid JSON object, nothing else."
+                    log.warning("vlm_json_parse_retry", attempt=attempt, error=str(exc)[:140])
+                    continue
+                obj, salvaged = rescued, True
+                log.warning("vlm_json_salvaged", attempt=attempt)
             if lenient:
                 obj = repair_payload(obj, schema)
             best = obj
+            marked = cut or salvaged
             try:
                 validate_schema(obj, schema)
+                if marked:      # parsed, but the model hit the length limit: never present it as finished
+                    obj["_partial"] = obj["_truncated"] = True
                 return obj, served
             except jsonschema.ValidationError as exc:
                 last = exc
@@ -237,6 +306,8 @@ class _BaseClient:
                 log.warning("vlm_json_retry", attempt=attempt, error_at=error_location(exc))
         if lenient and isinstance(best, dict):
             best["_partial"] = True
+            if marked:
+                best["_truncated"] = True
             log.warning("vlm_json_partial",
                         error_at=error_location(last) if isinstance(last, jsonschema.ValidationError)
                         else type(last).__name__)
@@ -284,6 +355,23 @@ class HttpMLClient(_BaseClient):
         body = r.json()
         model = body.get("model")
         return body["text"], model if isinstance(model, str) and model else None
+
+    def vlm_generate_full(
+        self, image: bytes | str, prompt: str, *, max_tokens: int = 512,
+        json_schema: dict | None = None,
+    ) -> GenResult:
+        payload = {"image_b64": _b64(image), "prompt": prompt, "max_tokens": max_tokens,
+                   "json_schema": json_schema}
+        try:
+            r = self._c.post("/vlm/generate", json=payload)
+            r.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise MLError(f"mlserve request failed: {exc}") from exc
+        body = r.json()
+        model = body.get("model")
+        done = (body.get("usage") or {}).get("completion_tokens")
+        return GenResult(body["text"], model if isinstance(model, str) and model else None,
+                         isinstance(done, int) and done >= max_tokens)
 
 
 class StubMLClient(_BaseClient):

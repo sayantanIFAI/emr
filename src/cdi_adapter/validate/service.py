@@ -79,6 +79,29 @@ def fallback_findings(extraction_model: str | None, blocks: list[dict[str, Any]]
     return [("blocker", "fallback-model", f"read by the fallback model {models[0]}")]
 
 
+def field_review_items(payload: dict[str, Any] | None, blocks: list[dict[str, Any]], doc: dict[str, Any],
+                       extraction_model: str | None) -> list[dict[str, str]]:
+    """What a person must look at among the values that are not facts: patient and doctor details,
+    lab preparation, the follow-up, text aimed at the system, a cut-off or partial answer, and
+    everything the OOM fallback model read. ``[]`` when all is well."""
+    from datetime import UTC, date, datetime
+
+    from ..extract import fields
+
+    if not isinstance(payload, dict):
+        return []
+    d = doc.get("captured_at") or doc.get("ingested_at")
+    today = d.date() if isinstance(d, datetime) else d if isinstance(d, date) else datetime.now(UTC).date()
+    items = list(fields.build_checks(payload, blocks, today)["review"])
+    if payload.get("_truncated"):
+        items.append({"field": "document", "reason": "the answer was cut off by the length limit: it is incomplete"})
+    elif payload.get("_partial"):
+        items.append({"field": "document", "reason": "the answer did not fully match the form"})
+    if settings.gate_fallback_review and is_fallback_model(extraction_model):
+        items.append({"field": "document", "reason": f"read by the fallback model {extraction_model}"})
+    return items
+
+
 def validate_document(document_id: str | UUID) -> ValidateResult:
     document_id = str(document_id)
     auto = review = conflicts = blockers_total = 0
@@ -238,6 +261,14 @@ def validate_document(document_id: str | UUID) -> ValidateResult:
                                 confidence=conf, policy_id=rule.key if rule else None,
                                 trace=trace, document_id=document_id)
 
+        if (cls or {}).get("doc_type") == "prescription":
+            flagged = field_review_items(ext if isinstance(ext, dict) else None,
+                                         repo.list_ocr_blocks(sess, document_id), doc, extraction_model)
+            if flagged:
+                repo.create_review_task(
+                    sess, kind="low_confidence", patient_id=str(facts[0]["patient_id"]) if facts else None,
+                    document_id=document_id, ref_fact_ids=[], priority=3,
+                    payload={"source": "field-checks", "fields": flagged})
         if held:
             repo.create_review_task(
                 sess, kind=_dominant_kind(held),

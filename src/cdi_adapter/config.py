@@ -105,6 +105,13 @@ class Settings(BaseSettings):
     trocr_model_id: str = "microsoft/trocr-base-handwritten"   # English (IAM); Bengali is E2-S10
     trocr_max_new_tokens: int = 64
     trocr_batch_size: int = 8
+    # crop standard (IM-S3): what every handwriting crop looks like when it reaches a reader.
+    # PLACEHOLDERS, not tuned: accuracy by crop size is not measured yet (the size of every crop is
+    # recorded with the line so it can be). 0 turns the upscaling off.
+    crop_pad_frac: float = 0.04           # padding on each side, as a share of the box, so strokes are not cut
+    crop_pad_min_px: int = 4              # ... and never less than this
+    crop_min_height_px: int = 32          # a crop shorter than this is upscaled before it is read
+    crop_max_upscale: float = 4.0         # ... by at most this factor; still shorter = flagged below_standard
     qwen_line_mode: str = "crop"          # crop = independent read per line crop | off
     qwen_line_max_tokens: int = 48
     # an engine reading is "the same" as another when, after numeric-context

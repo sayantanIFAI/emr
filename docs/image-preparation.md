@@ -62,7 +62,11 @@ flagged sideways.
 - Built: line detection, four labels (printed, handwritten, mixed, uncertain), uncertain and mixed go
   to both reader paths, crops cut from the unfiltered render with a hash and the box recorded.
   MEASURED: 33 lines on a synthetic page in 0.2 s (`detect_lines`), 0.27 s with the per-line label.
-- Missing: the crop standard (minimum crop height, upscaling of very small crops, padding recorded with
-  each crop), accuracy by crop size, the ablation of the routing step, and recall / label accuracy on
-  real handwriting.
+- **Crop standard (added):** `prepare_crop` cuts each handwriting crop from the unfiltered render with padding
+  (`CDI_CROP_PAD_FRAC` 0.04, `CDI_CROP_PAD_MIN_PX` 4, never past the page), enlarges one shorter than
+  `CDI_CROP_MIN_HEIGHT_PX` (32, **PLACEHOLDER**) by at most `CDI_CROP_MAX_UPSCALE` (4x, cubic, aspect kept), and
+  records the box, padding applied, size cut, scale, size delivered and `below_standard` in the line's
+  `ocr_block.recognition.crop`. The crop hash is of what the readers received. `tests/test_crops_unit.py` (15).
+- Still missing: accuracy by crop size (needs real data), the ablation of the routing step, and recall / label
+  accuracy on real handwriting.
 - The crops are cut from the deskewed colour render, not from the original upload.

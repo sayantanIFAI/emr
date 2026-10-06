@@ -40,6 +40,31 @@
         },
         "evidence": {
           "$ref": "cdi:common.defs#/$defs/evidence"
+        },
+        "dob": {
+          "$ref": "cdi:common.defs#/$defs/date_partial",
+          "description": "date of birth exactly as written; null if not written. Never work it out from the age."
+        },
+        "phone": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "patient phone number as written (digits exactly); null if absent"
+        },
+        "address": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "patient address as written; null if absent"
+        },
+        "abha_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ABHA number or address as written; null if absent"
         }
       },
       "description": "patient identity as printed; may be absent/illegible on handwritten notes"
@@ -75,6 +100,65 @@
         },
         "evidence": {
           "$ref": "cdi:common.defs#/$defs/evidence"
+        },
+        "designation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "post as written (e.g. Consultant Physician); null if absent"
+        },
+        "qualification": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "degrees as written (e.g. MBBS, MD); null if absent"
+        },
+        "clinic": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "the clinic / hospital / organisation printed on the letterhead or stamp",
+          "properties": {
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "address": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "phone": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "evidence": {
+              "$ref": "cdi:common.defs#/$defs/evidence"
+            }
+          }
+        },
+        "stamp_present": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "true only if a doctor's stamp or seal is visible on the page"
+        },
+        "signature_present": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "true only if a signature is visible on the page"
         }
       }
     },
@@ -207,7 +291,7 @@
         "string",
         "null"
       ],
-      "$ref": "cdi:common.defs#/$defs/date_partial"
+      "description": "the doctor's instruction to come back or review, copied exactly as written (e.g. 'review after 2 weeks'); null if none is written"
     },
     "extracted_at_confidence": {
       "$ref": "cdi:common.defs#/$defs/confidence"
@@ -223,6 +307,62 @@
       "description": "tests / imaging ordered or advised on this prescription (e.g. 'CBC', 'KFT', 'X-ray LS spine'). Orders, not results.",
       "items": {
         "$ref": "cdi:common.defs#/$defs/coded"
+      }
+    },
+    "investigation_preparation": {
+      "type": "array",
+      "description": "preparation instructions for the ordered tests, ONLY if written on the page (for example 'fasting 12 hrs', 'morning sample', 'first-morning urine'). Never add a usual or standard preparation that is not written. An empty array when none is written.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "fasting",
+              "timing",
+              "diet",
+              "medicine_hold",
+              "sample_collection",
+              "bring_documents",
+              "other",
+              null
+            ]
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "the number in the words (12 for 'fasting 12 hrs'), else null"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "the original words, copied exactly"
+          },
+          "applies_to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "the test names (as written) it applies to, or [\"all\"] when it applies to the whole order; empty if unclear"
+          },
+          "evidence": {
+            "$ref": "cdi:common.defs#/$defs/evidence"
+          }
+        }
       }
     }
   }

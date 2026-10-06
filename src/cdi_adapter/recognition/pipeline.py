@@ -29,7 +29,7 @@ from ..ocr.rapid import OcrLine
 from .disagreement import AGREE, DISAGREE, NONE, SINGLE, compare_engines
 from .engines import QwenLineEngine, Reading, is_fallback_model
 from .ocrhost_client import get_ocr_host
-from .regions import PRINTED, Region, crop_png, detect_regions
+from .regions import PRINTED, Region, detect_regions, prepare_crop
 
 log = get_logger(__name__)
 
@@ -111,7 +111,9 @@ def recognize_page(*, document_id: str, page: dict[str, Any], rapid_lines: list[
     regions = detect_regions(gray, rapid_lines)
 
     hw = [r for r in regions if r.needs_handwriting_engines]
-    crops = [crop_png(src, r.bbox, margin_frac=0.04, min_margin_px=4) for r in hw]
+    prepared = [prepare_crop(src, r.bbox) for r in hw]             # the crop standard (IM-S3)
+    crops = [p[0] for p in prepared]
+    crop_info = [p[1] for p in prepared]
     host = get_ocr_host()
     tro = host.trocr(crops) if crops else []
     qwe = QwenLineEngine().recognize(crops) if crops else []
@@ -169,7 +171,7 @@ def recognize_page(*, document_id: str, page: dict[str, Any], rapid_lines: list[
                "errors": {rd.engine: rd.error for rd in readings if not rd.ok} or None,
                "engine_conf": {rd.engine: rd.conf for rd in readings},
                "rapidocr": printed_txt or None, "detail": verdict.detail,
-               "features": r.features}
+               "features": r.features, "crop": crop_info[i]}
         served_fb = next((rd.engine_version for rd in readings if is_fallback_model(rd.engine_version)),
                          None)
         if served_fb:

@@ -134,6 +134,45 @@ def detect_regions(gray: np.ndarray, ocr_lines: list[OcrLine]) -> list[Region]:
     return regions
 
 
+def prepare_crop(src: np.ndarray, bbox: list[int]) -> tuple[bytes, dict[str, Any]]:
+    """One line crop to the CROP STANDARD (IM-S3), and what was done, for the record.
+
+    Cut from the pixel-faithful source render with padding (so strokes are not clipped, never
+    beyond the page), and if the result is shorter than ``crop_min_height_px`` it is enlarged
+    (cubic, aspect kept) by at most ``crop_max_upscale`` before a reader sees it. The record lists
+    the box, the padding actually applied, the size cut and the size delivered, so that errors can
+    be sliced by crop size later. ``below_standard`` = still too short after the largest allowed
+    enlargement: nothing more is done, and the line is read as it is."""
+    from ..config import settings
+
+    h, w = src.shape[:2]
+    bw, bh = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    mx = max(settings.crop_pad_min_px, int(bw * settings.crop_pad_frac))
+    my = max(settings.crop_pad_min_px, int(bh * settings.crop_pad_frac))
+    x0, y0 = max(0, bbox[0] - mx), max(0, bbox[1] - my)
+    x1, y1 = min(w, bbox[2] + mx), min(h, bbox[3] + my)
+    crop = src[y0:y1, x0:x1]
+    ch, cw = crop.shape[:2]
+    scale = 1.0
+    if settings.crop_min_height_px and 0 < ch < settings.crop_min_height_px:
+        scale = min(float(settings.crop_max_upscale), settings.crop_min_height_px / ch)
+        if scale > 1.0:
+            crop = cv2.resize(crop, (max(1, round(cw * scale)), max(1, round(ch * scale))),
+                              interpolation=cv2.INTER_CUBIC)
+        else:
+            scale = 1.0
+    ok, enc = cv2.imencode(".png", crop)
+    if not ok:  # pragma: no cover
+        raise RuntimeError("crop encode failed")
+    out_h, out_w = crop.shape[:2]
+    info = {"bbox": [int(v) for v in bbox], "pad": [int(bbox[0] - x0), int(bbox[1] - y0),
+                                                    int(x1 - bbox[2]), int(y1 - bbox[3])],
+            "cut_wh": [int(cw), int(ch)], "scale": round(scale, 3), "out_wh": [int(out_w), int(out_h)],
+            "upscaled": scale > 1.0,
+            "below_standard": bool(settings.crop_min_height_px and out_h < settings.crop_min_height_px)}
+    return enc.tobytes(), info
+
+
 def crop_png(src: np.ndarray, bbox: list[int], margin_frac: float = 0.0,
              min_margin_px: int = 0) -> bytes:
     h, w = src.shape[:2]

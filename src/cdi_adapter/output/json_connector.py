@@ -6,40 +6,44 @@ the upload screen shows and lets the person download. When the real contract (OU
 ``result.v1``) exists it replaces :class:`JsonPlaceholderConnector` behind the same interface;
 nothing else changes.
 
+Scope (MLP1): patient, doctor, lab tests (with preparation and context), advice and follow-up.
+
 Rules the JSON keeps (the point of a placeholder is that these hold from day one):
 
 * every value is an object ``{"value", "status", "reason", "confidence"}``: a value is never shown
   without its status;
-* ``status`` is ``accepted`` (the gate or a person accepted it), ``needs_check`` (a person must
-  look) or ``rejected``; values the gate never judged (identity and doctor fields read from the
-  page) are ``not_gated`` and say so;
+* fact-based items (lab tests, advice, medications ...) are ``accepted`` (the gate or a person
+  accepted it), ``needs_check`` or ``rejected``; values read from the page that are judged by the
+  rules of ``extract/fields.py`` are ``checked`` (right format and literally on the page),
+  ``needs_check``, ``absent`` (not written: normal) or ``not_gated`` (a visual judgement);
 * a doubtful value is never presented as final: the document ``status`` is ``needs_check`` while
   any value is;
-* unknown is ``null``, never a guess, and what the system does not extract yet is listed in
-  ``not_extracted`` instead of being left out silently;
+* unknown is ``null``, never a guess; what the system does not extract yet is listed in
+  ``not_extracted``; a preparation note the model made up is dropped and listed in
+  ``retracted_preparation``;
 * the same document always gives the same bytes (no timestamps, fixed key order).
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any, Protocol
 
 from sqlalchemy import text
 
 from .. import repo
 from ..db import session_scope
+from ..extract import fields as F
 
-SCHEMA_VERSION = "result.placeholder.v0"
+SCHEMA_VERSION = "result.placeholder.v1"
 NOTICE = ("Read by a machine. Values marked needs a check must be verified by a person. "
           "Not for diagnosis.")        # PLACEHOLDER wording: the owner and a clinician approve the real text
 
 ACCEPTED = {"auto_accepted", "clinician_confirmed", "corrected"}
-NEEDS_CHECK = {"pending", "in_review"}
 # what the extraction does not produce yet (docs/upload-screen.md); kept visible, not hidden
-NOT_EXTRACTED = ["doctor.designation", "organisation.name", "organisation.address",
-                 "patient.address", "patient.phone", "patient.guardian", "lab_preparation",
-                 "follow_up.interval"]
+NOT_EXTRACTED = ["patient.guardian", "doctor.registration_council", "lab_tests.specimen",
+                 "lab_tests.urgency", "lab_tests.does_not_fit_check"]
 _FINISHED = {"validated", "normalized"}
 
 
@@ -82,13 +86,22 @@ def _medication(f: dict[str, Any]) -> dict[str, Any]:
         "duration_days": d.get("duration_days"), "instructions": d.get("instructions")})
 
 
-def _lab(f: dict[str, Any]) -> dict[str, Any]:
+def _lab_result(f: dict[str, Any]) -> dict[str, Any]:
     return _item(f, {
         "name": f.get("local_text"), "value": _num(f.get("value_num")),
         "value_text": f.get("value_text"), "unit": f.get("value_unit_ucum"),
         "ref_low": _num(f.get("ref_range_low")), "ref_high": _num(f.get("ref_range_high")),
         "ref_text": f.get("ref_range_text"), "flag": f.get("abnormal_flag"),
         "code": f.get("code"), "code_system": f.get("code_system")})
+
+
+def _lab_order(f: dict[str, Any]) -> dict[str, Any]:
+    """A test ORDERED on a prescription: as written, plus the standard name / code if one matched
+    (``code_status`` says how sure: unmapped / candidate / bound / local_only)."""
+    return _item(f, {
+        "as_written": f.get("local_text"), "code": f.get("code"), "code_system": f.get("code_system"),
+        "code_display": f.get("code_display"), "code_status": f.get("code_status"),
+        "context": [], "preparation": []})
 
 
 def _vital(f: dict[str, Any]) -> dict[str, Any]:
@@ -100,9 +113,9 @@ def _plain(f: dict[str, Any]) -> dict[str, Any]:
     return _item(f, {})
 
 
-_BUCKETS = {"medication": ("medications", _medication), "lab_result": ("lab_tests", _lab),
-            "vital_sign": ("vitals", _vital), "condition": ("diagnoses", _plain),
-            "advice": ("advice", _plain)}
+_BUCKETS = {"medication": ("medications", _medication), "investigation_order": ("lab_tests", _lab_order),
+            "lab_result": ("lab_results", _lab_result), "vital_sign": ("vitals", _vital),
+            "condition": ("diagnoses", _plain), "advice": ("advice", _plain)}
 
 
 @dataclass
@@ -114,10 +127,12 @@ class ResultInputs:
     pages: list[dict[str, Any]] = field(default_factory=list)
     payload: dict[str, Any] = field(default_factory=dict)       # latest extraction payload
     facts: list[dict[str, Any]] = field(default_factory=list)   # current facts, medication detail merged
+    blocks: list[dict[str, Any]] = field(default_factory=list)  # OCR blocks, in the order the prompt numbered them
 
 
 def _quality(pages: list[dict[str, Any]], doc: dict[str, Any]) -> dict[str, Any]:
     reasons: list[str] = []
+    codes: list[str] = []
     warnings: list[str] = []
     seen = False
     for p in pages:
@@ -126,30 +141,48 @@ def _quality(pages: list[dict[str, Any]], doc: dict[str, Any]) -> dict[str, Any]
             continue
         seen = True
         reasons += [f"page {p['page_no']}: {r}" for r in q.get("reasons") or []]
+        codes += list(q.get("reason_codes") or [])
         warnings += [f"page {p['page_no']}: {w}" for w in q.get("warnings") or []]
     if doc.get("status") == "quality_hold" and not reasons and doc.get("error_detail"):
         reasons = [str(doc["error_detail"])]
     return {"checked": seen, "passed": not reasons if (seen or reasons) else None,
-            "reasons": reasons, "warnings": warnings}
+            "reasons": reasons, "reason_codes": codes, "warnings": warnings}
 
 
-def _read(v: Any) -> dict[str, Any]:
-    """A value read from the page that the confidence gate does not judge (identity, doctor)."""
-    return value(v if v not in ("", None) else None, "not_gated",
-                 "read from the page; not checked by the confidence gate" if v not in ("", None) else None)
+def _v(c: dict[str, Any]) -> dict[str, Any]:
+    """A checked field as a value object."""
+    return value(c["value"], c["status"], c["reason"])
+
+
+def _doc_date(doc: dict[str, Any]) -> date:
+    d = doc.get("captured_at") or doc.get("ingested_at")
+    if isinstance(d, datetime):
+        return d.date()
+    return d if isinstance(d, date) else date(2000, 1, 1)       # a fixed day, never "today": same bytes every time
+
+
+def _applies(prep: dict[str, Any], test_text: str) -> bool:
+    t = prep["applies_to"]
+    return t == ["all"] or (isinstance(t, list) and test_text in t)
 
 
 def build_result(inp: ResultInputs) -> dict[str, Any]:
     doc, payload = inp.document, inp.payload or {}
-    patient = payload.get("patient") or {}
-    prescriber = payload.get("prescriber") or {}
+    checks = F.build_checks(payload, inp.blocks, _doc_date(doc))
     buckets: dict[str, list[dict[str, Any]]] = {name: [] for name, _ in _BUCKETS.values()}
     other: list[dict[str, Any]] = []
     for f in inp.facts:
         name, build = _BUCKETS.get(f.get("fact_type") or "", ("other", _plain))
         (buckets.get(name) if name != "other" else other).append(build(f))      # type: ignore[union-attr]
+
+    context = {c["test"]: c["context"] for c in checks["context"]}
+    for t in buckets["lab_tests"]:
+        key = t["as_written"]
+        t["context"] = context.get(key, [])
+        t["preparation"] = [p["text"] for p in checks["preparation"] if _applies(p, key)]
+
     items = [i for lst in (*buckets.values(), other) for i in lst]
-    n_check = sum(1 for i in items if i["status"] == "needs_check")
+    n_check = sum(1 for i in items if i["status"] == "needs_check") + len(checks["review"])
     quality = _quality(inp.pages, doc)
 
     if doc.get("status") == "quality_hold":
@@ -165,7 +198,8 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
     else:
         status = "complete"
 
-    follow_up = payload.get("follow_up")
+    p, d = checks["patient"], checks["doctor"]
+    fu = checks["follow_up"]
     cls = inp.classification or {}
     return {
         "schema_version": SCHEMA_VERSION,
@@ -178,13 +212,19 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         "status": status,
         "needs_check_count": n_check,
         "quality": quality,
-        "patient": {"name": _read(patient.get("name")), "age_text": _read(patient.get("age_text")),
-                    "sex": _read(patient.get("sex")), "mrn": _read(patient.get("mrn"))},
-        "doctor": {"name": _read(prescriber.get("name")), "reg_no": _read(prescriber.get("reg_no")),
-                   "department": _read(prescriber.get("department"))},
+        "extraction_incomplete": bool(payload.get("_partial")),
+        "flags": checks["flags"],
+        "patient": {k: _v(p[k]) for k in ("name", "age_text", "dob", "sex", "mrn", "phone", "address", "abha_id")},
+        "doctor": {**{k: _v(d[k]) for k in ("name", "reg_no", "department", "designation", "qualification")},
+                   "clinic": {k: _v(d["clinic"][k]) for k in ("name", "address", "phone")},
+                   "stamp_present": _v(d["stamp_present"]), "signature_present": _v(d["signature_present"])},
+        "lab_tests": buckets.pop("lab_tests"),
+        "lab_preparation": checks["preparation"],
+        "retracted_preparation": checks["retracted"],
+        "advice": buckets.pop("advice"),
+        "follow_up": {**_v(fu), **fu["detail"]},
         **buckets,
         "other": other,
-        "follow_up": _read(follow_up if isinstance(follow_up, str) else None),
         "not_extracted": NOT_EXTRACTED,
         "notice": NOTICE,
     }
@@ -208,7 +248,8 @@ def gather(sess: Any, document_id: str) -> ResultInputs | None:
         {"d": document_id}).scalar_one_or_none()
     return ResultInputs(doc, repo.get_doc_classification(sess, document_id),
                         repo.list_document_pages(sess, document_id),
-                        payload if isinstance(payload, dict) else {}, facts)
+                        payload if isinstance(payload, dict) else {}, facts,
+                        repo.list_ocr_blocks(sess, document_id))
 
 
 class OutputConnector(Protocol):
