@@ -31,13 +31,25 @@ def get_s3():
     return _client
 
 
+_MISSING = {"404", "NoSuchBucket", "NotFound"}
+_RACE = {"BucketAlreadyOwnedByYou", "BucketAlreadyExists"}
+
+
+def _code(exc: ClientError) -> str:
+    return str(exc.response.get("Error", {}).get("Code", ""))
+
+
 def ensure_bucket() -> None:
     s3 = get_s3()
     try:
         s3.head_bucket(Bucket=settings.s3_bucket)
     except ClientError:
         log.info("creating_bucket", bucket=settings.s3_bucket)
-        s3.create_bucket(Bucket=settings.s3_bucket)
+        try:
+            s3.create_bucket(Bucket=settings.s3_bucket)
+        except ClientError as exc:
+            if _code(exc) not in _RACE:      # another process created it first: fine
+                raise
 
 
 def put_bytes(key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
@@ -70,10 +82,16 @@ def presign_get(key: str, expires: int = 3600) -> str:
 
 
 def ping() -> bool:
+    """Is the object store reachable with these credentials? Asks about OUR bucket only
+    (``head_bucket``), so a least-privilege key scoped to that bucket passes: ``list_buckets``
+    needs an account-wide permission. A missing bucket still counts as up (``ensure_bucket``
+    creates it); a 403 (wrong or revoked key) or a connection failure does not."""
     try:
-        get_s3().list_buckets()
+        get_s3().head_bucket(Bucket=settings.s3_bucket)
         return True
-    except Exception:
+    except ClientError as exc:
+        return _code(exc) in _MISSING
+    except Exception:  # noqa: BLE001 - connection refused, DNS, timeout
         return False
 
 
