@@ -45,17 +45,38 @@ Not done in IM-S1: thresholds tuned on real pictures and the false-reject rate o
 answer-key set); "page cut off" is not detected; a photo with a dark background is not reliably
 flagged sideways.
 
-## IM-S2: straighten and crop (`ingest/pages.py`): partly built, not changed here
+## IM-S2: straighten and crop (`ingest/geometry.py`, `ingest/pages.py`)
 
-- Deskew works: MEASURED residual tilt 0.0 degrees after +-3, 6 and 12 degree tilts (`tests/test_quality_unit.py`,
-  independent projection-profile measure). Verified only on OpenCV 5.0.0; `pyproject` allows `>=4.10`
-  and `minAreaRect`'s angle convention changed between OpenCV versions, so the test must pass on
-  whatever version the pod installs.
-- Missing: turning a 90 / 270 degree page upright, detecting and fixing 180 degrees, page edges and
-  perspective correction, hold-for-retake when the edges cannot be found, a stored transform with an
-  inverse mapping (only `skew_deg` and `steps` are stored), and the round-trip test. The normalised
-  copy also has denoise + CLAHE applied (the story says no filters that could change letters; the
-  handwriting crops are cut from the unfiltered render, RapidOCR reads the filtered one).
+Order of the steps in `normalize_with_source`: **page cut out of a photo** (perspective) -> **turned
+upright** -> **small-tilt deskew** -> denoise -> CLAHE. Every geometric step is a 3x3 matrix; their
+product is stored with the page as `preproc.transform` (`matrix`, `src_wh`, `out_wh`, `steps`), and
+`map_box_to_original` maps a box on the straightened copy back to the original render (AC3). The
+original upload is never touched.
+
+- **Perspective.** The page is the largest bright, convex four-sided region covering at least 30 % of the
+  picture, with writing inside it (a blank bright shape or a picture under 400 px is not a page). With four
+  clear corners it is cut out and flattened. MEASURED on a synthetic photo (page on a dark textured desk,
+  warped): corners recovered within 3 px of the truth, lines level (0.0 degrees) and evenly spaced after the
+  step, and a box on the straightened page maps back onto the writing in the photo (mean ink density where the
+  box lands >= 0.04, 0.0 in the blank margin). A scan that fills the frame is left alone. **A photo with a
+  background but no findable page is held `page_edges_not_found`** (the picture is not changed).
+- **Upright.** A page whose lines run vertically (the sideways test of IM-S1) is turned 90 or 270 degrees
+  when the way up can be decided from the ink (more ink above the middle of a line than below: MEASURED on
+  synthetic mixed-case text, upright +0.04..+0.055, upside down -0.014..-0.018). When it cannot be decided
+  (all-capital or digit-only pages are symmetric) the page is **left alone and held `orientation_uncertain`**.
+  On a photo the test is only applied after the page has been cut out (a background fools it). Each page of
+  one prescription is judged on its own.
+- **Upside down (180 degrees)** is implemented but **OFF** (`CDI_ORIENT_UPSIDE_DOWN`): the signal was measured
+  only on synthetic text, real handwriting may bias it, and a wrong 180 turn ruins an upright page. It is a
+  clear-negative-score rule that never turned an upright synthetic page. Enable it only after a check on real
+  pages.
+- **Deskew** now uses the text-line projection profile (outer 2 % ignored, no dependence on OpenCV's
+  `minAreaRect` angle convention). The old estimator fitted a rectangle to all ink and turned a level page 4
+  degrees when a page edge or dark scanner border was present; the new one matches a known tilt within 0.4
+  degrees for +-5 and +-12 degrees (`tests/test_geometry_unit.py`).
+- **Not done:** the normalised copy still has denoise + CLAHE applied (the handwriting crops are cut from the
+  unfiltered render; RapidOCR reads the filtered one), curved pages, folded pages, and every threshold is a
+  synthetic-data PLACEHOLDER. Not measured on real phone photos or real handwriting.
 
 ## IM-S3: text lines and printed / handwritten labels (`recognition/regions.py`): built, gaps
 

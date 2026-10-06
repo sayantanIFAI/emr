@@ -77,27 +77,118 @@ def _np_to_png(arr: np.ndarray) -> bytes:
     return enc.tobytes()
 
 
+def _row_score(ink: np.ndarray, angle: float) -> float:
+    h, w = ink.shape
+    r = cv2.warpAffine(ink, cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0), (w, h), flags=cv2.INTER_NEAREST)
+    return float(np.var(r.sum(axis=1, dtype=np.float64)))
+
+
 def _estimate_skew_deg(gray: np.ndarray) -> float:
-    """Angle (deg) to rotate the page so text lines become horizontal."""
-    inv = cv2.bitwise_not(gray)
-    thr = cv2.threshold(inv, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
-    coords = np.column_stack(np.where(thr > 0))
-    if coords.shape[0] < 50:
+    """Angle (deg) to rotate the page so text lines become horizontal.
+
+    Projection profile: the angle at which the rows of ink are most uneven is the angle at which the
+    text lines are level. It looks at the text only (the outer 2 % frame is ignored, so a scanner's
+    dark border or a page edge cannot decide it) and does not depend on how a given OpenCV version
+    reports ``minAreaRect`` angles. The earlier fit of a rectangle to ALL ink pixels was fooled by
+    any such edge: on a page cut out of a photo it turned a level page 4 degrees."""
+    h, w = gray.shape[:2]
+    s = min(1.0, 900.0 / max(h, w))
+    small = cv2.resize(gray, None, fx=s, fy=s, interpolation=cv2.INTER_AREA) if s < 1 else gray
+    ink = cv2.threshold(cv2.bitwise_not(small), 0, 1, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1].astype(np.uint8)
+    b = max(2, int(min(ink.shape) * 0.02))
+    ink[:b], ink[-b:], ink[:, :b], ink[:, -b:] = 0, 0, 0, 0
+    if int(ink.sum()) < 200:
         return 0.0
-    angle = cv2.minAreaRect(coords.astype(np.float32))[-1]
-    # OpenCV returns angle in (-90, 0]; normalize to a small correction
-    if angle < -45:
-        angle = 90 + angle
-    return float(-angle)
+    limit = settings.max_deskew_deg + 5.0
+    coarse = np.arange(-limit, limit + 0.01, 0.5)
+    best = max(coarse, key=lambda a: _row_score(ink, float(a)))
+    fine = np.arange(best - 0.5, best + 0.51, 0.1)
+    best = max(fine, key=lambda a: _row_score(ink, float(a)))
+    if _row_score(ink, float(best)) <= 1.02 * _row_score(ink, 0.0):      # no clearer than level: leave it
+        return 0.0
+    return float(round(best, 2))
+
+
+def _rotation_matrix(w: int, h: int, angle_deg: float) -> np.ndarray:
+    return cv2.getRotationMatrix2D((w / 2, h / 2), angle_deg, 1.0)
 
 
 def _rotate(arr: np.ndarray, angle_deg: float) -> np.ndarray:
     h, w = arr.shape[:2]
-    m = cv2.getRotationMatrix2D((w / 2, h / 2), angle_deg, 1.0)
+    m = _rotation_matrix(w, h, angle_deg)
     return cv2.warpAffine(
         arr, m, (w, h), flags=cv2.INTER_CUBIC,
         borderMode=cv2.BORDER_REPLICATE,
     )
+
+
+def _hold(meta: dict[str, Any], code: str, message: str) -> None:
+    """Add a blocking reason (and its code) to the page's quality record: the page is held for a retake."""
+    q = meta.get("quality")
+    if q is None:                                           # the quality check is switched off: nothing to hold on
+        return
+    q["passed"] = False
+    q.setdefault("reasons", []).append(message)
+    q.setdefault("reason_codes", []).append(code)
+
+
+def _straighten(arr: np.ndarray, meta: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
+    """IM-S2: cut the page out of a photo, turn it upright, record every step as one matrix.
+
+    Order matters: perspective first (so the page is a clean rectangle), then upright (a sideways
+    page is judged on the page alone, not on a photo's background), then the small deskew. Each step
+    changes nothing unless it is sure; what is unsure is recorded or held, never guessed."""
+    from ..recognition.quality import ORIENTATION_UNCERTAIN, PAGE_EDGES_NOT_FOUND
+    from . import geometry as G
+
+    h0, w0 = arr.shape[:2]
+    t = G.new_transform(w0, h0)
+    gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+    is_photo = G.photo_like(gray)
+
+    if settings.perspective_enabled:
+        quad = G.find_page_quad(gray)
+        if quad is not None and G.quad_moves_enough(quad, w0, h0):
+            arr, m = G.rectify(arr, quad)
+            G.add_step(t, {"op": "perspective", "quad": [[round(float(x), 1) for x in p] for p in quad]}, m,
+                       (arr.shape[1], arr.shape[0]))
+            meta["steps"].append("perspective")
+            gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+        elif quad is None and is_photo:
+            _hold(meta, PAGE_EDGES_NOT_FOUND, "the edges of the page could not be found - take the picture on a "
+                  "plain background with the whole page in view, and retake it")
+
+    # a photo's background fools the axis test: judge orientation on a flat scan or a page cut out of a photo
+    if settings.orient_enabled and (not is_photo or "perspective" in meta["steps"]):
+        ratio = _orientation_ratio(gray)
+        if ratio is not None and ratio > settings.quality_sideways_ratio:          # lines run vertically
+            k, info = G.decide_sideways(gray)
+            if k is None:
+                _hold(meta, ORIENTATION_UNCERTAIN, "the page is sideways but which way is up could not be decided "
+                      "- please retake it with the page upright")
+                t["steps"].append({"op": "sideways_undecided", **info})
+            else:
+                h, w = arr.shape[:2]
+                arr = np.ascontiguousarray(np.rot90(arr, k))
+                G.add_step(t, {"op": "rotate90", "k": k, **info}, G.rot90_matrix(w, h, k), (arr.shape[1], arr.shape[0]))
+                meta["steps"].append("rotate90")
+                gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+        elif settings.orient_upside_down:
+            score, n = G.upright_score(gray)
+            if score is not None and score < settings.upside_down_threshold:
+                h, w = arr.shape[:2]
+                arr = np.ascontiguousarray(np.rot90(arr, 2))
+                G.add_step(t, {"op": "rotate180", "upright_score": round(score, 4), "lines": n},
+                           G.rot90_matrix(w, h, 2), (arr.shape[1], arr.shape[0]))
+                meta["steps"].append("rotate180")
+                gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+    return arr, t
+
+
+def _orientation_ratio(gray: np.ndarray) -> float | None:
+    from ..recognition.quality import orientation_ratio
+
+    return orientation_ratio(gray)
 
 
 def normalize_image(png_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
@@ -119,16 +210,23 @@ def normalize_with_source(png_bytes: bytes) -> tuple[bytes, bytes, dict[str, Any
     meta: dict[str, Any] = {"steps": []}
     if settings.quality_gate_mode != "off":
         meta["quality"] = assess(arr).as_dict()
+    arr, transform = _straighten(arr, meta)
     gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
 
     skew = 0.0
     if settings.deskew_enabled:
         skew = _estimate_skew_deg(gray)
         if abs(skew) > 0.15 and abs(skew) <= settings.max_deskew_deg:
+            from . import geometry as G
+
+            hh, ww = gray.shape[:2]
+            m23 = _rotation_matrix(ww, hh, skew)
             gray = _rotate(gray, skew)
             arr = _rotate(arr, skew)
+            G.add_step(transform, {"op": "deskew", "angle_deg": round(skew, 3)}, G.affine3(m23), (ww, hh))
             meta["steps"].append("deskew")
     meta["skew_deg"] = round(skew, 3)
+    meta["transform"] = transform                  # original render -> straightened copy (IM-S2)
 
     if settings.denoise_enabled:
         gray = cv2.fastNlMeansDenoising(gray, h=7, templateWindowSize=7, searchWindowSize=21)

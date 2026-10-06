@@ -115,7 +115,8 @@ def test_every_hold_has_a_stable_code_one_per_message(make, code):
 
 
 def test_the_code_names_are_the_contract():
-    assert q.REASON_CODES == ("resolution_low", "blurred", "glare", "too_dark", "text_too_small")
+    assert q.REASON_CODES == ("resolution_low", "blurred", "glare", "too_dark", "text_too_small",
+                              "orientation_uncertain", "page_edges_not_found")
     assert (q.BLANK_PAGE, q.SIDEWAYS) == ("blank_page", "sideways_suspected")
 
 

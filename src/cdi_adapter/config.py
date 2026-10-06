@@ -54,6 +54,19 @@ class Settings(BaseSettings):
     deskew_enabled: bool = True
     denoise_enabled: bool = True
     max_deskew_deg: float = 15.0
+    # page geometry (IM-S2). All thresholds are PLACEHOLDERS measured on synthetic pages only.
+    orient_enabled: bool = True           # turn a sideways page (90 / 270 degrees) upright when the way up is clear
+    orient_upright_margin: float = 0.02   # how much clearer one way must be (ink-centroid score); else hold for retake
+    # 180 degrees: needs a clear negative score on mixed-case text. OFF: the signal was measured only on
+    # synthetic text and real handwriting may bias it, and a wrong 180 turn would ruin an upright page.
+    orient_upside_down: bool = False
+    upside_down_threshold: float = -0.008
+    perspective_enabled: bool = True      # cut the page out of a photo and flatten it when four clear corners are found
+    perspective_min_side_px: int = 400    # smaller pictures are not looked at for a page edge
+    perspective_min_area_frac: float = 0.30   # the page must cover at least this share of the picture
+    perspective_min_move_frac: float = 0.03   # corners at least this far (share of the diagonal) from the picture's corners
+    photo_border_contrast: int = 25       # outer frame vs middle (grey levels): bigger = a photo with a background
+    photo_border_texture: int = 25        # ... or a frame this busy (grey-level spread) where a scan's margin is flat
 
     # --- pipeline / jurisdiction packages ---
     ig_package: str = "nrces.fhir.r4.ndhm#6.5.0"

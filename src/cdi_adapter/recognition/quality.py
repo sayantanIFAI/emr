@@ -22,7 +22,9 @@ _NORM_WIDTH = 1200   # measure blur at a fixed scale so DPI does not change the 
 RESOLUTION_LOW, BLURRED, GLARE = "resolution_low", "blurred", "glare"
 TOO_DARK, TEXT_TOO_SMALL = "too_dark", "text_too_small"
 BLANK_PAGE, SIDEWAYS = "blank_page", "sideways_suspected"
-REASON_CODES = (RESOLUTION_LOW, BLURRED, GLARE, TOO_DARK, TEXT_TOO_SMALL)
+ORIENTATION_UNCERTAIN, PAGE_EDGES_NOT_FOUND = "orientation_uncertain", "page_edges_not_found"
+REASON_CODES = (RESOLUTION_LOW, BLURRED, GLARE, TOO_DARK, TEXT_TOO_SMALL, ORIENTATION_UNCERTAIN,
+                PAGE_EDGES_NOT_FOUND)
 
 _TILE = 1000            # text height is measured on full-resolution tiles of this size
 _TILES = 3              # the inkiest ones
