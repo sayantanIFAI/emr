@@ -26,7 +26,8 @@ from ..config import settings
 from ..db import session_scope
 from ..logging import get_logger
 from ..ocr.rapid import OcrLine
-from .disagreement import AGREE, DISAGREE, NONE, SINGLE, compare_engines
+from .disagreement import AGREE, DISAGREE, NONE, SINGLE, compare_engines, self_consistency
+from .drift import disagreement_rate, drift_alarm, recent_rates
 from .engines import QwenLineEngine, Reading, is_fallback_model
 from .ocrhost_client import get_ocr_host
 from .regions import PRINTED, Region, detect_regions, prepare_crop
@@ -117,6 +118,12 @@ def recognize_page(*, document_id: str, page: dict[str, Any], rapid_lines: list[
     host = get_ocr_host()
     tro = host.trocr(crops) if crops else []
     qwe = QwenLineEngine().recognize(crops) if crops else []
+    qwe_b: list[Reading] = []
+    again: list[bytes] = []
+    if crops and settings.qwen_self_consistency:
+        # the same line, cut with different padding: an unstable reading is another disagreement signal
+        again = [prepare_crop(src, r.bbox, settings.self_consistency_pad_frac)[0] for r in hw]
+        qwe_b = QwenLineEngine().recognize(again)
 
     blocks: list[dict[str, Any]] = []
     obs_rows: list[dict[str, Any]] = []
@@ -138,11 +145,18 @@ def recognize_page(*, document_id: str, page: dict[str, Any], rapid_lines: list[
         readings = [x for x in (tro[i] if i < len(tro) else None,
                                 qwe[i] if i < len(qwe) else None) if x is not None]
         verdict = compare_engines(readings)
+        second = qwe_b[i] if i < len(qwe_b) else None
+        if second is not None and i < len(qwe) and qwe[i] is not None:
+            verdict = self_consistency(verdict, qwe[i], second)
+            second = Reading("qwen2.5-vl-b", second.engine_version, second.text, second.conf,
+                             second.token_confidences, second.prompt_hash, second.error)
         crop_hash = _sha(crops[i])
-        for rd in readings:
+        for rd in (readings + ([second] if second is not None else [])):
             obs_rows.append({
                 "document_id": document_id, "page_id": page["id"], "line_key": key,
-                "region_kind": r.kind, "bbox": r.bbox, "crop_hash": crop_hash,
+                "region_kind": r.kind, "bbox": r.bbox,
+                # the second Qwen read saw a differently padded crop: its own hash
+                "crop_hash": _sha(again[i]) if rd is second else crop_hash,
                 "engine": rd.engine, "engine_version": rd.engine_version,
                 "prompt_hash": rd.prompt_hash, "raw_text": rd.text,
                 "raw_confidence": rd.conf, "token_confidences": rd.token_confidences or None,
@@ -280,9 +294,19 @@ def recognize_document(document_id: str) -> RecognizeResult:
             engines = {"trocr": getattr(getattr(eng, "_trocr", None), "info", lambda: {
                 "model": settings.trocr_model_id, "host": settings.ocrhost_url})(),
                 "qwen_line_mode": settings.qwen_line_mode}
+            rate, drift = disagreement_rate(states), None
+            if rate is not None:
+                try:                       # a failed history query must never lose the document
+                    with sess.begin_nested():
+                        drift = drift_alarm(recent_rates(sess, run_id), rate)
+                    if drift["alarm"]:
+                        log.warning("disagreement_drift_alarm", document_id=document_id, **drift)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("drift_check_skipped", error=str(exc)[:160])
             repo.finish_pipeline_run(sess, run_id, status="ok",
                                      metrics={"blocks": n, "pages": len(pages),
-                                              "observations": len(obs_ids), "states": states})
+                                              "observations": len(obs_ids), "states": states,
+                                              "disagreement_rate": rate, "drift": drift})
             repo.set_document_status(sess, document_id, "ocr_done")
             repo.write_audit(sess, actor="recognition-v2", action="create", entity="ocr_block",
                              entity_id=document_id,

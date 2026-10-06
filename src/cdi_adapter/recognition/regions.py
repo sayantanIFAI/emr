@@ -134,7 +134,7 @@ def detect_regions(gray: np.ndarray, ocr_lines: list[OcrLine]) -> list[Region]:
     return regions
 
 
-def prepare_crop(src: np.ndarray, bbox: list[int]) -> tuple[bytes, dict[str, Any]]:
+def prepare_crop(src: np.ndarray, bbox: list[int], pad_frac: float | None = None) -> tuple[bytes, dict[str, Any]]:
     """One line crop to the CROP STANDARD (IM-S3), and what was done, for the record.
 
     Cut from the pixel-faithful source render with padding (so strokes are not clipped, never
@@ -147,8 +147,9 @@ def prepare_crop(src: np.ndarray, bbox: list[int]) -> tuple[bytes, dict[str, Any
 
     h, w = src.shape[:2]
     bw, bh = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    mx = max(settings.crop_pad_min_px, int(bw * settings.crop_pad_frac))
-    my = max(settings.crop_pad_min_px, int(bh * settings.crop_pad_frac))
+    frac = settings.crop_pad_frac if pad_frac is None else pad_frac
+    mx = max(settings.crop_pad_min_px, int(bw * frac))
+    my = max(settings.crop_pad_min_px, int(bh * frac))
     x0, y0 = max(0, bbox[0] - mx), max(0, bbox[1] - my)
     x1, y1 = min(w, bbox[2] + mx), min(h, bbox[3] + my)
     crop = src[y0:y1, x0:x1]

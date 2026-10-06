@@ -112,6 +112,16 @@ class Settings(BaseSettings):
     crop_pad_min_px: int = 4              # ... and never less than this
     crop_min_height_px: int = 32          # a crop shorter than this is upscaled before it is read
     crop_max_upscale: float = 4.0         # ... by at most this factor; still shorter = flagged below_standard
+    # self-consistency (RD-S3): read each handwriting crop a second time with different padding; a
+    # mismatch between the two Qwen readings is another disagreement signal. OFF by default: it
+    # doubles the Qwen calls per line (latency and GPU cost are not measured yet).
+    qwen_self_consistency: bool = False
+    self_consistency_pad_frac: float = 0.12
+    # disagreement-rate drift alarm: needs this many earlier runs, then alarms when the share of
+    # disagreeing lines moves by more than max(sigma x the usual spread, the absolute tolerance)
+    drift_min_runs: int = 20
+    drift_sigma: float = 3.0
+    drift_abs_tolerance: float = 0.15
     qwen_line_mode: str = "crop"          # crop = independent read per line crop | off
     qwen_line_max_tokens: int = 48
     # an engine reading is "the same" as another when, after numeric-context

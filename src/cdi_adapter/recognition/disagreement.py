@@ -71,6 +71,23 @@ def compare_engines(readings: list[Reading]) -> EngineVerdict:
     return EngineVerdict(DISAGREE, f"{a.text} ⟂ {b.text}", det)
 
 
+def self_consistency(verdict: EngineVerdict, first: Reading, second: Reading) -> EngineVerdict:
+    """RD-S3 self-consistency: the same engine read the same crop twice with different padding.
+
+    Two readings that differ materially mean the reading is unstable, which counts as another
+    disagreement: an ``agree`` verdict becomes ``disagree`` (a person looks), and the detail says
+    why. Anything else is left as it was, a failed second read changes nothing, and neither reading
+    is ever edited."""
+    if not (first.ok and second.ok and first.text.strip() and second.text.strip()):
+        return verdict
+    same, det = compare_texts(first.text, second.text)
+    info = {"consistent": same, "texts": [first.text, second.text], **{k: det[k] for k in ("similarity", "numbers_equal")}}
+    detail = {**verdict.detail, "self_consistency": info}
+    if same or verdict.state != AGREE:
+        return EngineVerdict(verdict.state, verdict.display_text, detail)
+    return EngineVerdict(DISAGREE, verdict.display_text, detail)
+
+
 def ocr_vs_terminology(reading: str, concept_display: str | None,
                        aliases: list[str] | None = None) -> tuple[bool, float]:
     """Does the bound concept plausibly match what was read? (number-exact, text-similar)"""
