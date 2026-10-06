@@ -82,7 +82,7 @@ if ! curl -sf "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
   # Background the command itself (see start_mlserve.sh): a backgrounded `cd && ...` list keeps
   # this script's stdout open for the server's lifetime and hangs a caller reading our output.
   $(command -v setsid || true) nohup "$BIN" server \
-    -dir="$DATA" -ip=127.0.0.1 -ip.bind=127.0.0.1 \
+    -dir="$DATA" -ip=127.0.0.1 -ip.bind=127.0.0.1 -filer.port=18888 \
     -master.telemetry=false -master.volumeSizeLimitMB=1024 -volume.max=0 \
     -s3 -s3.config="$CONF/s3.json" -s3.port="$PORT" -s3.ip.bind=127.0.0.1 \
     -s3.port.iceberg=0 -s3.port.lance=0 -s3.iam=false -s3.autoCreateBucket=false \
