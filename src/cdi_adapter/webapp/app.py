@@ -135,6 +135,7 @@ async def submit_job(
     pictures are the pages of ONE prescription (one document, one result). Every refusal is one
     plain sentence (``detail``); the same ``Idempotency-Key`` returns the same job."""
     try:
+        upload.LIMITER.check()                 # before reading any bytes
         abha_n = upload.normalize_abha(abha)
         ref = upload.clean_patient_ref(patient_ref)
         if len(files) > settings.upload_max_files:        # before reading any bytes
@@ -348,7 +349,10 @@ def document_evidence(document_id: str) -> dict[str, Any]:
 def main() -> None:
     import uvicorn
 
+    from ..security import require_no_default_credentials
+
     require_auth_configured()
+    require_no_default_credentials()
     uvicorn.run(app, host="0.0.0.0", port=settings.webapp_port,
                 log_level=settings.log_level.lower())
 

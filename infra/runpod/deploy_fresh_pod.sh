@@ -33,6 +33,13 @@ if [ ! -s "$PWF" ]; then
   chmod 600 "$PWF"
 fi
 printf '\nCDI_ADMIN_PASSWORD=%s\n' "$(cat "$PWF")" >> .env
+# no published default credentials in a running pod (the app refuses to start with them)
+secret() { f="$WS/secrets/$1"; [ -s "$f" ] || { python3 -c 'import secrets;print(secrets.token_urlsafe(24))' > "$f"; chmod 600 "$f"; }; cat "$f"; }
+S3K="app$(secret s3_access_key | tr -dc 'A-Za-z0-9' | head -c 16)"
+S3S="$(secret s3_secret_key)"
+DBP="$(secret db_password | tr -dc 'A-Za-z0-9' | head -c 28)"
+printf 'CDI_S3_ACCESS_KEY=%s\nCDI_S3_SECRET_KEY=%s\nCDI_DB_PASSWORD=%s\n' "$S3K" "$S3S" "$DBP" >> .env
+printf 'CDI_DATABASE_URL=postgresql+psycopg://cdi:%s@127.0.0.1:5432/cdi\n' "$DBP" >> .env
 chmod 600 .env
 echo "admin user: admin   password file: $PWF"
 

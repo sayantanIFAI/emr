@@ -259,6 +259,8 @@ class Settings(BaseSettings):
     # --- throughput ---
     # an interrupted web upload (restart, crash) is picked up again on start; after this many pick-ups a
     # document that still does not finish is parked as an error (OUT-S3)
+    # sends accepted per minute (sliding window, per process); 0 = no limit. 30 is a PLACEHOLDER, not measured
+    upload_rate_per_minute: int = 30
     resume_on_start: bool = True
     resume_max_attempts: int = 3
     resume_batch: int = 50

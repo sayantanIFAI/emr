@@ -19,6 +19,10 @@ REPO=$WS/cdi
 PGBIN=/usr/lib/postgresql/16/bin
 PGDATA=/var/lib/postgresql/16/cdi
 export DEBIAN_FRONTEND=noninteractive
+# the database login's password comes from the environment (the deploy script generates it); "cdi" is
+# only the fallback for a developer pod that has no .env secrets
+[ -f "$REPO/.env" ] && { set -a; . "$REPO/.env"; set +a; }
+DBPW="${CDI_DB_PASSWORD:-cdi}"
 # a brand-new volume has none of these
 mkdir -p "$WS/redis" "$WS/backup" "$WS/logs" "$WS/data/inbox" "$WS/data/processed" "$WS/data/failed"
 
@@ -41,7 +45,8 @@ if ! sudo -u postgres "$PGBIN/pg_ctl" -D "$PGDATA" status >/dev/null 2>&1; then
 fi
 sudo -u postgres "$PGBIN/psql" -h 127.0.0.1 -tc \
   "SELECT 1 FROM pg_roles WHERE rolname='cdi'" | grep -q 1 || \
-  sudo -u postgres "$PGBIN/psql" -h 127.0.0.1 -c "CREATE ROLE cdi LOGIN PASSWORD 'cdi' SUPERUSER;"
+  sudo -u postgres "$PGBIN/psql" -h 127.0.0.1 -c "CREATE ROLE cdi LOGIN PASSWORD '${DBPW}' SUPERUSER;"
+sudo -u postgres "$PGBIN/psql" -h 127.0.0.1 -c "ALTER ROLE cdi PASSWORD '${DBPW}';" >/dev/null
 sudo -u postgres "$PGBIN/psql" -h 127.0.0.1 -tc \
   "SELECT 1 FROM pg_database WHERE datname='cdi'" | grep -q 1 || \
   sudo -u postgres "$PGBIN/createdb" -h 127.0.0.1 -O cdi cdi

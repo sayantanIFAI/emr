@@ -9,6 +9,15 @@ def _infra_available() -> bool:
     return bool(os.environ.get("CDI_DATABASE_URL")) and bool(os.environ.get("CDI_S3_ENDPOINT_URL"))
 
 
+@pytest.fixture(autouse=True)
+def _fresh_upload_rate_limit():
+    """The send-rate window is per process: every test starts with an empty one."""
+    from cdi_adapter.webapp import upload
+
+    upload.LIMITER._hits.clear()
+    yield
+
+
 @pytest.fixture(scope="session")
 def infra() -> None:
     if not _infra_available():

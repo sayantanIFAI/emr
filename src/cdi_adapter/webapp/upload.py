@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import threading
+import time
 from dataclasses import dataclass
 
 from .. import repo, storage
@@ -73,7 +75,32 @@ def clean_patient_ref(value: str | None) -> str | None:
 def display_name(name: str | None) -> str:
     """A file name safe to echo in a message or a log: no path, no control characters."""
     base = os.path.basename((name or "").replace("\\", "/")) or "document"
-    return re.sub(r"[\x00-\x1f\x7f]", "", base)[:_NAME_MAX] or "document"
+    # control characters and the invisible text-direction controls (a name that ends "gnp.exe" after U+202E
+    # would display as "exe.png")
+    return re.sub(r"[\x00-\x1f\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", base)[:_NAME_MAX] or "document"
+
+
+class RateLimiter:
+    """At most ``CDI_UPLOAD_RATE_PER_MINUTE`` sends per minute (sliding window, per process). 0 = no limit.
+    Slows a flood from one sign-in; it is not a substitute for a gateway-level limit."""
+
+    def __init__(self) -> None:
+        self._hits: list[float] = []
+        self._lock = threading.Lock()
+
+    def check(self, now: float | None = None) -> None:
+        cap = settings.upload_rate_per_minute
+        if cap <= 0:
+            return
+        t = time.time() if now is None else now
+        with self._lock:
+            self._hits = [h for h in self._hits if t - h < 60.0]
+            if len(self._hits) >= cap:
+                raise UploadError("Too many sends in a short time. Please wait a minute and try again.", 429)
+            self._hits.append(t)
+
+
+LIMITER = RateLimiter()
 
 
 @dataclass

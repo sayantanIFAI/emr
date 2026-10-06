@@ -374,6 +374,9 @@ def main() -> None:
     ap.add_argument("--login", action="store_true", help="one-time interactive sign-in "
                     "(OneDrive/SharePoint with CDI_GRAPH_AUTH=device_code)")
     a = ap.parse_args()
+    from ..security import require_no_default_credentials
+
+    require_no_default_credentials()
     conn = get_connector()
     if a.login:
         conn.login() if hasattr(conn, "login") else print("this connector needs no interactive sign-in")
