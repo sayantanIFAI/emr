@@ -35,7 +35,9 @@ class Settings(BaseSettings):
     failed_dir: str = "./data/failed"
     watch_settle_seconds: float = 2.0
     page_dpi: int = 200
-    max_pages: int = 200
+    # A file with more pages than this is refused, not cut short (LS-S3). 20 is a PLACEHOLDER: the story
+    # assumes about 10 and the real longest prescription is not known; the owner confirms the number.
+    max_pages: int = 20
     allowed_mime_prefixes: tuple[str, ...] = ("image/", "application/pdf")
 
     # --- output connector (UP-S3): what a finished document is turned into for downstream ---

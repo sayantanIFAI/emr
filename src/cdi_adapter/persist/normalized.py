@@ -122,7 +122,10 @@ def sync_document(sess: Any, document_id: str) -> dict[str, int]:
                 "VALUES (:r, :f, :t)"),
                 {"r": str(rx_id), "f": fid, "t": f.get("value_text") or f.get("local_text") or ""})
             n["rx_advice"] += 1
-    log.info("rx_synced", document_id=document_id, **n)
+    from .checks import sync_checks
+
+    extra = sync_checks(sess, document_id, rx_id)       # patient / doctor / preparation / context (OUT-S1)
+    log.info("rx_synced", document_id=document_id, **n, **{f"checks_{k}": v for k, v in extra.items()})
     return n
 
 

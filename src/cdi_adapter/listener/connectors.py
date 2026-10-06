@@ -76,12 +76,43 @@ def is_root(folder: str) -> bool:
     return folder_name(folder).strip() in ("", ".", "/")
 
 
-def matches(name: str) -> bool:
+def ignore_reason(name: str) -> str | None:
+    """Why a file in the inbox is not picked up, in words a person can read (None = it is picked up)."""
     n = name.casefold()
-    if n.endswith((".part", ".tmp", ".crdownload", ".error.txt", ".json", ".log")) \
-            or n.startswith(("~$", ".")):
-        return False
-    return any(fnmatch.fnmatch(n, p.casefold()) for p in settings.listener_patterns)
+    if n.endswith((".part", ".tmp", ".crdownload")) or n.startswith(("~$", ".")):
+        return "temporary or hidden file"
+    if n.endswith((".error.txt", ".json", ".log")):
+        return "note or data file, not a prescription"
+    if not any(fnmatch.fnmatch(n, p.casefold()) for p in settings.listener_patterns):
+        return "file type not allowed"
+    return None
+
+
+def matches(name: str) -> bool:
+    return ignore_reason(name) is None
+
+
+# files a poll skipped, with the reason (LS-S3): the listener drains this after listing the inbox and
+# keeps it where a person can see it; a skipped file is never silent
+_IGNORED: dict[str, str] = {}
+
+
+def keep(name: str) -> bool:
+    """True when ``name`` is picked up; otherwise remember why it is not."""
+    reason = ignore_reason(name)
+    if reason is not None:
+        _IGNORED[name] = reason
+    return reason is None
+
+
+def reset_ignored() -> None:
+    _IGNORED.clear()
+
+
+def drain_ignored() -> dict[str, str]:
+    out = dict(_IGNORED)
+    _IGNORED.clear()
+    return out
 
 
 def _stamp() -> str:
@@ -139,7 +170,7 @@ class LocalConnector:
     def list(self, folder: str) -> list[RemoteFile]:
         out = []
         for p in sorted(self._dir(folder).iterdir()):
-            if p.is_file() and matches(p.name):
+            if p.is_file() and keep(p.name):
                 st = p.stat()
                 out.append(RemoteFile(str(p.resolve()), p.name,
                                       f"{st.st_size}-{st.st_mtime_ns}", st.st_size, folder))
@@ -361,7 +392,7 @@ class GraphConnector(_RestConnector):
         while url:
             js = self._req("GET", url).json()
             for it in js.get("value", []):
-                if "file" in it and matches(it["name"]):
+                if "file" in it and keep(it["name"]):
                     out.append(RemoteFile(it["id"], it["name"], it.get("eTag") or it.get("cTag", ""),
                                           int(it.get("size") or 0), folder))
             url = js.get("@odata.nextLink")
@@ -511,7 +542,7 @@ class GoogleDriveConnector(_RestConnector):
                   "fields": f"nextPageToken,files({self.FIELDS})"}
         while True:
             js = self._req("GET", f"{self.API}/files", params=params).json()
-            out += [self._remote(it, folder) for it in js.get("files", []) if matches(it["name"])]
+            out += [self._remote(it, folder) for it in js.get("files", []) if keep(it["name"])]
             if not js.get("nextPageToken"):
                 return out
             params = {**params, "pageToken": js["nextPageToken"]}

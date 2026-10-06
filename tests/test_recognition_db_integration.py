@@ -326,6 +326,9 @@ def test_full_chain_prescription_governance(sess_scope, fake_store, monkeypatch)
     from cdi_adapter.listener.service import run_pipeline
     from cdi_adapter.recognition import ocrhost_client
 
+    from cdi_adapter.config import settings
+
+    monkeypatch.setattr(settings, "fhir_enabled", True)          # off by default: this test covers the outbox
     monkeypatch.setattr("cdi_adapter.ingest.service._enqueue_next", lambda d: None)
     monkeypatch.setattr("cdi_adapter.ocr.service._enqueue_extract", lambda d: None)
     monkeypatch.setattr("cdi_adapter.classify.service._enqueue_ocr", lambda d: None)
@@ -383,3 +386,34 @@ def test_full_chain_prescription_governance(sess_scope, fake_store, monkeypatch)
     assert preg["decision_trace"] and telma["field_policy"]
     assert doc["practitioner_link_method"] == "registration_no" and enc == "Dr. A. Sen"
     assert rx == 2 and inv == 1 and outbox == 1
+    _assert_out_s1(sess_scope, did)
+
+
+def _assert_out_s1(sess_scope, did: str) -> None:
+    """OUT-S1: doctor / patient / context rows with status, provenance beside the extraction, and a
+    second sync gives the same rows (no duplicates)."""
+    from cdi_adapter.persist.normalized import sync_document
+
+    def snapshot(s):
+        rx = s.execute(text("SELECT * FROM rx_prescription WHERE document_id=:d"), {"d": did}).mappings().one()
+        ctx = s.execute(text("SELECT test_text, context_text, relation FROM rx_investigation_context "
+                             "WHERE prescription_id=:r ORDER BY 1,2"), {"r": rx["id"]}).all()
+        prep = s.execute(text("SELECT count(*) FROM rx_investigation_preparation WHERE prescription_id=:r"),
+                         {"r": rx["id"]}).scalar_one()
+        return dict(rx), [tuple(c) for c in ctx], prep
+
+    with sess_scope() as s:
+        rx, ctx, prep = snapshot(s)
+        ext = s.execute(text("SELECT prompt_version, engine_versions, raw_answer, schema_version FROM extraction "
+                             "WHERE document_id=:d ORDER BY created_at DESC LIMIT 1"), {"d": did}).mappings().one()
+    assert rx["doctor_name"] == "Dr. A. Sen" and rx["doctor_reg_no"] == "12345"
+    assert rx["field_status"]["doctor.name"]["status"] in ("checked", "needs_check")
+    assert rx["provenance"]["prompt_version"] == ext["prompt_version"] and rx["provenance"]["schema_version"] == "v3"
+    assert ext["prompt_version"].startswith("p-") and ext["engine_versions"]["pdf_renderer"].startswith("pypdfium2")
+    assert ext["raw_answer"] and "Pregabalin" in ext["raw_answer"]          # the model's own text is kept
+    assert any(c[0] == "CBC" and c[1] == "Low back pain" for c in ctx)       # test <-> diagnosis, with the relation
+    with sess_scope() as s:
+        sync_document(s, did)
+        rx2, ctx2, prep2 = snapshot(s)
+    assert (ctx2, prep2) == (ctx, prep)                                       # same rows twice: no duplicates
+    assert {k: v for k, v in rx2.items() if k != "synced_at"} == {k: v for k, v in rx.items() if k != "synced_at"}

@@ -105,9 +105,20 @@ def test_render_pages_returns_normalised_pages_with_the_colour_source():
             assert im.mode == "RGB"
 
 
-def test_page_count_is_capped_at_max_pages(monkeypatch):
+def test_a_pdf_over_the_page_limit_is_refused_not_cut_short(monkeypatch):
     monkeypatch.setattr(pages.settings, "max_pages", 2)
-    assert len(_render(make_pdf([["a"], ["b"], ["c"], ["d"]]))) == 2
+    assert len(_render(make_pdf([["a"], ["b"]]))) == 2                  # at the limit: read
+    with pytest.raises(pages.PdfReadError, match="3 pages; the limit is 2"):
+        _render(make_pdf([["a"], ["b"], ["c"]]))                        # over it: nothing is read
+
+
+def test_a_multipage_tiff_over_the_limit_is_refused(monkeypatch):
+    monkeypatch.setattr(pages.settings, "max_pages", 2)
+    frames = [Image.new("RGB", (700, 900), "white") for _ in range(3)]
+    buf = io.BytesIO()
+    frames[0].save(buf, "TIFF", save_all=True, append_images=frames[1:])
+    with pytest.raises(pages.PdfReadError, match="3 pages"):
+        pages.render_pages(buf.getvalue(), "image/tiff")
 
 
 def test_rendered_text_is_visible_on_a_white_page():

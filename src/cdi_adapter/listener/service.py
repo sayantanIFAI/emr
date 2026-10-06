@@ -47,7 +47,8 @@ from sqlalchemy import text
 from ..config import settings
 from ..db import session_scope
 from ..logging import get_logger
-from .connectors import FOLDERS, Connector, RemoteFile, folder_name, get_connector, sha256
+from .connectors import (FOLDERS, Connector, RemoteFile, drain_ignored, folder_name, get_connector,
+                         reset_ignored, sha256)
 
 log = get_logger(__name__)
 WORKER = f"listener@{socket.gethostname()}"
@@ -75,8 +76,15 @@ def observe(conn: Connector) -> list[dict[str, Any]]:
     """One poll of the inbox: record new versions, count stable polls, return the rows
     that are ready (stable and unclaimed)."""
     ready: list[dict[str, Any]] = []
+    reset_ignored()
     files = conn.list("inbox")
+    ignored = drain_ignored()
     with session_scope() as sess:
+        for name, reason in ignored.items():      # never silent: a person can see what was skipped and why
+            sess.execute(text(
+                "INSERT INTO listener_ignored (connector, name, reason) VALUES (:c, :n, :r) "
+                "ON CONFLICT (connector, name, reason) DO UPDATE SET last_seen_at = now(), "
+                "times_seen = listener_ignored.times_seen + 1"), {"c": conn.name, "n": name, "r": reason})
         for f in files:
             row = _row(sess, conn.name, f)
             if row is None:

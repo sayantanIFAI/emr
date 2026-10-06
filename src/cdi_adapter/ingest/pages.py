@@ -295,14 +295,19 @@ def _render_pdf_page(doc: pdfium.PdfDocument, index: int, scale: float) -> Image
 
 
 def render_pdf_pngs(raw: bytes, dpi: int) -> list[bytes]:
-    """One intermediate PNG per page (at most ``max_pages``). A page is ``ceil(points * dpi / 72)``
+    """One intermediate PNG per page. A PDF with more than ``max_pages`` pages is REFUSED (LS-S3), never
+    cut short: a half-read prescription would look complete. A page is ``ceil(points * dpi / 72)``
     pixels on each side."""
     # PDF user space is 72 units per inch. The tiny factor stops float rounding from adding a pixel
     # when points * dpi / 72 is an exact integer (US Letter at 150 dpi is 1650 px, not 1651).
     scale = dpi / 72.0 * (1 - 1e-9)
     with _PDFIUM_LOCK:
         doc = _open_pdf(raw)
-        count = min(len(doc), settings.max_pages)
+        count = len(doc)
+        if count > settings.max_pages:
+            doc.close()
+            raise PdfReadError(f"PDF has {count} pages; the limit is {settings.max_pages}. "
+                               "Nothing was read: split the file or send fewer pages")
     pngs: list[bytes] = []
     try:
         for index in range(count):
@@ -340,6 +345,9 @@ def render_pages(raw: bytes, mime_type: str, *, dpi: int | None = None) -> list[
     if mime_type.startswith("image/") or _looks_like_image(raw):
         img = Image.open(io.BytesIO(raw))
         if getattr(img, "n_frames", 1) > 1:  # multi-page TIFF
+            if img.n_frames > settings.max_pages:
+                raise PdfReadError(f"image has {img.n_frames} pages; the limit is {settings.max_pages}. "
+                                   "Nothing was read: split the file or send fewer pages")
             for i in range(img.n_frames):
                 img.seek(i)
                 frame = _upright(img).convert("RGB")

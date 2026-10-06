@@ -246,19 +246,29 @@ def insert_extraction(
     payload: dict[str, Any],
     evidence_map: dict[str, Any] | None = None,
     model_run_id: UUID | str | None = None,
+    prompt_version: str | None = None,
+    engine_versions: dict[str, Any] | None = None,
+    raw_answer: str | None = None,
 ) -> UUID:
+    """``raw_answer`` is the model's text exactly as it came back (``payload`` is the parsed and
+    repaired object): both are kept, neither overwrites the other (OUT-S1)."""
     return sess.execute(
         text(
             """
             INSERT INTO extraction
-              (document_id, schema_name, schema_version, payload, evidence_map, model_run_id)
+              (document_id, schema_name, schema_version, payload, evidence_map, model_run_id,
+               prompt_version, engine_versions, raw_answer)
             VALUES
               (:document_id, :schema_name, :schema_version,
-               CAST(:payload AS jsonb), CAST(:evidence_map AS jsonb), :model_run_id)
+               CAST(:payload AS jsonb), CAST(:evidence_map AS jsonb), :model_run_id,
+               :prompt_version, CAST(:engine_versions AS jsonb), :raw_answer)
             RETURNING id
             """
         ),
         {
+            "prompt_version": prompt_version,
+            "engine_versions": json.dumps(engine_versions or {}),
+            "raw_answer": raw_answer,
             "document_id": str(document_id),
             "schema_name": schema_name,
             "schema_version": schema_version,

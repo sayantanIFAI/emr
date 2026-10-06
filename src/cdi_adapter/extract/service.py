@@ -580,10 +580,15 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
 
         if served_model:
             repo.set_run_model_version(sess, run_id, served_model)
+        from ..ml.client import last_raw_answer
+        from ..provenance import engine_versions, prompt_version
+
         ext_id = repo.insert_extraction(
             sess, document_id=document_id, schema_name=schema_id,
             schema_version="v3", payload=payload,
             evidence_map={"block_ids": blkmap}, model_run_id=run_id,
+            prompt_version=prompt_version(), engine_versions=engine_versions(served_model),
+            raw_answer=last_raw_answer(),
         )
 
         ctx = _Ctx(sess, document_id, pid, eid, ext_id, pages[0]["id"],

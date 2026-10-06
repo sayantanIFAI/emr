@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 import jsonschema
+import threading
 from pathlib import Path
 
 from ..config import settings
@@ -16,6 +17,14 @@ from ..logging import get_logger
 log = get_logger(__name__)
 
 _SCHEMA_DIR = Path(__file__).resolve().parents[3] / "schemas"
+
+# the model's text exactly as it came back on the last ``vlm_json_ex`` call of this thread: the extract
+# step keeps it beside the parsed object (OUT-S1); per thread, so concurrent documents never mix
+_last = threading.local()
+
+
+def last_raw_answer() -> str | None:
+    return getattr(_last, "raw", None)
 
 
 def _build_registry():
@@ -274,6 +283,7 @@ class _BaseClient:
         for attempt in range(retries + 1):
             got = self.vlm_generate_full(image, prompt + hint, max_tokens=max_tokens, json_schema=schema)
             raw, served, cut = got.text, got.model, got.truncated
+            _last.raw = raw
             if cut:
                 log.warning("vlm_json_truncated", attempt=attempt, max_tokens=max_tokens)
             salvaged = False
