@@ -1,0 +1,14 @@
+{
+  "identities": [
+    {
+      "name": "cdi-bucket-admin",
+      "credentials": [{"accessKey": "devbucketadmin", "secretKey": "devbucketadminsecret"}],
+      "actions": ["Admin"]
+    },
+    {
+      "name": "cdi-app",
+      "credentials": [{"accessKey": "cdiadmin", "secretKey": "cdiadminsecret"}],
+      "actions": ["Read:cdi-documents", "Write:cdi-documents", "List:cdi-documents"]
+    }
+  ]
+}

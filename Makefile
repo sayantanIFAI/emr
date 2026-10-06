@@ -11,10 +11,10 @@ venv: ## create local venv and install (editable + dev)
 	$(PY) -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && pip install -e ".[dev]"
 
 .PHONY: up
-up: ## start full stack (postgres, redis, minio, migrate, api, worker, watcher)
+up: ## start full stack (postgres, redis, object store, migrate, api, worker, watcher)
 	$(COMPOSE) up -d --build
 	@echo "API:      http://localhost:8080/healthz"
-	@echo "MinIO UI: http://localhost:9001  (cdiadmin / cdiadminsecret)"
+	@echo "S3 store: http://localhost:9000  (dev keys: infra/compose/seaweedfs/s3.json; no web console)"
 
 .PHONY: down
 down: ## stop stack (keep volumes)

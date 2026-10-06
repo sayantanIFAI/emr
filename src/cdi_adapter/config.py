@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://cdi:cdi@localhost:5432/cdi"
     redis_url: str = "redis://localhost:6379/0"
 
-    # --- object storage (MinIO / S3) ---
+    # --- object storage: any S3 API (SeaweedFS in the stack, docs/object-store.md) ---
     s3_endpoint_url: str = "http://localhost:9000"
     s3_access_key: str = "cdiadmin"
     s3_secret_key: str = "cdiadminsecret"

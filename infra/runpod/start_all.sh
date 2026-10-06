@@ -2,7 +2,7 @@
 # THE single entrypoint. Run this once per pod boot:
 #     bash /workspace/cdi/infra/runpod/start_all.sh
 #
-# Everything needed lives on /workspace (repo, venv, model cache, MinIO object
+# Everything needed lives on /workspace (repo, venv, model cache, SeaweedFS object
 # store, Postgres dump). This script re-creates only the ephemeral parts:
 #   - apt packages (postgres/redis/cron)        [bootstrap_pod.sh]
 #   - the Postgres cluster on the overlay,      [bootstrap_pod.sh]

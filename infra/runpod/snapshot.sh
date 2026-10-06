@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Dump the adapter DB to /workspace so it survives a pod restart.
-# The document bytes already persist (MinIO on /workspace); this captures the
+# The document bytes already persist (object store on /workspace); this captures the
 # derived rows (clinical_fact, fhir_resource, review state, ...).
 #
 # Wire to cron for periodic snapshots:

@@ -6,7 +6,7 @@
 #                 (no loop devices, no /dev/fuse, no CAP_SYS_ADMIN -> dirs are forced 0777,
 #                  which Postgres refuses for PGDATA).
 #   Therefore:
-#     - repo, venv, sample data, MODELS, HF cache, MinIO object store (the real
+#     - repo, venv, sample data, MODELS, HF cache, object store (SeaweedFS; the real
 #       document bytes), and the Postgres DUMP all live on /workspace  -> nothing lost.
 #     - the live Postgres cluster runs on the ephemeral overlay and is REBUILT here
 #       on every start, then restored from /workspace/backup/cdi.dump if present.
@@ -49,17 +49,8 @@ redis-cli -p 6379 ping >/dev/null 2>&1 || \
   redis-server --daemonize yes --dir "$WS/redis" --appendonly yes \
     --port 6379 --bind 127.0.0.1 --pidfile "$WS/redis/redis.pid"
 
-echo "== 4/6 MinIO (object store on /workspace) =="
-if ! curl -sf http://127.0.0.1:9000/minio/health/ready >/dev/null 2>&1; then
-  [ -x "$WS/bin/minio" ] || { curl -sSL https://dl.min.io/server/minio/release/linux-amd64/minio -o "$WS/bin/minio"; chmod +x "$WS/bin/minio"; }
-  [ -x "$WS/bin/mc" ]    || { curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc      -o "$WS/bin/mc";    chmod +x "$WS/bin/mc"; }
-  MINIO_ROOT_USER=cdiadmin MINIO_ROOT_PASSWORD=cdiadminsecret \
-    nohup "$WS/bin/minio" server "$WS/minio-data" \
-      --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 >"$WS/minio.log" 2>&1 &
-  sleep 4
-fi
-"$WS/bin/mc" alias set local http://127.0.0.1:9000 cdiadmin cdiadminsecret >/dev/null 2>&1 || true
-"$WS/bin/mc" mb --ignore-existing local/cdi-documents >/dev/null 2>&1 || true
+echo "== 4/6 Object store (SeaweedFS S3 on /workspace) =="
+bash "$REPO/infra/runpod/start_objectstore.sh"
 
 echo "== 5/6 venv + schema =="
 cd "$REPO"

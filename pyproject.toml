@@ -86,7 +86,8 @@ target-version = "py311"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-  "integration: requires Postgres/MinIO/Redis (set CDI_DATABASE_URL etc.)",
+  "integration: requires Postgres/an S3 object store/Redis (set CDI_DATABASE_URL etc.)",
+  "objectstore: needs only a live S3 store (set CDI_S3_ENDPOINT_URL); skips otherwise",
 ]
 
 # pypdfium2 ships no type stubs

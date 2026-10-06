@@ -129,3 +129,42 @@ def test_presigned_get_is_a_path_style_sigv4_url_with_the_requested_expiry(s3):
     assert parsed.path == f"/{settings.s3_bucket}/documents/ab/abc/pages/0001.png"
     assert q["X-Amz-Algorithm"] == ["AWS4-HMAC-SHA256"] and q["X-Amz-Expires"] == ["900"]
     assert "X-Amz-Signature" in q
+
+
+def test_ensure_bucket_when_ready_retries_connection_failures_then_succeeds(s3, monkeypatch):
+    client, stub = s3
+    calls = {"n": 0}
+    real_head = client.head_bucket
+
+    def flaky(**kw):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise EndpointConnectionError(endpoint_url="http://store.test:9000")
+        return real_head(**kw)
+
+    monkeypatch.setattr(client, "head_bucket", flaky)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    stub.add_response("head_bucket", {}, {"Bucket": settings.s3_bucket})
+    storage.ensure_bucket_when_ready(timeout_s=30)
+    assert calls["n"] == 3
+
+
+def test_ensure_bucket_when_ready_gives_up_after_the_timeout(s3, monkeypatch):
+    client, _ = s3
+
+    def refuse(**_kw):
+        raise EndpointConnectionError(endpoint_url="http://store.test:9000")
+
+    monkeypatch.setattr(client, "head_bucket", refuse)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    with pytest.raises(EndpointConnectionError):
+        storage.ensure_bucket_when_ready(timeout_s=0)
+
+
+def test_ensure_bucket_when_ready_does_not_retry_a_refusal(s3, monkeypatch):
+    _, stub = s3
+    monkeypatch.setattr("time.sleep", lambda _s: (_ for _ in ()).throw(AssertionError("retried")))
+    stub.add_client_error("head_bucket", "404", http_status_code=404)
+    stub.add_client_error("create_bucket", "AccessDenied", http_status_code=403)
+    with pytest.raises(ClientError):
+        storage.ensure_bucket_when_ready(timeout_s=30)

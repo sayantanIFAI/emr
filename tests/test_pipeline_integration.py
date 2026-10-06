@@ -1,4 +1,4 @@
-"""S1->S2->S3 against real Postgres + MinIO, stub VLM backend, RapidOCR.
+"""S1->S2->S3 against real Postgres + an S3 object store, stub VLM backend, RapidOCR.
 
 Auto-skips without infra or without the `ocr` extra installed.
 Run:  CDI_MLSERVE_BACKEND=stub CDI_DATABASE_URL=... CDI_S3_ENDPOINT_URL=... pytest -m integration

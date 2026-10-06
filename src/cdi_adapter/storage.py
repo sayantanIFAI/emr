@@ -52,6 +52,25 @@ def ensure_bucket() -> None:
                 raise
 
 
+def ensure_bucket_when_ready(timeout_s: float = 60.0, every_s: float = 1.0) -> None:
+    """``ensure_bucket`` for a store that is still starting: retry connection failures until
+    ``timeout_s``. A refusal (bad key, no permission to create) is not retried: it raises."""
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            ensure_bucket()
+            return
+        except ClientError:
+            raise
+        except Exception as exc:  # connection refused / DNS / reset while the store starts
+            if time.monotonic() >= deadline:
+                raise
+            log.info("object_store_not_ready", error=type(exc).__name__)
+            time.sleep(every_s)
+
+
 def put_bytes(key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
     get_s3().put_object(
         Bucket=settings.s3_bucket, Key=key, Body=data, ContentType=content_type
@@ -97,3 +116,8 @@ def ping() -> bool:
 
 def stream(key: str) -> io.BytesIO:
     return io.BytesIO(get_bytes(key))
+
+
+if __name__ == "__main__":  # `python -m cdi_adapter.storage`: create the bucket (compose init job)
+    ensure_bucket_when_ready()
+    print(f"bucket ready: {settings.s3_bucket}")

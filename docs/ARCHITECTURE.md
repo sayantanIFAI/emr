@@ -123,7 +123,7 @@ Constraints that shaped the build:
 | Constraint | Consequence |
 |---|---|
 | Open-source only, no per-document API cost | On-prem models: Qwen2.5-VL (Apache-2.0), RapidOCR, seed terminology |
-| Runs on a single RunPod pod, **no Docker** | Native processes (Postgres, Redis, MinIO, gateway, web app) |
+| Runs on a single RunPod pod, **no Docker** | Native processes (Postgres, Redis, SeaweedFS object store, gateway, web app) |
 | Pod GPU is an **RTX PRO 4500 Blackwell 32 GB** (workstation-class, 165 W) | 7B VLM in bf16 fits (~15 GB); ~12–14 GB left for a KV cache once vLLM lands; no fine-tuned DSLM yet |
 | `/workspace` is MooseFS (persistent, but `chown`/`fallocate` fail, dirs forced 0777) | Postgres cluster runs on the ephemeral overlay; a `pg_dump` on `/workspace` + auto-restore is the persistence mechanism |
 | Pod is recreated often (new IP/port each time) | One idempotent `start_all.sh`; nothing derived stored only in the cluster |
@@ -135,7 +135,7 @@ Constraints that shaped the build:
 ```
 ┌───────────────────────────────┐        read-only         ┌────────────────────────┐
 │  LEGACY HMS  +  its database   │ ───────────────────────▶ │      CDI-Adapter        │
-│  (scanned documents only)      │   folder / API / batch   │  own PostgreSQL + MinIO │
+│  (scanned documents only)      │   folder / API / batch   │  own PostgreSQL + S3 st │
 └───────────────────────────────┘                          └───────────┬────────────┘
                                                                        │
                           ┌────────────────────────────────────────────┴───────────┐
@@ -187,7 +187,7 @@ Constraints that shaped the build:
    │
    ▼ (all stages)
  ┌─────────────┐   ┌──────────────┐   ┌─────────────────────────────┐
- │ PostgreSQL  │   │ MinIO (S3)   │   │ Redis (Celery broker;       │
+ │ PostgreSQL  │   │ SeaweedFS S3 │   │ Redis (Celery broker;       │
  │ 16          │   │ scans+pages  │   │ used by the folder-watch    │
  │ (overlay)   │   │ (/workspace) │   │ path, not the web app)      │
  └─────────────┘   └──────────────┘   └─────────────────────────────┘
@@ -223,7 +223,7 @@ POD  (RunPod, RTX PRO 4500 Blackwell 32 GB, Ubuntu 24.04, torch 2.8+cu128, NO Do
 /  overlay  (30 GB, WIPED on every restart)          /workspace  (MooseFS, PERSISTENT)
 ├── apt: postgresql-16, redis, cron   ← reinstalled  ├── cdi/            repo + .venv (system-site-packages)
 ├── /var/lib/postgresql/16/cdi        ← PGDATA,      ├── hf-cache/       Qwen2.5-VL weights (~16 GB)
-│      rebuilt + pg_restore on boot                  ├── minio-data/     original scans + page PNGs  ← the irreplaceable bytes
+│      rebuilt + pg_restore on boot                  ├── seaweedfs-data/ original scans + page PNGs  ← the irreplaceable bytes
 └── running processes (mlserve,webapp)               ├── redis/          AOF
                                                      ├── backup/cdi.dump pg_dump, refreshed by cron every 15 min
                                                      ├── data/inbox…     folder-watch drop dirs
@@ -234,7 +234,7 @@ POD  (RunPod, RTX PRO 4500 Blackwell 32 GB, Ubuntu 24.04, torch 2.8+cu128, NO Do
 rejects `chown`; Postgres refuses such a `PGDATA`. No loop devices, no `/dev/fuse`,
 no `CAP_SYS_ADMIN`, so a userspace ext4 image is impossible. The cluster is
 therefore ephemeral and **reconstructed from `/workspace/backup/cdi.dump` on each
-boot**. Nothing unique is lost: the scan bytes live in MinIO on `/workspace`, and
+boot**. Nothing unique is lost: the scan bytes live in the object store (SeaweedFS) on `/workspace`, and
 every derived row is reproducible from those by re-running the pipeline *and* is
 captured in the 15-minute dump.
 
@@ -275,7 +275,7 @@ Client side (`cdi_adapter.ml.client`):
 | `cdi_adapter.mlserve` | 8077 | localhost only | GPU model gateway |
 | PostgreSQL | 5432 | localhost | overlay `PGDATA`, `-k /tmp` |
 | Redis | 6379 | localhost | Celery broker (folder-watch path) |
-| MinIO | 9000 / 9001 | localhost | bucket `cdi-documents` |
+| SeaweedFS (S3 gateway) | 9000 | localhost | bucket `cdi-documents`; its master / volume / filer ports are also bound to 127.0.0.1 and are not for clients (`infra/runpod/start_objectstore.sh`, `docs/object-store.md`) |
 
 ---
 
@@ -915,12 +915,12 @@ on top of today's 74 s, "review starts in well under a minute". Not "almost zero
 ### 8.1 Sequence (web-app path)
 
 ```
-User        webapp            jobs(thread)     mlserve(VLM)   RapidOCR    Postgres/MinIO
+User        webapp            jobs(thread)     mlserve(VLM)   RapidOCR    Postgres/S3   
  │  POST /api/jobs (5 files)   │                │              │           │
  │ ───────────────────────────▶│ create patient ───────────────────────────▶ patient_identity
  │  202 {job_id}               │                │              │           │
  │                             │ for each file: │              │           │
- │                             │  ingest ───────────────────────────────────▶ source_document, pages→MinIO
+ │                             │  ingest ───────────────────────────────────▶ source_document, pages→S3   
  │                             │  ocr (rapidocr) ───────────────▶ blocks     │
  │                             │  ─────────────────────────────────────────▶ ocr_block
  │                             │  classify (heuristic on OCR text; VLM only  │
@@ -957,7 +957,7 @@ Postgres.
 |---|---|---|
 | `CDI_DATABASE_URL` | `postgresql+psycopg://cdi:cdi@127.0.0.1:5432/cdi` | adapter DB |
 | `CDI_REDIS_URL` | `redis://127.0.0.1:6379/0` | Celery broker |
-| `CDI_S3_ENDPOINT_URL` / `_ACCESS_KEY` / `_SECRET_KEY` / `_BUCKET` | MinIO on `127.0.0.1:9000`, `cdi-documents` | object store |
+| `CDI_S3_ENDPOINT_URL` / `_ACCESS_KEY` / `_SECRET_KEY` / `_BUCKET` | SeaweedFS S3 on `127.0.0.1:9000`, `cdi-documents` | object store |
 | `CDI_INBOX_DIR` / `_PROCESSED_DIR` / `_FAILED_DIR` | `/workspace/data/*` | folder-watch |
 | `CDI_PAGE_DPI` | 200 | render resolution |
 | `CDI_WEBAPP_PORT` | **8888** | the RunPod-proxied port |
@@ -996,7 +996,7 @@ bash /workspace/cdi/infra/runpod/start_all.sh
 overlay, **`pg_restore`s `/workspace/backup/cdi.dump`**, runs `alembic upgrade
 head`, rebuilds the venv if missing; then the gateway and web app start. Model
 weights are already in `/workspace/hf-cache`; scans are already in
-`/workspace/minio-data`.
+`/workspace/seaweedfs-data` (was `minio-data` before the MinIO replacement).
 
 ### 10.3 DB snapshots
 `snapshot.sh` (`pg_dump -Fc` → `/workspace/backup/cdi.dump`, keeps last 10) is on
@@ -1028,7 +1028,7 @@ checks must grep a content marker); `psql`/`pg_restore` need the URL with
   extraction schemas, **S6 rules** (value ranges, °F normalization, medication
   dose/frequency/ceiling, future/implausible dates, evidence-present) and the
   `_calibrate` gate function.
-- Integration (`-m integration`, needs Postgres+MinIO, stub VLM): full
+- Integration (`-m integration`, needs Postgres + an S3 store, stub VLM): full
   `ingest → ocr → classify` producing `doc_classification` + `ocr_block` rows with
   bboxes and `pipeline_run` stages `ok`.
 - `scripts/pipeline_smoke.py` drives S1–S3 (or S1–S9 via the web app) over the
@@ -1045,7 +1045,7 @@ checks must grep a content marker); `psql`/`pg_restore` need the URL with
 | Legacy DB | strictly read-only; never touched | — |
 | Web UI auth | **none** | add auth before any real data |
 | Transport | RunPod proxy provides TLS to the browser; internal is plaintext localhost | mTLS for a multi-node deployment |
-| At rest | MinIO + Postgres on the pod; DB dump on `/workspace` | encryption at rest, KMS |
+| At rest | SeaweedFS + Postgres on the pod; DB dump on `/workspace` | encryption at rest, KMS |
 | Audit | `audit_log` on every create/update/read | ship to a WORM store |
 | De-identification | none (demo data) | Presidio + clinical NER before any training corpus |
 | ABDM | schema for `abdm_care_context/consent/transfer`; **no gateway, no Fidelius** | build the DMZ edge (§14) |
@@ -1805,7 +1805,7 @@ clinical-emr-adapter/
 | OCR | `rapidocr-onnxruntime` + `onnxruntime` (CPU) |
 | *Target, not installed (§15)* | TrOCR / HTR line recognizer (the Bengali-capable checkpoint is chosen by E2-S10); `Qwen2.5-VL-7B-Instruct-AWQ` candidate (E2-S14); vision-embedding index for exemplar memory (HW-Phase C) |
 | API / server | FastAPI + uvicorn |
-| DB / store / broker | PostgreSQL 16, MinIO (RELEASE.2025-09-07), Redis 7 |
+| DB / store / broker | PostgreSQL 16, SeaweedFS 4.48, Redis 7 |
 | schema validation | `jsonschema` + `referencing` registry |
 | DB access | SQLAlchemy 2 (Core `text()`), psycopg 3 |
 

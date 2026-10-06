@@ -85,7 +85,7 @@ the system of record.
 
 ### Repo
 `D:\Claude\clinical-emr-adapter` — Python 3.12, FastAPI, SQLAlchemy 2 / psycopg 3,
-Postgres + MinIO + Redis, Alembic. GitHub: `https://github.com/sayantanIFAI/emr`
+Postgres + an S3 object store (SeaweedFS; was MinIO) + Redis, Alembic. GitHub: `https://github.com/sayantanIFAI/emr`
 (branch `main`). Latest commits at handover time:
 
 ```

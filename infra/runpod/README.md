@@ -12,11 +12,11 @@ Postgres rejects for `PGDATA`. So:
 | On `/workspace` (persistent) | On `/` overlay (rebuilt each boot) |
 |---|---|
 | repo `/workspace/cdi`, `.venv`, sample data | apt packages (postgres, redis clients) |
-| **MinIO object store `/workspace/minio-data`** — the real scanned-document bytes | the live Postgres **cluster** (`/var/lib/postgresql/16/cdi`) |
+| **Object store (SeaweedFS) `/workspace/seaweedfs-data`** — the real scanned-document bytes | the live Postgres **cluster** (`/var/lib/postgresql/16/cdi`) |
 | models, `HF_HOME=/workspace/hf-cache` | |
 | **`/workspace/backup/cdi.dump`** — periodic `pg_dump` of the derived rows | |
 
-Nothing irreplaceable is lost on restart: document bytes live in MinIO on `/workspace`, and
+Nothing irreplaceable is lost on restart: document bytes live in the object store on `/workspace`, and
 the Postgres rows are both reproducible from those bytes *and* dumped to `/workspace`.
 
 ## First time
@@ -24,7 +24,7 @@ the Postgres rows are both reproducible from those bytes *and* dumped to `/works
 ```bash
 cd /workspace/cdi
 cp .env.runpod .env
-bash infra/runpod/bootstrap_pod.sh      # installs+starts pg/redis/minio, venv, migrations
+bash infra/runpod/bootstrap_pod.sh      # installs+starts pg/redis/object store, venv, migrations
 ```
 
 ## After every pod restart

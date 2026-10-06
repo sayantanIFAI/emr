@@ -1,4 +1,4 @@
-"""End-to-end ingest against real Postgres + MinIO. Auto-skips without infra.
+"""End-to-end ingest against real Postgres + an S3 object store. Auto-skips without infra.
 
 Run:  make up  &&  CDI_DATABASE_URL=... CDI_S3_ENDPOINT_URL=... pytest -m integration
 """

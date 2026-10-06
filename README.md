@@ -35,7 +35,7 @@ db/schema.sql             authoritative DDL (13 table groups + read-model views)
 db/alembic/               migrations (0001 runs schema.sql + views.sql)
 src/cdi_adapter/
   config.py               env-driven settings (CDI_* prefix)
-  db.py  storage.py  repo.py   Postgres + MinIO access
+  db.py  storage.py  repo.py   Postgres + S3 object store access
   ingest/                S1  pages.py (deskew/denoise/CLAHE) · service.py (sha256 dedupe,
                              immutable original) · watcher.py (folder-watch + sidecar)
   classify/              S2  prompt.py + service.py -> doc_classification (VLM, schema-locked)
@@ -60,7 +60,7 @@ pip install -e ".[dev]"
 pytest -q                                          # unit tests, no infra needed
 
 # full stack (Docker):
-make up                                            # postgres + redis + minio + api + worker + watcher
+make up                                            # postgres + redis + object store + api + worker + watcher
 python scripts/make_sample_docs.py --out ./data/inbox --count 3
 curl -s localhost:8080/healthz | jq
 ```
@@ -69,8 +69,8 @@ curl -s localhost:8080/healthz | jq
 
 See **[infra/runpod/README.md](infra/runpod/README.md)**. The current pilot pod is an
 **RTX PRO 4000 Blackwell 24 GB** with **no Docker**; the stack runs as native processes.
-`/workspace` (MooseFS) holds the repo, venv, sample data, models and the **MinIO object
-store** (the real document bytes) plus a periodic `pg_dump`; the live Postgres cluster runs
+`/workspace` (MooseFS) holds the repo, venv, sample data, models and the **object
+store** (SeaweedFS) (the real document bytes) plus a periodic `pg_dump`; the live Postgres cluster runs
 on the ephemeral overlay and is rebuilt/restored by `infra/runpod/bootstrap_pod.sh` on each
 restart. The 24 GB GPU means later model phases use a 4-bit (AWQ) or 8-bit 7B stack,
 not full-precision co-resident 7B.
