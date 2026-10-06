@@ -38,6 +38,15 @@ class Settings(BaseSettings):
     max_pages: int = 200
     allowed_mime_prefixes: tuple[str, ...] = ("image/", "application/pdf")
 
+    # --- upload screen (UP-S1) ---
+    # What the web upload accepts, decided from the file's bytes (never its name): JPG, PNG, TIFF, PDF.
+    upload_mime_types: tuple[str, ...] = ("application/pdf", "image/png", "image/jpeg", "image/tiff")
+    # PLACEHOLDER limits (not measured): sized for phone photos (a few MB) and scanned PDFs, and to
+    # bound memory per request (the whole upload is read into memory). Tune on pilot data.
+    upload_max_files: int = 10
+    upload_max_file_bytes: int = 50_000_000
+    upload_max_total_bytes: int = 150_000_000
+
     # --- image preprocessing ---
     deskew_enabled: bool = True
     denoise_enabled: bool = True

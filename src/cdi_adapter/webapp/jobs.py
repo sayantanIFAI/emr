@@ -40,6 +40,10 @@ _extract_sem = threading.Semaphore(max(1, settings.extract_concurrency))
 _cand_lock = threading.Lock()
 _jobs: dict[str, "Job"] = {}
 _lock = threading.Lock()
+# Idempotency-Key -> (time, job id): the same Send pressed twice (a double tap, a retry after a
+# dropped connection) answers with the SAME job instead of starting a second one. Per process.
+_IDEM_TTL_S = 3600.0
+_idem: dict[str, tuple[float, str]] = {}
 
 
 @dataclass
@@ -56,6 +60,9 @@ class DocProg:
         default_factory=lambda: {s: "pending" for s in STAGES})
     t0: float = field(default_factory=time.time)
     seconds: float | None = None
+    # the untouched originals this document was assembled from (UP-S1 "one prescription"); never
+    # part of the public job view
+    parts: list[tuple[str, bytes]] | None = None
 
     def stage(self, name: str, state: str) -> None:
         self.stages[name] = state
@@ -108,10 +115,33 @@ class Job:
 
 
 def create_job(abha: str | None, files: list[tuple[str, bytes]],
-               patient_ref: str | None = None) -> str:
+               patient_ref: str | None = None, *,
+               parts: list[list[tuple[str, bytes]] | None] | None = None,
+               idempotency_key: str | None = None) -> str:
     jid = uuid.uuid4().hex[:12]
+    if idempotency_key:
+        now = time.time()
+        with _lock:
+            for k in [k for k, (t, _j) in _idem.items() if now - t > _IDEM_TTL_S]:
+                del _idem[k]
+            if idempotency_key in _idem:
+                return _idem[idempotency_key][1]
+            _idem[idempotency_key] = (now, jid)        # reserve before any slow work
+    try:
+        return _create_job(jid, abha, files, patient_ref, parts)
+    except Exception:
+        if idempotency_key:
+            with _lock:
+                _idem.pop(idempotency_key, None)       # a failed start may be retried
+        raise
+
+
+def _create_job(jid: str, abha: str | None, files: list[tuple[str, bytes]],
+                patient_ref: str | None,
+                parts: list[list[tuple[str, bytes]] | None] | None) -> str:
     job = Job(id=jid, abha=(abha or "").strip() or None)
-    job.docs = [DocProg(filename=fn) for fn, _ in files]
+    job.docs = [DocProg(filename=fn, parts=(parts[i] if parts else None))
+                for i, (fn, _) in enumerate(files)]
 
     ref = (patient_ref or "").strip()
     if ref:
@@ -149,6 +179,10 @@ def _stage1(prog: DocProg, fn: str, raw: bytes, abha: str | None) -> None:
         prog.stage("ingest", "running")
         res = ingest_bytes(raw, filename=fn, source_channel="webapp", legacy_patient_ref=abha)
         prog.document_id = res.document_id
+        if prog.parts and not res.deduplicated:
+            # one prescription built from several pictures: keep each original untouched
+            from .upload import store_parts
+            store_parts(res.document_id, res.sha256, prog.parts)
         if res.status == "quality_hold":
             # E2-S12: an unreadable capture is held for rescan - never guessed at
             with session_scope() as sess:

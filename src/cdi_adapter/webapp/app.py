@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from .. import __version__, repo, storage
@@ -15,6 +15,7 @@ from ..logging import get_logger
 from ..ml.client import get_client
 from ..storage import ping as s3_ping
 from . import review as review_svc
+from . import upload
 from .jobs import apply_edits_and_generate, create_job, get_job, job_facts
 from .page import PAGE
 from .review_page import REVIEW_PAGE
@@ -70,28 +71,45 @@ def registry_save(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return {"ok": True, "patient": row}
 
 
+@app.get("/api/upload/limits")
+def upload_limits() -> dict[str, Any]:
+    """What the upload screen may tell the person before Send (all from settings)."""
+    return upload.limits()
+
+
 @app.post("/api/jobs", status_code=202)
 async def submit_job(
     abha: str | None = Form(default=None),
     patient_ref: str | None = Form(default=None),
+    grouping: str = Form(default="separate"),
     files: list[UploadFile] = File(...),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict[str, Any]:
     """If ``patient_ref`` (CareFlow id / ABHA / mobile) matches the clinic
     registry, all documents attach to that patient. Otherwise the patient's name,
-    sex and DOB are read from the documents and a new CareFlow id is generated."""
-    if not files:
-        raise HTTPException(422, "attach at least one document")
-    if len(files) > 10:
-        raise HTTPException(422, "max 10 documents per patient")
-    payload: list[tuple[str, bytes]] = []
-    for f in files:
-        data = await f.read()
-        if data:
-            payload.append((f.filename or "document", data))
-    if not payload:
-        raise HTTPException(422, "all uploads were empty")
-    jid = create_job(abha, payload, patient_ref=patient_ref)
-    return {"job_id": jid, "documents": len(payload)}
+    sex and DOB are read from the documents and a new CareFlow id is generated.
+
+    ``grouping``: ``separate`` (default) = every file is its own document; ``one_document`` = the
+    pictures are the pages of ONE prescription (one document, one result). Every refusal is one
+    plain sentence (``detail``); the same ``Idempotency-Key`` returns the same job."""
+    try:
+        abha_n = upload.normalize_abha(abha)
+        ref = upload.clean_patient_ref(patient_ref)
+        if len(files) > settings.upload_max_files:        # before reading any bytes
+            raise upload.UploadError(f"You can send up to {settings.upload_max_files} files at once.")
+        cap = settings.upload_max_file_bytes
+        raw: list[tuple[str, bytes]] = []
+        for f in files:
+            raw.append((f.filename or "document", await f.read(cap + 1)))   # bounded memory
+        items = upload.prepare(raw, grouping)
+    except upload.UploadError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    key = (idempotency_key or "").strip()
+    if key and not (len(key) <= 64 and key.replace("-", "").replace("_", "").isalnum()):
+        raise HTTPException(422, "Invalid request, please reload the page and try again.")
+    jid = create_job(abha_n, [(i.name, i.data) for i in items], patient_ref=ref,
+                     parts=[i.parts for i in items], idempotency_key=key or None)
+    return {"job_id": jid, "documents": len(items)}
 
 
 @app.get("/api/jobs/{job_id}")

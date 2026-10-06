@@ -19,23 +19,36 @@ _HTML = r"""<!doctype html>
     <h2>Patient</h2>
     <label class="fld" for="pref">Existing patient — CareFlow ID · ABHA ID · mobile number</label>
     <div style="display:flex;gap:8px">
-      <input type="text" id="pref" placeholder="CFP-2026-000901  /  14-1111-2222-3333  /  9830011234" autocomplete="off" style="flex:1"/>
+      <input type="text" id="pref" placeholder="CFP-2026-000901  /  14-1111-2222-3333  /  9830011234" autocomplete="off" maxlength="40" style="flex:1"/>
       <button class="btn btn-ghost" id="lookup">Look up</button>
     </div>
     <div id="matched" class="muted" style="margin-top:8px;font-size:13px"></div>
 
-    <label class="fld">Documents</label>
-    <p class="hint" style="margin:0 0 8px">For a <b>new patient</b>, name / sex / date of birth are read from the documents and a CareFlow ID is generated.</p>
-    <div class="dropzone" id="dz" tabindex="0" role="button" aria-label="Choose or drop documents">
+    <label class="fld">Pages of the prescription</label>
+    <p class="hint" style="margin:0 0 8px">Add every page, in order. For a <b>new patient</b>, name / sex / date of birth are read from the pages and a CareFlow ID is generated.</p>
+    <div class="dropzone" id="dz" tabindex="0" role="button" aria-label="Choose or drop photos, scans or PDFs">
       %%ICON%%
-      <div class="dz-title">Drop files here or click to choose</div>
-      <div class="dz-sub">PDF, JPG, PNG or TIFF · up to 10 documents · processed in parallel</div>
-      <div class="dz-files" id="dzfiles"></div>
+      <div class="dz-title">Drop photos, scans or PDFs here, or click to choose</div>
+      <div class="dz-sub" id="dzsub">JPG, PNG, TIFF or PDF</div>
+    </div>
+    <div class="up-actions">
+      <button class="btn btn-ghost" type="button" id="cam">Take a picture</button>
+      <button class="btn btn-ghost" type="button" id="pick">Choose files</button>
+      <span class="muted" id="pgcount" aria-live="polite"></span>
     </div>
     <input type="file" id="files" multiple hidden
-      accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,image/*,application/pdf"/>
+      accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,image/jpeg,image/png,image/tiff,application/pdf"/>
+    <input type="file" id="camera" hidden accept="image/*" capture="environment"/>
+    <ol class="pagelist" id="pages" aria-label="Pages to send"></ol>
+    <fieldset class="grouping" id="grouping" hidden>
+      <legend>These files are</legend>
+      <label><input type="radio" name="grp" value="one_document" checked/> pages of <b>one prescription</b> (one result)</label>
+      <label><input type="radio" name="grp" value="separate"/> <b>separate files</b> (each is read on its own)</label>
+      <div class="muted" id="grphint"></div>
+    </fieldset>
+    <div class="up-err" id="uperr" role="alert" hidden></div>
     <label class="fld" for="abha">ABHA number (optional, for a new patient)</label>
-    <input type="text" id="abha" placeholder="14-XXXX-XXXX-XXXX" autocomplete="off"/>
+    <input type="text" id="abha" placeholder="14-XXXX-XXXX-XXXX" autocomplete="off" inputmode="numeric" maxlength="20"/>
     <div style="margin-top:16px;display:flex;gap:10px;align-items:center">
       <button class="btn btn-primary" id="go">Generate EMR</button>
       <span id="hint" class="muted"></span>
@@ -112,27 +125,125 @@ async function doLookup(){
   }
 }
 
-const dz=$("#dz"),fileInput=$("#files");
-dz.onclick=()=>fileInput.click();
-dz.onkeydown=e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); fileInput.click(); } };
+const dz=$("#dz"),fileInput=$("#files"),camInput=$("#camera");
+// What the server will accept (settings, GET api/upload/limits). The server checks everything
+// again: this only lets the screen say it sooner. Defaults are used only if that call fails.
+let LIMITS={max_files:10,max_file_mb:50,max_total_mb:150,min_short_side_px:600};
+const OK_TYPES=["application/pdf","image/png","image/jpeg","image/tiff"];
+const OK_EXT=/\.(pdf|png|jpe?g|tiff?)$/i;
+let PAGES=[],NEXT_ID=1,SEND_KEY=null,SENDING=false,LOCKED=false;
+
+function limitText(){ return "JPG, PNG, TIFF or PDF · up to "+LIMITS.max_files+" files · each up to "+LIMITS.max_file_mb+" MB"; }
+$("#dzsub").textContent=limitText();
+fetch("api/upload/limits").then(r=>r.ok?r.json():null).then(j=>{ if(j){ LIMITS=j; $("#dzsub").textContent=limitText(); render(); } }).catch(()=>{});
+
+function say(msg){ const e=$("#uperr"); e.hidden=!msg; e.textContent=msg||""; }
+function mb(n){ return n<1e6 ? Math.max(1,Math.round(n/1e3))+" KB" : (n/1e6).toFixed(1).replace(/\.0$/,"")+" MB"; }
+function isPdf(f){ return f.type==="application/pdf"||/\.pdf$/i.test(f.name); }
+function isTiff(f){ return f.type==="image/tiff"||/\.tiff?$/i.test(f.name); }
+
+function addFiles(list){
+  if(LOCKED||SENDING) return;
+  let problem="";
+  for(const f of list){
+    if(!(OK_TYPES.includes(f.type)||OK_EXT.test(f.name))){ problem=problem||('Please add a photo, PDF or scan. "'+f.name+'" is not one.'); continue; }
+    if(f.size>LIMITS.max_file_mb*1e6){ problem=problem||('"'+f.name+'" is larger than '+LIMITS.max_file_mb+' MB.'); continue; }
+    if(PAGES.length>=LIMITS.max_files){ problem=problem||('You can send up to '+LIMITS.max_files+' files at once.'); break; }
+    if(PAGES.reduce((n,p)=>n+p.file.size,0)+f.size>LIMITS.max_total_mb*1e6){ problem=problem||('Together the files are larger than '+LIMITS.max_total_mb+' MB. Please send fewer pages at once.'); continue; }
+    // the file is kept EXACTLY as chosen: nothing is resized or re-compressed here
+    const p={id:NEXT_ID++,file:f,url:null,w:null,h:null,warn:"",noPreview:false};
+    if(!isPdf(f)&&!isTiff(f)){
+      p.url=URL.createObjectURL(f);
+      const im=new Image();
+      im.onload=()=>{ p.w=im.naturalWidth; p.h=im.naturalHeight;
+        if(Math.min(p.w,p.h)<LIMITS.min_short_side_px)
+          p.warn="Small picture ("+p.w+" × "+p.h+" px): the writing may not be readable. Move closer and retake it."
+        ;render(); };
+      im.onerror=()=>{ p.noPreview=true; render(); };
+      im.src=p.url;
+    } else { p.noPreview=true; }
+    PAGES.push(p);
+  }
+  say(problem); SEND_KEY=null; render();
+}
+function dropPage(i){ const p=PAGES[i]; if(p&&p.url) URL.revokeObjectURL(p.url); PAGES.splice(i,1); SEND_KEY=null; say(""); render(); }
+function movePage(i,d){ const j=i+d; if(j<0||j>=PAGES.length) return; [PAGES[i],PAGES[j]]=[PAGES[j],PAGES[i]]; SEND_KEY=null; render(); }
+
+function render(){
+  const n=PAGES.length, anyPdf=PAGES.some(p=>isPdf(p.file));
+  $("#pgcount").textContent=n?(n+(n===1?" page":" pages")+" added"):"";
+  $("#pages").innerHTML=PAGES.map((p,i)=>{
+    const thumb=(p.url&&!p.noPreview)?'<img class="thumb" src="'+p.url+'" alt="Preview of page '+(i+1)+'"/>'
+      :'<div class="thumb ph" aria-hidden="true">'+(isPdf(p.file)?"PDF":isTiff(p.file)?"TIFF":"…")+'</div>';
+    const dis=LOCKED||SENDING?" disabled":"";
+    return '<li class="pg" data-i="'+i+'">'+thumb
+      +'<div class="pg-body"><div class="pg-name"><b>Page '+(i+1)+'</b> · '+esc(p.file.name)+'</div>'
+      +'<div class="muted">'+mb(p.file.size)+(p.w?(' · '+p.w+' × '+p.h+' px'):'')+'</div>'
+      +(p.warn?'<div class="pill warn pg-warn">'+esc(p.warn)+'</div>':'')+'</div>'
+      +'<div class="pg-ctl">'
+      +'<button class="btn btn-ghost btn-sm" data-act="up" aria-label="Move page '+(i+1)+' up"'+(i===0||dis?" disabled":"")+'>↑</button>'
+      +'<button class="btn btn-ghost btn-sm" data-act="down" aria-label="Move page '+(i+1)+' down"'+(i===n-1||dis?" disabled":"")+'>↓</button>'
+      +'<button class="btn btn-ghost btn-sm" data-act="del" aria-label="Remove page '+(i+1)+'"'+(dis?" disabled":"")+'>✕</button>'
+      +'</div></li>';
+  }).join("");
+  const g=$("#grouping"); g.hidden=n<2;
+  const one=g.querySelector('input[value="one_document"]'), sep=g.querySelector('input[value="separate"]');
+  one.disabled=anyPdf||LOCKED||SENDING; sep.disabled=LOCKED||SENDING;
+  if(anyPdf){ sep.checked=true; }
+  $("#grphint").textContent=anyPdf?"A PDF already holds all of its pages, so these are sent as separate files.":"";
+  $("#go").disabled=!n||SENDING||LOCKED;
+  for(const b of document.querySelectorAll(".up-actions .btn")) b.disabled=LOCKED||SENDING;
+}
+$("#pages").addEventListener("click",e=>{
+  const b=e.target.closest("button[data-act]"); if(!b) return;
+  const i=+b.closest("li").dataset.i, a=b.dataset.act;
+  if(a==="up") movePage(i,-1); else if(a==="down") movePage(i,1); else dropPage(i);
+});
+document.querySelectorAll('#grouping input').forEach(r=>r.addEventListener("change",()=>{ SEND_KEY=null; }));
+
+dz.onclick=()=>{ if(!LOCKED&&!SENDING) fileInput.click(); };
+dz.onkeydown=e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); dz.onclick(); } };
 dz.ondragover=e=>{ e.preventDefault(); dz.classList.add("drag"); };
 dz.ondragleave=()=>dz.classList.remove("drag");
-dz.ondrop=e=>{ e.preventDefault(); dz.classList.remove("drag"); fileInput.files=e.dataTransfer.files; showFiles(); };
-fileInput.onchange=showFiles;
-function showFiles(){ const n=fileInput.files.length;
-  $("#dzfiles").textContent = n ? [...fileInput.files].map(f=>f.name).join("  ·  ") : ""; }
+dz.ondrop=e=>{ e.preventDefault(); dz.classList.remove("drag"); addFiles([...e.dataTransfer.files]); };
+$("#pick").onclick=()=>fileInput.click();
+$("#cam").onclick=()=>camInput.click();     // on a phone this opens the camera; on a laptop, a file chooser
+fileInput.onchange=()=>{ addFiles([...fileInput.files]); fileInput.value=""; };
+camInput.onchange=()=>{ addFiles([...camInput.files]); camInput.value=""; };
+["#abha","#pref"].forEach(id=>$(id).addEventListener("input",()=>{ SEND_KEY=null; }));
+
+function normAbha(){      // "" = empty, false = not 14 digits, else 14-XXXX-XXXX-XXXX
+  const t=$("#abha").value.trim(); if(!t) return "";
+  const d=t.replace(/[ -]/g,""); if(!/^[0-9]{14}$/.test(d)) return false;
+  return d.slice(0,2)+"-"+d.slice(2,6)+"-"+d.slice(6,10)+"-"+d.slice(10);
+}
+function newKey(){ return (crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(16).slice(2)).replace(/[^A-Za-z0-9_-]/g,""); }
+async function plainError(r){
+  if(r.status>=500) return "Something went wrong on our side. Please try again in a moment.";
+  try{ const j=await r.json(); if(typeof j.detail==="string"&&j.detail) return j.detail; }catch(e){}
+  return "Something is wrong with what was sent. Please check the pages and try again.";
+}
+function unlockAfterJob(){ LOCKED=false; SENDING=false; SEND_KEY=null; render(); }
 
 $("#go").onclick=async()=>{
-  const files=fileInput.files;
-  if(!files.length){ $("#hint").textContent="pick at least one file"; return; }
+  if(SENDING||LOCKED) return;                       // pressed twice: the second press does nothing
+  if(!PAGES.length){ say("Please add at least one photo, PDF or scan."); return; }
+  const abha=normAbha();
+  if(abha===false){ say("The ABHA number must have 14 digits, for example 14-1111-2222-3333."); return; }
+  say(""); SENDING=true; render();
   const fd=new FormData();
-  fd.append("abha",$("#abha").value||"");
+  fd.append("abha",abha);
+  fd.append("grouping",PAGES.length>1&&document.querySelector('input[name=grp]:checked').value==="one_document"?"one_document":"separate");
   if(MATCH) fd.append("patient_ref", $("#pref").value.trim());
-  for(const f of files) fd.append("files",f);
-  $("#go").disabled=true; $("#hint").textContent="processing…";
-  const r=await fetch("api/jobs",{method:"POST",body:fd});
-  if(!r.ok){ $("#hint").textContent="error: "+(await r.text()); $("#go").disabled=false; return; }
+  for(const p of PAGES) fd.append("files",p.file,p.file.name);
+  SEND_KEY=SEND_KEY||newKey();                       // the same Send retried = the same job
+  $("#hint").textContent="sending…";
+  let r;
+  try{ r=await fetch("api/jobs",{method:"POST",body:fd,headers:{"Idempotency-Key":SEND_KEY}}); }
+  catch(e){ say("We could not reach the server. Please check the connection and try again."); $("#hint").textContent=""; SENDING=false; render(); return; }
+  if(!r.ok){ say(await plainError(r)); $("#hint").textContent=""; if(r.status<500) SEND_KEY=null; SENDING=false; render(); return; }
   JOB=(await r.json()).job_id; $("#hint").textContent="processing…";
+  LOCKED=true; SENDING=false; render();
   $("#emr-card").hidden=false; poll();
 };
 
@@ -141,7 +252,7 @@ function poll(){
   TIMER=setTimeout(async()=>{
     const j=await (await fetch("api/jobs/"+JOB)).json();
     renderGrid(j);
-    if(j.state==="mismatch"){ showMismatch(j); $("#hint").textContent=""; $("#go").disabled=false; return; }
+    if(j.state==="mismatch"){ showMismatch(j); $("#hint").textContent=""; unlockAfterJob(); return; }
     // the patient card only appears once documents have actually been read
     if(j.patient && (j.state==="review"||j.state==="done")){
       $("#patient-card").hidden=false; renderPatient(j.patient);
@@ -155,7 +266,7 @@ function poll(){
         +" bundle generation all happen there.";
       $("#sent-card").hidden=false;
       $("#sent-card").scrollIntoView({behavior:"smooth"});
-    } else if(j.state==="error"){ $("#hint").textContent="job error: "+(j.error||""); $("#go").disabled=false; }
+    } else if(j.state==="error"){ $("#hint").textContent="job error: "+(j.error||""); unlockAfterJob(); }
     else poll();
   }, 1200);
 }
@@ -235,4 +346,28 @@ function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;'
 </html>
 """
 
-PAGE = _HTML.replace("%%CSS%%", BRAND_CSS).replace("%%HEADER%%", HEADER_HTML).replace("%%ICON%%", UPLOAD_ICON)
+_UPLOAD_CSS = """
+.up-actions{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center;margin-top:var(--sp-3)}
+.up-actions .btn{min-height:44px}
+.pagelist{list-style:none;margin:var(--sp-3) 0 0;padding:0;display:grid;gap:var(--sp-2)}
+.pg{display:grid;grid-template-columns:64px 1fr auto;gap:var(--sp-3);align-items:center;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-ctl);padding:var(--sp-2) var(--sp-3)}
+.pg .thumb{width:64px;height:80px;object-fit:cover;border-radius:6px;border:1px solid var(--line-strong);background:#fff}
+.pg .thumb.ph{display:flex;align-items:center;justify-content:center;font-size:var(--fs-12);font-weight:700;color:var(--muted)}
+.pg-name{overflow-wrap:anywhere}
+.pg-warn{margin-top:var(--sp-1);white-space:normal;border-radius:var(--r-ctl);padding:var(--sp-1) var(--sp-2);font-weight:500}
+.pg-ctl{display:flex;gap:6px}
+.pg-ctl .btn{min-width:44px;min-height:44px}
+.grouping{border:1px solid var(--line);border-radius:var(--r-ctl);margin:var(--sp-3) 0 0;padding:var(--sp-2) var(--sp-3)}
+.grouping legend{font-size:var(--fs-12);color:var(--muted);padding:0 var(--sp-1)}
+.grouping label{display:block;padding:var(--sp-1) 0}
+.up-err{margin-top:var(--sp-3);padding:var(--sp-2) var(--sp-3);color:var(--err);background:var(--err-bg);
+  border:1px solid var(--err-line);border-radius:var(--r-ctl)}
+@media (max-width:560px){
+  .pg{grid-template-columns:56px 1fr}
+  .pg .thumb{width:56px;height:70px}
+  .pg-ctl{grid-column:1 / -1;justify-content:flex-end}
+}
+"""
+
+PAGE = _HTML.replace("%%CSS%%", BRAND_CSS + _UPLOAD_CSS).replace("%%HEADER%%", HEADER_HTML).replace("%%ICON%%", UPLOAD_ICON)
