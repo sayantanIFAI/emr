@@ -248,8 +248,10 @@ def test_listener_data_error_is_not_retried(sess_scope, tmp_path, monkeypatch):
 def test_fhir_agent_builds_versions_and_dead_letters(sess_scope, fake_store, monkeypatch):
     from cdi_adapter.agents import fhir_builder
     from cdi_adapter.fhir import service as fsvc
+    from cdi_adapter.config import settings
     from cdi_adapter.persist.normalized import enqueue_fhir
 
+    monkeypatch.setattr(settings, "fhir_enabled", True)          # off by default; this test covers the agent
     did, _ = _doc(sess_scope, fake_store)
     pid = str(uuid.uuid4())
     bundle = {"resourceType": "Bundle", "id": did}
