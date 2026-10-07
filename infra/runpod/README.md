@@ -73,3 +73,30 @@ HF_HOME=/workspace/hf-cache python -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen2.5-VL-7B-Instruct-AWQ --quantization awq_marlin \
   --max-model-len 16384 --gpu-memory-utilization 0.55 --port 8000
 ```
+
+
+## Persistence: what survives a restart
+
+Everything lives under `/workspace`, but **how safe that is depends on what is mounted there**:
+
+| `/workspace` is... | `mountpoint /workspace` | A stop / reset / delete of the pod... |
+|---|---|---|
+| a RunPod **network volume** or pod **volume disk** | yes | keeps everything; run `start_all.sh` once the pod is up |
+| the pod's own **container disk** | no | **deletes everything** (models, database dump, stored scans, passwords) |
+
+`start_all.sh` prints a warning when it is the second case. **To make it persistent:** create the pod with a
+network volume (or a volume disk) mounted at `/workspace`.
+
+Until then, keep a copy off the pod:
+
+```bash
+bash /workspace/cdi/infra/runpod/prepare_stop.sh     # writes /workspace/offpod/cdi-state.tar.gz (+ .sha256), prints the scp command
+```
+
+A cron job refreshes the same pack every 30 minutes. To restore on a new pod (the passwords, the database
+and the stored scans come back; the code and the models are downloaded again):
+
+```bash
+scp -P <port> cdi-state.tar.gz* root@<ip>:/workspace/offpod/
+bash <(curl -fsSL https://raw.githubusercontent.com/sayantanIFAI/emr/main/infra/runpod/restore_pack.sh) /workspace/offpod/cdi-state.tar.gz
+```

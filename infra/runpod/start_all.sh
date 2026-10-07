@@ -17,6 +17,16 @@ REPO=/workspace/cdi
 cd "$REPO"
 mkdir -p /workspace/logs
 
+if ! mountpoint -q /workspace 2>/dev/null; then
+  echo "######################################################################"
+  echo "# WARNING: /workspace is this pod's own container disk, NOT a volume."
+  echo "# A stop / reset / delete of the pod DELETES the models, the database,"
+  echo "# the stored prescriptions and the passwords. Attach a RunPod volume"
+  echo "# at /workspace, and until then copy the backup pack off the pod:"
+  echo "#   bash /workspace/cdi/infra/runpod/prepare_stop.sh"
+  echo "######################################################################"
+fi
+
 echo "########## 1. infra (bootstrap) ##########"
 bash "$REPO/infra/runpod/bootstrap_pod.sh" || echo "(bootstrap returned non-zero; continuing)"
 
@@ -25,6 +35,21 @@ set -a; . "$REPO/.env"; set +a
 export HF_HOME=/workspace/hf-cache
 MLP="${CDI_MLSERVE_PORT:-8077}"
 WBP="${CDI_WEBAPP_PORT:-8080}"
+
+if [ "${CDI_MLSERVE_BACKEND:-hf}" = "vllm" ]; then
+  echo "########## 1b. vLLM engine  (:${CDI_VLLM_PORT:-8078}) ##########"
+  VLP="${CDI_VLLM_PORT:-8078}"
+  if curl -sf "http://127.0.0.1:${VLP}/v1/models" >/dev/null 2>&1; then
+    echo "already up"
+  else
+    bash "$REPO/infra/runpod/start_vllm.sh" || true
+  fi
+  if ! curl -sf "http://127.0.0.1:${VLP}/v1/models" >/dev/null 2>&1; then
+    # never leave the pod without a reader: the slower transformers server, one request at a time
+    echo "!! vLLM did not come up - using the slower transformers server instead (see /workspace/logs/vllm.log)"
+    export CDI_MLSERVE_BACKEND=hf CDI_QWEN_LINE_CONCURRENCY=1 CDI_EXTRACT_CONCURRENCY=1
+  fi
+fi
 
 echo "########## 2. model gateway  (:$MLP) ##########"
 if curl -s "http://127.0.0.1:${MLP}/healthz" | grep -q configured_backend; then

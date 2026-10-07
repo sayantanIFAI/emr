@@ -188,6 +188,7 @@ class Settings(BaseSettings):
     drift_abs_tolerance: float = 0.15
     qwen_line_mode: str = "crop"          # crop = independent read per line crop | off
     qwen_line_max_tokens: int = 48
+    qwen_line_concurrency: int = 1        # lines read at once; 1 for the serial hf gateway, ~12 with vLLM
     # an engine reading is "the same" as another when, after numeric-context
     # normalisation, every number matches exactly AND the text similarity is >= this
     engine_agree_similarity: float = 0.85

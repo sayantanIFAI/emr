@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import math
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -226,14 +227,20 @@ class QwenLineEngine:
                     for _ in crops_png]
         client = get_client()
         ph = hashlib.sha256(QWEN_LINE_PROMPT.encode()).hexdigest()[:16]
-        out: list[Reading] = []
-        for png in crops_png:
+
+        def one(png: bytes) -> Reading:
             try:
                 txt, served = client.vlm_generate_ex(png, QWEN_LINE_PROMPT,
                                                      max_tokens=settings.qwen_line_max_tokens)
                 line = next((s.strip() for s in (txt or "").splitlines() if s.strip()), "")
-                out.append(Reading(self.name, served or self.version, line, None, prompt_hash=ph))
+                return Reading(self.name, served or self.version, line, None, prompt_hash=ph)
             except Exception as exc:  # noqa: BLE001
-                out.append(Reading(self.name, self.version, "", None, prompt_hash=ph,
-                                   error=str(exc)[:200]))
-        return out
+                return Reading(self.name, self.version, "", None, prompt_hash=ph, error=str(exc)[:200])
+
+        workers = max(1, int(settings.qwen_line_concurrency))
+        if workers == 1 or len(crops_png) < 2:
+            return [one(p) for p in crops_png]
+        # a batching server (vLLM) reads many lines in the time of a few: send them together. The
+        # answers come back in the order of the crops, whatever order they finish in.
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="qline") as ex:
+            return list(ex.map(one, crops_png))

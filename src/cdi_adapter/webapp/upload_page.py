@@ -25,6 +25,16 @@ _HTML = r"""<!doctype html>
 .jobbox{border:1px solid var(--line,#e2e8f0);border-radius:12px;padding:12px 14px;margin-top:12px}
 .jobbox h3{margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .jobbox .jerr{color:var(--danger,#b42318);font-size:14px;margin:4px 0}
+.sumtbl{margin:18px 0 0}
+.sumtbl h3{font-size:15px;margin:0 0 6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.sumtbl table{width:100%;border-collapse:collapse;font-size:14px}
+.sumtbl th,.sumtbl td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line,#e4eaf4);vertical-align:top}
+.sumtbl tbody th{width:30%;color:var(--muted,#5b6b8c);font-weight:600}
+.sumtbl thead th{color:var(--muted,#5b6b8c);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.3px}
+.sumtbl .none{color:var(--faint,#93a1bd)}
+.sumtbl .note{margin:6px 0 0;font-size:13px;color:var(--muted,#5b6b8c)}
+.sumtbl .tbox{overflow-x:auto}
+.sumjson{margin:22px 0 6px;font-size:15px}
 </style>
 </head>
 <body>
@@ -70,13 +80,15 @@ _HTML = r"""<!doctype html>
   </div>
 
   <div class="card" id="result-card" hidden>
-    <h2>Result (JSON)</h2>
+    <h2>Result</h2>
     <p class="hint" id="resnotice"></p>
     <div class="res-top">
       <select id="resdoc" aria-label="Document" hidden></select>
       <span id="respill"></span>
       <a class="btn btn-ghost btn-sm" id="resdl" href="#" download>Download JSON</a>
     </div>
+    <div id="summary" aria-live="polite"></div>
+    <h3 class="sumjson">Result (JSON)</h3>
     <pre class="resjson" id="resjson" tabindex="0" aria-label="Result JSON"></pre>
   </div>
   <p class="muted" style="text-align:center"><a href="/status">System status</a></p>
@@ -263,8 +275,79 @@ async function loadResult(job){         // the connector's JSON, shown as-is (UP
   sel.hidden=RESULTS.length<2; sel.onchange=()=>showResult(+sel.value);
   $("#result-card").hidden=false; sel.value="0"; showResult(0);
 }
+
+// ---- the four tables shown above the JSON: patient, doctor, doctor booking, lab tests ----------------
+// Only what the result JSON says: a value that is not on the page is shown as such, never filled in.
+function vget(v){ return (v&&typeof v==="object"&&"value" in v)?v:{value:null,status:"absent",reason:null}; }
+function vcell(v){
+  v=vget(v); const none=v.value===null||v.value===undefined||v.value==="";
+  let t=none?'<span class="none">not on the page</span>':esc(typeof v.value==="boolean"?(v.value?"yes":"no"):v.value);
+  if(!none&&v.status==="needs_check") t+=' <span class="pill warn" title="'+esc(v.reason||"")+'">needs a check</span>';
+  return t;
+}
+function rowsTable(id,title,rows,note){
+  return '<section class="sumtbl" id="'+id+'"><h3>'+title+'</h3><div class="tbox"><table><tbody>'
+    +rows.map(r=>'<tr><th scope="row">'+esc(r[0])+'</th><td>'+r[1]+'</td></tr>').join("")
+    +'</tbody></table></div>'+(note?'<p class="note">'+note+'</p>':'')+'</section>';
+}
+function plural(n,u){ return n+" "+u+(n===1?"":"s"); }
+function bookingOf(r){
+  const f=r.follow_up||{}, text=f.text||f.value||"";
+  const doc=vget((r.doctor||{}).name).value;
+  const tests=(r.lab_tests||[]).filter(t=>t.status!=="rejected").map(t=>t.as_written||t.text).filter(Boolean);
+  let needed, when="", cls="ok";
+  if(!text){ needed="No follow-up is written on the page"; cls=""; }
+  else if(f.kind==="as_needed"){ needed="Only if needed"; when="as needed"; cls=""; }
+  else{
+    needed="Yes"; cls="warn";
+    if(f.kind==="interval"&&f.interval_value!=null){
+      const a=f.interval_value, b=f.interval_value_max, u=f.interval_unit||"";
+      when="after "+(b!=null&&b!==a?a+"–"+b+" "+u+"s":plural(a,u));
+    } else if(f.kind==="date"&&f.date){ when="on "+f.date; }
+    else when="time not clear: please read the note";
+  }
+  const bring=/report|result|test|investigation/i.test(text);
+  return {needed,cls,when,text,doc,tests,bring,status:f.status};
+}
+function summaryHtml(r){
+  r=r||{}; const P=r.patient||{}, D=r.doctor||{}, C=D.clinic||{};
+  const patient=rowsTable("tbl-patient","Patient details",[
+    ["Name",vcell(P.name)],["Age",vcell(P.age_text)],["Date of birth",vcell(P.dob)],["Sex",vcell(P.sex)],
+    ["Patient ID (MRN)",vcell(P.mrn)],["Phone",vcell(P.phone)],["ABHA ID",vcell(P.abha_id)],["Address",vcell(P.address)]]);
+  const doctor=rowsTable("tbl-doctor","Doctor details",[
+    ["Name",vcell(D.name)],["Registration no.",vcell(D.reg_no)],["Department",vcell(D.department)],
+    ["Designation",vcell(D.designation)],["Qualification",vcell(D.qualification)],
+    ["Clinic",vcell(C.name)],["Clinic phone",vcell(C.phone)],["Clinic address",vcell(C.address)],
+    ["Stamp on the page",vcell(D.stamp_present)],["Signature on the page",vcell(D.signature_present)]],
+    "Stamp and signature are a visual guess by the model and are not verified.");
+  const b=bookingOf(r);
+  const booking=rowsTable("tbl-booking","Doctor booking",[
+    ["Booking needed",'<span class="pill '+b.cls+'">'+esc(b.needed)+'</span>'+(b.status==="needs_check"&&b.text?' <span class="pill warn">needs a check</span>':"")],
+    ["With",b.doc?esc(b.doc):'<span class="none">doctor not read</span>'],
+    ["When",b.when?esc(b.when):'<span class="none">—</span>'],
+    ["As written",b.text?esc(b.text):'<span class="none">—</span>'],
+    ["Bring to the visit",b.bring&&b.tests.length?esc("Results of: "+b.tests.join(", ")):b.bring?"Reports (as written)":'<span class="none">nothing written</span>']],
+    b.needed==="Yes"?"The date is not guessed: it is counted from the day of the visit written on the prescription.":"");
+  const labs=r.lab_tests||[];
+  const prep=r.lab_preparation||[];
+  const labRows=labs.map((t,i)=>{
+    const ctx=(t.context||[]).map(c=>esc(c.text)+' <span class="none">('+esc(c.kind)+')</span>').join("<br>");
+    const code=t.code?esc(t.code_display||t.code)+' <span class="none">'+esc(t.code_system||"")+" "+esc(t.code)+'</span>':'<span class="none">not matched to a standard test</span>';
+    const pr=(t.preparation||[]).length?t.preparation.map(esc).join("<br>"):'<span class="none">none written</span>';
+    const st=t.status==="accepted"?'<span class="pill ok">read</span>':t.status==="rejected"?'<span class="pill err">rejected</span>'
+      :'<span class="pill warn" title="'+esc(t.reason||"")+'">needs a check</span>';
+    return '<tr><td>'+(i+1)+'</td><td>'+esc(t.as_written||t.text||"")+'</td><td>'+code+'</td><td>'+pr+'</td><td>'+(ctx||'<span class="none">—</span>')+'</td><td>'+st+'</td></tr>';
+  }).join("");
+  const prepOnly=!labs.length&&prep.length?'<p class="note">Preparation written on the page: '+prep.map(p=>esc(p.text)).join("; ")+'</p>':"";
+  const lab='<section class="sumtbl" id="tbl-labs"><h3>Lab tests <span class="pill">'+labs.length+'</span></h3>'
+    +(labs.length?'<div class="tbox"><table><thead><tr><th>#</th><th>Test (as written)</th><th>Standard name</th><th>Preparation</th><th>Why (linked to)</th><th>Check</th></tr></thead><tbody>'+labRows+'</tbody></table></div>'
+      :'<p class="none" style="margin:4px 0">No lab test is written on this page.</p>')+prepOnly+'</section>';
+  return patient+doctor+booking+lab;
+}
+
 function showResult(i){
   const r=(RESULTS[i]||{}).r||{};
+  $("#summary").innerHTML=summaryHtml(r);
   $("#resjson").textContent=JSON.stringify(r,null,2);
   $("#resnotice").textContent=r.notice||"";
   const n=r.needs_check_count||0;

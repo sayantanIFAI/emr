@@ -80,8 +80,10 @@ alembic upgrade head
 
 echo "== 5b/6 periodic DB snapshot to /workspace =="
 # an empty crontab makes `grep -v` exit 1; under pipefail that aborted the whole script
-{ crontab -l 2>/dev/null | grep -v snapshot.sh || true; \
-  echo "*/15 * * * * bash $REPO/infra/runpod/snapshot.sh >> $WS/backup/snapshot.log 2>&1"; } | crontab -
+# (and every 30 min one off-pod-ready pack with the secrets, the dump and the object store: backup_pack.sh)
+{ crontab -l 2>/dev/null | grep -vE "snapshot.sh|backup_pack.sh" || true; \
+  echo "*/15 * * * * bash $REPO/infra/runpod/snapshot.sh >> $WS/backup/snapshot.log 2>&1"; \
+  echo "*/30 * * * * bash $REPO/infra/runpod/backup_pack.sh >> $WS/backup/pack.log 2>&1"; } | crontab -
 service cron start >/dev/null 2>&1 || true
 
 echo "== 6/6 health =="
