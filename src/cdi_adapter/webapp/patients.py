@@ -6,7 +6,6 @@ name is read from the page. Two people who share a phone are two patients. Every
 """
 from __future__ import annotations
 
-import difflib
 import re
 from typing import Any
 
@@ -16,22 +15,14 @@ from ..db import session_scope
 
 SEARCH_LIMIT = 10
 LIST_LIMIT = 100
-_TITLES = re.compile(r"^(?:mr|mrs|ms|miss|master|baby|dr|smt|shri|sri|sh|late)\.?\s*", re.I)
+from ..names import alike, name_key  # noqa: F401  (name_key is re-exported for callers of this module)
+
 SAME_NAME = 0.78            # handwriting is read a little differently each time ("Onkar" / "Oukar"): near names are one patient
-
-
-def name_key(name: str | None) -> str:
-    """A name for comparing: lower case, no title, letters and single spaces only."""
-    n = _TITLES.sub("", (name or "").strip())
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z ]", "", n.casefold())).strip()
 
 
 def same_patient(a: str | None, b: str | None) -> bool:
     """Two readings of a name on the SAME mobile number are one patient when they are alike (an empty name matches only an empty one)."""
-    ka, kb = name_key(a), name_key(b)
-    if not ka or not kb:
-        return ka == kb
-    return ka == kb or difflib.SequenceMatcher(None, ka, kb).ratio() >= SAME_NAME
+    return alike(a, b, SAME_NAME)
 
 
 def _cluster(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -91,6 +82,31 @@ def prescriptions(phone: str, name: str | None = None) -> list[dict[str, Any]]:
     return [{"document_id": str(r["id"]), "token_no": r["token_no"], "filename": r["original_filename"],
              "uploaded": _iso(r["ingested_at"]), "status": r["status"], "pages": r["page_count"],
              "patient_name": r["patient_name"], "job_id": r["upload_job_id"]} for r in rows]
+
+
+def confirm_name(document_id: str, name: str, by: str) -> dict[str, Any] | None:
+    """A person confirms (or corrects) the patient's name on a prescription. What was READ stays in ``name_read``; the shown name
+    becomes the confirmed one and later re-reads never replace it. Returns the new values, or None for an unknown document."""
+    import uuid
+
+    from .. import repo
+
+    try:
+        uuid.UUID(document_id)
+    except ValueError:
+        return None
+    with session_scope() as sess:
+        row = sess.execute(text(
+            "UPDATE source_document SET name_read = coalesce(name_read, patient_name), patient_name = :n, "
+            "name_confirmed_by = :b, name_confirmed_at = now() WHERE id = :d "
+            "RETURNING phone, token_no, name_read, name_confirmed_at"),
+            {"n": name, "b": by[:60], "d": document_id}).mappings().first()
+        if not row:
+            return None
+        repo.write_audit(sess, actor=by[:60], action="update", entity="source_document", entity_id=document_id,
+                         detail={"patient_name_confirmed": name, "name_read": row["name_read"]})
+    return {"document_id": document_id, "patient_name": name, "name_read": row["name_read"], "phone": row["phone"],
+            "token_no": row["token_no"], "name_confirmed": True, "name_confirmed_by": by[:60]}
 
 
 def existing(phone: str) -> dict[str, Any]:

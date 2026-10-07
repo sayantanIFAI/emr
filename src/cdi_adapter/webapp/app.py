@@ -175,6 +175,22 @@ def patients_existing(phone: str) -> dict[str, Any]:
     return patients.existing(digits or "")
 
 
+@app.post("/api/intake/name")
+def intake_confirm_name(request: Request, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """The front desk confirms or corrects the patient's name read from a prescription. A handwritten name is never final
+    until a person has done this; the name as read is kept beside it."""
+    from . import patients
+    from .surface import reviewer_name
+    try:
+        name = upload.clean_person_name(str(body.get("name") or ""))
+    except upload.UploadError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    got = patients.confirm_name(str(body.get("document_id") or ""), name, reviewer_name(request, "admin"))
+    if got is None:
+        raise HTTPException(404, "unknown prescription")
+    return got
+
+
 @app.get("/api/mappings/lab")
 def lab_mappings() -> dict[str, Any]:
     """The whole lab-name mapping table (many written names -> one standard test)."""

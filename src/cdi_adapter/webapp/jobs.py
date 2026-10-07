@@ -387,7 +387,9 @@ def _stage2(job: "Job", prog: DocProg,
             prog.patient_name = str(ex.identity["name"]).strip()[:120]      # the screen groups by name + mobile number
             try:
                 with session_scope() as s:
-                    s.execute(text("UPDATE source_document SET patient_name = :n WHERE id = :d"),
+                    # what was READ is always kept; the shown name changes only while nobody has confirmed one
+                    s.execute(text("UPDATE source_document SET name_read = :n, patient_name = CASE WHEN name_confirmed_at IS NULL "
+                                   "THEN :n ELSE patient_name END WHERE id = :d"),
                               {"n": prog.patient_name, "d": prog.document_id})
             except Exception as exc:  # noqa: BLE001
                 log.warning("patient_name_not_saved", document_id=prog.document_id, error=str(exc)[:150])

@@ -26,3 +26,11 @@ def test_rows_of_one_number_with_alike_names_merge_and_the_most_read_name_is_sho
     assert [(g["phone"], g["name"], g["prescriptions"]) for g in got] == [
         ("9830011234", "Onkar Broadway", 4), ("9000000001", "Onkar Broadway", 1), ("9830011234", "Asha Rao", 1)]
     assert got[0]["last_uploaded"] == "2026-10-07T16:53:00"                    # the same name on another number stays separate
+
+
+def test_consensus_picks_the_name_most_readings_agree_on():
+    from cdi_adapter.names import consensus
+    assert consensus(["Mr. Oukar Broadway", "Oukar Chowdury", "Oukar Chowdhury", "Oukar Chowdury"]) == ("Oukar Chowdury", 3, 4)
+    got, n, total = consensus(["Asha Rao", "Ravi Das", "Kiran Paul"])
+    assert (n, total) == (1, 3) and got == "Asha Rao"                      # no agreement: one each, the first reading is shown
+    assert consensus([None, "", "  "]) == (None, 0, 0)

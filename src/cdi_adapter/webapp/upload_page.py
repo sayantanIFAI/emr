@@ -59,6 +59,9 @@ details.sec>summary{font-weight:650;font-size:15px;min-height:40px}
 .sumtbl .note{margin:6px 0 0;font-size:13px;color:var(--muted,#5b6b8c)}
 .sumtbl .tbox{overflow-x:auto}
 .sumjson{margin:10px 0 6px;font-size:15px}
+.nmbox .nmedit{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;align-items:center}
+.nmbox .nm-in{min-height:40px;min-width:220px;flex:1;max-width:360px}
+.nmbox .nmchips{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .maptbl{width:100%;border-collapse:collapse;font-size:14px}
 .maptbl th,.maptbl td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line,#e4eaf4);vertical-align:top}
 .maptbl .off td{opacity:.5}
@@ -479,6 +482,26 @@ function jsonBlock(r){
   const dl=r.document_id?'<a class="btn btn-ghost btn-sm" href="api/documents/'+esc(r.document_id)+'/result.json?download=true" download>Download JSON</a>':"";
   return '<details class="cf-det sec"><summary>Result (JSON)</summary><div class="det-body">'+dl+'<pre class="resjson" tabindex="0" aria-label="Result JSON">'+esc(JSON.stringify(r,null,2))+'</pre></div></details>';
 }
+$("#groups").addEventListener("click",async e=>{            // the patient's name: pick another reading, or confirm / correct it
+  const cand=e.target.closest(".nm-cand"); if(cand){ cand.closest(".nmbox").querySelector(".nm-in").value=cand.dataset.name; return; }
+  const ok=e.target.closest(".nm-ok"); if(!ok) return;
+  const box=ok.closest(".nmbox"), id=box.dataset.doc, err=box.querySelector(".nm-err");
+  err.textContent=""; ok.disabled=true;
+  let r; try{ r=await fetch("api/intake/name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({document_id:id,name:box.querySelector(".nm-in").value})}); }
+  catch(x){ err.textContent="We could not reach the server."; ok.disabled=false; return; }
+  if(!r.ok){ err.textContent=await plainError(r); ok.disabled=false; return; }
+  applyName(id,await r.json());
+});
+function applyName(id,j){                                    // the confirmed name decides the patient group; the result is loaded again
+  for(const g of [...GROUPS.values()]){
+    const d=g.docs.get(id); if(!d) continue;
+    g.docs.delete(id); if(!g.docs.size) GROUPS.delete(g.key);
+    d.result=null; d.loading=false;
+    const ng=addDoc(g.phone,j.patient_name,d); OPEN.add("g:"+ng.key); OPEN.add("d:"+id);
+    break;
+  }
+  renderGroups(); loadDoc(id);
+}
 $("#groups").addEventListener("toggle",e=>{                  // keep what is open open when the list is drawn again
   const el=e.target; if(!(el instanceof HTMLDetailsElement)) return;
   const key=el.classList.contains("grp")?"g:"+el.dataset.k:el.classList.contains("doc")?"d:"+el.dataset.d:null;
@@ -523,10 +546,23 @@ function bookingOf(r){
   const bring=/report|result|test|investigation/i.test(text);
   return {needed,cls,when,text,doc,tests,bring,status:f.status};
 }
+// A handwritten name is never final on its own: it is "to confirm" until a person confirms or corrects it here.
+function nameCell(r){
+  const P=r.patient||{}, I=r.intake||{}, v=vget(P.name), id=r.document_id||"", shown=v.value||"", confirmed=!!I.name_confirmed;
+  const pill=confirmed?'<span class="pill ok">confirmed'+(I.name_confirmed_by?' by '+esc(I.name_confirmed_by):'')+'</span>'
+    :shown?'<span class="pill warn" title="'+esc(v.reason||"")+'">to confirm</span>':'<span class="pill warn">name not read: please type it</span>';
+  const chips=(I.name_candidates||[]).map(c=>'<button type="button" class="btn btn-ghost btn-sm nm-cand" data-name="'+esc(c)+'">'+esc(c)+'</button>').join("");
+  return '<div class="nmbox" data-doc="'+esc(id)+'">'+(shown?'<b>'+esc(shown)+'</b> ':'')+pill
+    +'<div class="nmedit"><input type="text" class="nm-in" maxlength="80" value="'+esc(shown)+'" aria-label="Patient name as on the paper" placeholder="the name as on the paper"/> '
+    +'<button type="button" class="btn btn-primary btn-sm nm-ok">'+(confirmed?'Change':'Confirm')+'</button></div>'
+    +(chips&&!confirmed?'<div class="nmchips muted">Other readings of the name: '+chips+'</div>':'')
+    +(I.name_read&&I.name_read!==shown?'<div class="muted">As read from the page: '+esc(I.name_read)+'</div>':'')
+    +'<div class="fielderr nm-err" role="alert"></div></div>';
+}
 function summaryHtml(r){
   r=r||{}; const P=r.patient||{}, D=r.doctor||{}, O=r.organization||D.clinic||{}, V=r.visits||[];
   const patient=rowsTable("tbl-patient","Patient details",[
-    ["Name",vcell(P.name)],["Age",vcell(P.age_text)],["Date of birth",vcell(P.dob)],["Sex",vcell(P.sex)],
+    ["Name",nameCell(r)],["Age",vcell(P.age_text)],["Date of birth",vcell(P.dob)],["Sex",vcell(P.sex)],
     ["Patient ID (MRN)",vcell(P.mrn)],["Phone",vcell(P.phone)],["Address",vcell(P.address)],
     ["Token number",r.intake&&r.intake.token_no?esc(r.intake.token_no):""],["Mobile number (typed at upload)",r.intake&&r.intake.phone?esc(fmtPhone(r.intake.phone)):""]]);
   const org=rowsTable("tbl-organization","Organisation (hospital / clinic)",[

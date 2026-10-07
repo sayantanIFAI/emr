@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -68,13 +68,14 @@ def test_every_value_carries_a_status():
 
 def test_patient_and_doctor_details_are_checked_against_the_page():
     r = jc.build_result(_inputs(payload=PAYLOAD))
-    assert r["patient"]["name"] == {"value": "Anil Mehra", "status": "checked", "reason": None, "confidence": None}
+    # a handwritten name is never final on its own: it is "to confirm" until a person confirms it
+    assert r["patient"]["name"] == {"value": "Anil Mehra", "status": "needs_check", "reason": jc.NAME_TO_CONFIRM, "confidence": None}
     assert r["patient"]["phone"]["status"] == "checked"
     assert r["patient"]["address"] == {"value": None, "status": "absent", "reason": None, "confidence": None}
     assert r["doctor"]["reg_no"]["status"] == "checked" and r["doctor"]["qualification"]["value"] == "MD"
     assert r["doctor"]["clinic"]["name"]["status"] == "checked"
     assert r["doctor"]["stamp_present"]["status"] == "not_gated"
-    assert r["needs_check_count"] == 0 and r["flags"] == []          # nothing to check: all written, all on the page
+    assert r["needs_check_count"] == 1 and r["flags"] == []          # only the name to confirm: all written, all on the page
 
 
 def test_a_value_the_model_made_up_is_flagged_not_trusted():
@@ -138,9 +139,11 @@ def test_status_mapping(state, expected):
 
 def test_a_doubtful_value_never_lets_the_document_read_as_complete():
     clean = {"patient": {"name": "Anil Mehra"}, "follow_up": None}
-    assert jc.build_result(_inputs([HBA], payload=clean))["status"] == "complete"
-    assert jc.build_result(_inputs([HBA, FBS], payload=clean))["status"] == "needs_check"
-    assert jc.build_result(_inputs([HBA, _fact("condition", "x", state="rejected")], payload=clean))["status"] == "needs_check"
+    ok = {"name_confirmed_at": datetime(2026, 10, 7, tzinfo=timezone.utc), "name_confirmed_by": "admin", "patient_name": "Anil Mehra"}
+    assert jc.build_result(_inputs([HBA], payload=clean))["status"] == "needs_check"            # the read name is not confirmed yet
+    assert jc.build_result(_inputs([HBA], payload=clean, doc_extra=ok))["status"] == "complete"
+    assert jc.build_result(_inputs([HBA, FBS], payload=clean, doc_extra=ok))["status"] == "needs_check"
+    assert jc.build_result(_inputs([HBA, _fact("condition", "x", state="rejected")], payload=clean, doc_extra=ok))["status"] == "needs_check"
 
 
 def test_document_status_cases():
@@ -280,3 +283,21 @@ def test_a_test_found_by_the_second_look_is_listed_not_hidden_as_unconfirmed():
     r2 = jc.build_result(_inputs([seen], payload={**PAYLOAD, "_second_look": ["TSH"]}, blocks=other))
     t = r2["lab_tests"][0]
     assert t["status"] == "needs_check" and t["reason"].startswith(SECOND_LOOK) and not t["reason"].startswith(UNCONFIRMED)
+
+
+def test_a_name_a_person_confirmed_is_checked_and_says_who_and_the_read_name_is_kept():
+    when = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
+    r = jc.build_result(_inputs(payload={**PAYLOAD, "_name_reads": ["Anil Mehra", "Anil Mehta", "Anil Meghra"]},
+                                doc_extra={"patient_name": "Anil Mehta", "name_read": "Anil Mehra", "name_confirmed_by": "admin",
+                                           "name_confirmed_at": when, "token_no": "T-9", "phone": "9830011234"}))
+    assert r["patient"]["name"] == {"value": "Anil Mehta", "status": "checked", "reason": "confirmed by admin", "confidence": None}
+    it = r["intake"]
+    assert it["patient_name"] == "Anil Mehta" and it["name_read"] == "Anil Mehra" and it["name_confirmed"] is True
+    assert it["name_confirmed_by"] == "admin" and it["name_candidates"] == ["Anil Mehra", "Anil Meghra"]
+    assert r["needs_check_count"] == 0
+
+
+def test_an_unconfirmed_name_offers_the_other_readings_and_is_not_marked_confirmed():
+    r = jc.build_result(_inputs(payload={**PAYLOAD, "_name_reads": ["Anil Mehra", "Anil Mehta"]}, doc_extra={"patient_name": "Anil Mehra"}))
+    assert r["intake"]["name_confirmed"] is False and r["intake"]["name_confirmed_by"] is None
+    assert r["intake"]["name_candidates"] == ["Anil Mehta"]

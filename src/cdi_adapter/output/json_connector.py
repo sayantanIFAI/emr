@@ -207,6 +207,34 @@ def _not_extracted(doc: dict[str, Any]) -> list[str]:
     return NOT_EXTRACTED + (P.SLIM_NOT_EXTRACTED if P.slim_active("prescription") else [])
 
 
+NAME_TO_CONFIRM = "read from handwriting: a person must confirm the name"
+
+
+def _patient_name(doc: dict[str, Any], c: dict[str, Any]) -> dict[str, Any]:
+    """The patient's name is never final on its own: a read name is 'needs_check' until someone confirms or corrects it."""
+    if doc.get("name_confirmed_at") and (doc.get("patient_name") or "").strip():
+        return value(doc["patient_name"], "checked", f"confirmed by {doc.get('name_confirmed_by') or 'the front desk'}")
+    v = _v(c)
+    if v["value"] not in (None, ""):
+        v["status"] = "needs_check"
+        v["reason"] = NAME_TO_CONFIRM + (f" ({v['reason']})" if v.get("reason") else "")
+    return v
+
+
+def _intake(doc: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """What the front desk typed (token, mobile), the name as shown, as read, whether a person confirmed it, and the other
+    readings of the name (so the screen can offer them)."""
+    shown = (doc.get("patient_name") or "").strip() or None
+    cands: list[str] = []
+    for n in payload.get("_name_reads") or []:
+        if isinstance(n, str) and n.strip() and n.strip() not in cands and n.strip() != shown:
+            cands.append(n.strip())
+    return {"token_no": doc.get("token_no"), "phone": doc.get("phone"), "patient_name": shown,
+            "name_read": doc.get("name_read") or shown, "name_confirmed": bool(doc.get("name_confirmed_at")),
+            "name_confirmed_by": doc.get("name_confirmed_by") if doc.get("name_confirmed_at") else None,
+            "name_candidates": cands[:4]}
+
+
 def _visits(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """The dated visits found on the pages (newest first), as stored by the page merge (extract/visits.py)."""
     out: list[dict[str, Any]] = []
@@ -290,7 +318,10 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
                 i["earlier_readings"] = earlier[i["fact_id"]]
 
     items = [i for lst in (*buckets.values(), other) for i in lst]
+    name_v = _patient_name(doc, checks["patient"]["name"])
     n_check = sum(1 for i in items if i["status"] == "needs_check") + len(checks["review"])
+    if name_v["status"] == "needs_check" and checks["patient"]["name"]["status"] != "needs_check":
+        n_check += 1                   # a read name counts as one value to check until a person confirms it
     quality = _quality(inp.pages, doc)
 
     if doc.get("status") == "quality_hold":
@@ -329,12 +360,13 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         "quality": quality,
         "extraction_incomplete": bool(payload.get("_partial")),
         "flags": checks["flags"],
-        "patient": {k: _v(p[k]) for k in ("name", "age_text", "dob", "sex", "mrn", "phone", "address", "abha_id")},
+        "patient": {**{k: _v(p[k]) for k in ("name", "age_text", "dob", "sex", "mrn", "phone", "address", "abha_id")},
+                    "name": name_v},
         "doctor": {**{k: _v(d[k]) for k in ("name", "reg_no", "department", "designation", "qualification")},
                    "clinic": {k: _v(d["clinic"][k]) for k in ("name", "address", "phone")},
                    "stamp_present": _v(d["stamp_present"]), "signature_present": _v(d["signature_present"])},
         "organization": {k: _v(d["clinic"][k]) for k in ("name", "address", "phone")},
-        "intake": {"token_no": doc.get("token_no"), "phone": doc.get("phone"), "patient_name": doc.get("patient_name")},
+        "intake": _intake(doc, payload),
         "visits": _visits(payload),
         "lab_tests": buckets.pop("lab_tests"),
         "lab_preparation": checks["preparation"],

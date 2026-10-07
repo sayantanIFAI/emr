@@ -86,3 +86,11 @@ def test_a_name_read_slightly_differently_joins_the_same_patient_on_the_same_num
 
 def test_prescriptions_and_patients_are_listed_newest_first():
     assert 'localeCompare(a.uploaded||"")' in ADMIN_PAGE and "newest(b).localeCompare(newest(a))" in ADMIN_PAGE
+
+
+# ---- a read patient name is never final: a person confirms or corrects it
+def test_the_name_is_to_confirm_until_a_person_confirms_and_the_other_readings_are_offered():
+    assert "function nameCell" in ADMIN_PAGE and "nm-ok" in ADMIN_PAGE
+    assert ">to confirm<" in ADMIN_PAGE and "name not read: please type it" in ADMIN_PAGE and "Other readings of the name" in ADMIN_PAGE
+    assert 'fetch("api/intake/name"' in ADMIN_PAGE and "function applyName" in ADMIN_PAGE
+    assert '["Name",nameCell(r)]' in ADMIN_PAGE                                         # the patient table's Name row is the confirm box

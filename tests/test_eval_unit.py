@@ -30,7 +30,8 @@ def _result(**kw):
 def test_a_correct_result_scores_clean():
     d = scorer.score_document(_key(), _result())
     s = d["scalar"].report()
-    assert s["accepted_right"] == 10 and s["accepted_wrong"] == 0 and s["accepted_precision"] == 1.0
+    # 9, not 10: the patient's name is read from handwriting and is never auto-accepted (a person confirms it), so it is not counted
+    assert s["accepted_right"] == 9 and s["accepted_wrong"] == 0 and s["accepted_precision"] == 1.0
     assert d["lab_tests"]["hit"] == 2 and d["preparation"]["hit"] == 1 and d["preparation"]["made_up"] == 0
     assert d["follow_up"] == {"expected": True, "right": True, "accepted": True}
 
@@ -66,7 +67,7 @@ def test_a_silent_miss_is_not_a_catch():
 
 def test_a_value_invented_for_an_empty_field_is_spurious_and_counted():
     k = _key()
-    k["expected"]["patient"]["name"] = None                         # nothing is written for the name
+    k["expected"]["patient"]["age_text"] = None                     # nothing is written for the age, yet one is accepted
     s = scorer.score_document(k, _result())["scalar"].report()
     assert s["spurious_accepted"] == 1
 
@@ -88,7 +89,7 @@ def test_the_scoreboard_cuts_by_every_slice_label_and_reports_sample_sizes():
     d2 = scorer.score_document(k2, _result())
     b = scorer.scoreboard([d1, d2])
     assert b["overall"]["documents"] == 2 and set(b["slices"]) == {"source", "kind"}
-    assert b["slices"]["source"]["printed"]["documents"] == 1 and b["slices"]["source"]["photo"]["scalars"]["accepted_values"] == 10
+    assert b["slices"]["source"]["printed"]["documents"] == 1 and b["slices"]["source"]["photo"]["scalars"]["accepted_values"] == 9
 
 
 def test_the_gate_blocks_a_small_sample_and_passes_a_big_clean_one():
@@ -109,7 +110,7 @@ def test_an_adversarial_document_that_gets_an_invented_value_accepted_blocks_the
     th = json.loads((scorer.Path(scorer.__file__).parent / "thresholds.json").read_text())
     th["min_documents"] = 1
     k = _key(slice={"source": "synthetic", "kind": "adversarial"})
-    k["expected"]["patient"]["name"] = None
+    k["expected"]["patient"]["age_text"] = None
     board = scorer.scoreboard([scorer.score_document(k, _result())])
     assert any("adversarial" in b for b in scorer.gate(board, th))
 

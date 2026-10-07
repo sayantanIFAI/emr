@@ -367,3 +367,29 @@ def test_the_upload_is_refused_without_the_token_or_the_mobile_number_and_both_a
     assert r.status_code == 422 and "mobile" in r.json()["detail"].lower() and not client.calls
     ok = _post(client, [("a.png", _png())])
     assert ok.status_code == 202 and client.calls[-1]["token_no"] == "T-17" and client.calls[-1]["phone"] == "9830011234"
+
+
+@pytest.mark.parametrize("raw,expected", [("  Oukar   Chowdhury ", "Oukar Chowdhury"), ("Mr. R. K. Das", "Mr. R. K. Das"), ("D'Souza", "D'Souza"),
+                                          ("Anne-Marie Roy", "Anne-Marie Roy"), ("সুমিত্রা দাস", "সুমিত্রা দাস")])
+def test_a_typed_patient_name_is_cleaned(raw, expected):
+    assert upload.clean_person_name(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["", " ", "A", "x" * 81, "Asha123", "<b>Asha</b>", "Asha; DROP TABLE", "12345", "..", "Asha\u202e"])
+def test_a_bad_patient_name_is_refused(raw):
+    with pytest.raises(upload.UploadError):
+        upload.clean_person_name(raw)
+
+
+def test_the_name_confirmation_endpoint_validates_and_passes_who_confirmed(client, monkeypatch):
+    from cdi_adapter.webapp import patients
+    seen = {}
+
+    def fake(document_id, name, by):
+        seen.update(document_id=document_id, name=name, by=by)
+        return {"document_id": document_id, "patient_name": name, "name_confirmed": True} if document_id == "doc-1" else None
+    monkeypatch.setattr(patients, "confirm_name", fake)
+    ok = client.post("/api/intake/name", json={"document_id": "doc-1", "name": "  Oukar   Chowdhury "})
+    assert ok.status_code == 200 and seen["name"] == "Oukar Chowdhury" and seen["by"]
+    assert client.post("/api/intake/name", json={"document_id": "doc-1", "name": "A1"}).status_code == 422
+    assert client.post("/api/intake/name", json={"document_id": "nope", "name": "Asha Rao"}).status_code == 404

@@ -145,8 +145,10 @@
       "properties": {"name": {"$ref": "#/$defs/value"}, "address": {"$ref": "#/$defs/value"}, "phone": {"$ref": "#/$defs/value"}}
     },
     "intake": {
-      "type": "object", "additionalProperties": false, "required": ["token_no", "phone", "patient_name"],
-      "properties": {"token_no": {"type": ["string", "null"]}, "phone": {"type": ["string", "null"]}, "patient_name": {"type": ["string", "null"]}}
+      "type": "object", "additionalProperties": false, "required": ["token_no", "phone", "patient_name", "name_read", "name_confirmed", "name_confirmed_by", "name_candidates"],
+      "properties": {"token_no": {"type": ["string", "null"]}, "phone": {"type": ["string", "null"]}, "patient_name": {"type": ["string", "null"]},
+                     "name_read": {"type": ["string", "null"]}, "name_confirmed": {"type": "boolean"},
+                     "name_confirmed_by": {"type": ["string", "null"]}, "name_candidates": {"type": "array", "items": {"type": "string"}}}
     },
     "visits": {
       "type": "array",

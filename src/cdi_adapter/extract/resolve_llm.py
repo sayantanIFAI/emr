@@ -227,6 +227,86 @@ def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list
     return out[:12]
 
 
+NAME_SCHEMA: dict[str, Any] = {"type": "object", "properties": {"name": {"type": ["string", "null"]}}, "required": ["name"]}
+NAME_SCALES = (1.0, 1.6, 2.4)
+
+
+def name_prompt() -> str:
+    return chr(10).join([
+        "This is one line (or two) of a doctor's handwritten prescription. It contains the PATIENT'S NAME, often after 'For', "
+        "'Name' or 'Mr / Mrs / Ms / Smt / Shri', and then the age and sex.",
+        "Write ONLY the patient's name, letter by letter exactly as handwritten. Do not write Mr / Mrs / Smt / Shri, the age "
+        "or the sex. Do not correct the spelling and do not choose a common name that looks similar. If the name is not "
+        "readable, answer null.",
+        'Answer ONLY as JSON: {"name": "..."}'])
+
+
+def name_crops(image: bytes, blocks: list[dict[str, Any]] | None, name: str | None) -> list[bytes]:
+    """The page line the patient's name is on, cut out and enlarged to each of ``NAME_SCALES`` (the name line is found as the
+    OCR block that shares the most words with the name already read; with none, the top third of the page)."""
+    import cv2
+    import numpy as np
+
+    from ..names import name_key
+
+    arr = cv2.imdecode(np.frombuffer(image, np.uint8), cv2.IMREAD_COLOR)
+    if arr is None:
+        return []
+    h, w = arr.shape[:2]
+    toks = [t for t in name_key(name).split() if len(t) >= 3]
+    best, score = None, 0
+    for b in blocks or []:
+        if not b.get("bbox"):
+            continue
+        bt = name_key(b.get("text")).split()
+        s = sum(1 for t in toks if difflib.get_close_matches(t, bt, n=1, cutoff=0.7))
+        if s > score:
+            best, score = b, s
+    if best is not None and score >= 1:
+        x0, y0, x1, y1 = (int(v) for v in best["bbox"])
+        px, py = max(30, int(0.03 * w)), max(14, int(0.012 * h))
+        box = (max(0, x0 - px), max(0, y0 - py), min(w, x1 + px), min(h, y1 + py))
+    else:
+        box = (0, 0, w, int(0.35 * h))
+    crop = arr[box[1]:box[3], box[0]:box[2]]
+    out: list[bytes] = []
+    for f in NAME_SCALES:
+        c = crop if f == 1.0 else cv2.resize(crop, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC)
+        ok, png = cv2.imencode(".png", c)
+        if ok:
+            out.append(png.tobytes())
+    return out
+
+
+def name_reads(client: Any, image: bytes, blocks: list[dict[str, Any]] | None, name: str | None) -> list[str]:
+    """The patient's name read again from the name line at several sizes (at the same time). Failed or empty reads are left
+    out. Nothing here decides the name: the caller compares the readings (``names.consensus``) and the front desk confirms it."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not settings.name_reread:
+        return []
+    try:
+        crops = name_crops(image, blocks, name)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("name_crop_failed", error=str(exc)[:200])
+        return []
+
+    def ask(png: bytes) -> str | None:
+        try:
+            resp, _ = client.vlm_json_ex(png, name_prompt(), NAME_SCHEMA, max_tokens=40, retries=1)
+        except Exception as exc:  # noqa: BLE001 - an extra look must never cost the document
+            log.warning("name_reread_failed", error=str(exc)[:200])
+            return None
+        n = (resp or {}).get("name")
+        return " ".join(n.split())[:80] if isinstance(n, str) and any(ch.isalpha() for ch in n) else None
+
+    if not crops:
+        return []
+    with ThreadPoolExecutor(max_workers=len(crops)) as pool:
+        got = list(pool.map(ask, crops))
+    return [g for g in got if g]
+
+
 def prompt_for_medicines(items: list[tuple[str, list[str]]]) -> str:
     lines = []
     for i, (written, cands) in enumerate(items, start=1):

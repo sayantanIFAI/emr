@@ -106,6 +106,27 @@ def clean_phone(value: str | None, *, required: bool = True) -> str | None:
     return digits
 
 
+def clean_person_name(value: str | None) -> str:
+    """A patient's name typed by a person: letters of any script (with their combining marks), spaces and . ' - only; 2 to 80
+    characters, starting with a letter, with at least two letters. Anything else (digits, markup, control or direction
+    characters) is refused."""
+    import unicodedata
+
+    text = " ".join((value or "").split())
+    letters = 0
+    ok = 2 <= len(text) <= 80 and unicodedata.category(text[0]).startswith("L")
+    for ch in text if ok else "":
+        cat = unicodedata.category(ch)
+        if cat.startswith("L"):
+            letters += 1
+        elif not (cat.startswith("M") or ch in " .'-"):
+            ok = False
+            break
+    if not ok or letters < 2:
+        raise UploadError("Please type the patient's name using letters, spaces and . ' - only (2 to 80 characters).")
+    return text
+
+
 def display_name(name: str | None) -> str:
     """A file name safe to echo in a message or a log: no path, no control characters."""
     base = os.path.basename((name or "").replace("\\", "/")) or "document"

@@ -325,6 +325,9 @@ class Settings(BaseSettings):
     # a second, focused look at the page for tests written WITH the follow-up instruction ("review after 2 wks {HbA1c / FBS
     # / TSH}"): the full-page answer often misses them. One short extra call, only when a follow-up is written.
     followup_second_look: bool = True
+    # the patient's name is read again from its own line at three sizes; readings that disagree are flagged (a name is never final
+    # until the front desk confirms it)
+    name_reread: bool = True
     # medicines are not what this product is judged on (lab tests are): the model's choice among reference medicine names
     # costs a call per page, so it is off by default
     llm_resolve_medicines: bool = False

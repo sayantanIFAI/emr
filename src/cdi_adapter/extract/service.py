@@ -552,6 +552,25 @@ _HANDLERS = {
 
 
 # --------------------------------------------------------------------------- #
+def _check_the_name(client: Any, image: bytes, blocks: list[dict[str, Any]], payload: dict[str, Any]) -> None:
+    """Read the patient's name again from its own line at several sizes and compare with the first reading. When most readings
+    agree on a name that is not the first reading, that name is used. ``payload['_name_reads']`` keeps every reading so the
+    screen can show them; the name stays "to confirm" whatever happens (a person confirms it)."""
+    from ..names import alike, consensus
+    from . import resolve_llm
+
+    first = payload["patient"].get("name")
+    first = first if isinstance(first, str) and first.strip() else None
+    reads = resolve_llm.name_reads(client, image, blocks, first)
+    payload["_name_reads"] = [first, *reads] if first else list(reads)
+    if not reads:
+        return
+    chosen, agree, total = consensus([first or "", *reads])
+    payload["_name_agreement"] = [agree, total]
+    if chosen and agree >= 3 and (first is None or not alike(first, chosen, 0.85)):
+        payload["patient"]["name"] = chosen                 # most readings agree on a different spelling than the first reading
+
+
 def _unescape(x: Any) -> Any:
     """The model sometimes writes an ampersand as ``&amp;`` (and a quote as ``&quot;``): prescriptions never contain HTML,
     so every string in the answer is turned back into the plain characters."""
@@ -660,12 +679,16 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
 
     focus_blocks = blocks
     latest_no = int(payload.get("_latest_page") or 1) if isinstance(payload, dict) else 1
+    page1_image, page1_blocks = image, [b for b in blocks if str(b.get("page_id")) == str(pages[0]["id"])] or blocks
     if len(pages) > 1 and 1 <= latest_no <= len(pages) and latest_no != 1:
         # the second look and the choose-from-list step read the page the latest visit is on
         image = storage.get_bytes(storage.key_from_uri(pages[latest_no - 1]["image_uri"]))
     if len(pages) > 1 and 1 <= latest_no <= len(pages):
         pid_latest = str(pages[latest_no - 1]["id"])
         focus_blocks = [b for b in blocks if str(b.get("page_id")) == pid_latest] or blocks
+
+    if isinstance(payload, dict) and isinstance(payload.get("patient"), dict) and cls["doc_type"] in ("prescription", "opd_note", "referral"):
+        _check_the_name(client, page1_image, page1_blocks, payload)          # the name is on the first page
 
     if isinstance(payload, dict) and cls["doc_type"] in ("prescription", "opd_note", "referral"):
         # the hybrid step: a test the gate cannot place but that is close to reference names is put to the model
