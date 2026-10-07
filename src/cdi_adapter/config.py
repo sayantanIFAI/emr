@@ -296,6 +296,8 @@ class Settings(BaseSettings):
     abha_enabled: bool = True             # ask the page for an ABHA / ABDM identity, check it, and match patients on it. Off
                                           # (CDI_ABHA_ENABLED=false) the deployment never asks for, reads or validates one
     medicine_lexicon_path: str = ""          # list of medicine names (scripts/build_medicine_lexicon.py); empty = not used
+    indian_codes_dir: str = ""              # CLCI + CDCI indexes (scripts/build_indian_codes.py); empty = not used
+    llm_resolve_enabled: bool = True       # the model may CHOOSE among reference names for a misread test (resolve_llm.py)
     job_max_concurrent: int = 8           # uploads ("jobs") in progress at once; more wait in a queue
     fast_classify: bool = True           # try the scored heuristic classifier first; it only
                                          # short-circuits the VLM on an unambiguous, cleanly

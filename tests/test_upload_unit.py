@@ -14,6 +14,12 @@ from cdi_adapter.webapp import app as webapp
 from cdi_adapter.webapp import jobs, upload
 
 
+@pytest.fixture(autouse=True)
+def _abha_checks_on(monkeypatch):
+    """The pod runs with ABHA off (CDI_ABHA_ENABLED=false); these tests are about the form that still validates one."""
+    monkeypatch.setattr(settings, "abha_enabled", True)
+
+
 def _png(w: int = 900, h: int = 1200, text: str = "Tab Metformin 500 mg") -> bytes:
     im = Image.new("RGB", (w, h), "white")
     ImageDraw.Draw(im).text((20, 20), text, fill="black")
