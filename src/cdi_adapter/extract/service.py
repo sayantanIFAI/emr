@@ -169,21 +169,22 @@ def _first_word(text: str) -> str:
     return m.group(0).casefold() if m else ""
 
 
-# route / form are NOT here: the model fills them for anything it lists ("oral", "other"), so they say nothing about
-# whether the entry is a medicine
-_DOSE_KEYS = ("strength", "dose", "frequency_text", "frequency", "duration_days", "timing", "dosage", "sig", "schedule",
-              "dose_pattern")
+def _has_digit(x: Any) -> bool:
+    if isinstance(x, dict):
+        x = x.get("value", x.get("text"))
+    return x is not None and any(ch.isdigit() for ch in str(x))
 
 
 def _advice_listed_as_medicine(m: Any) -> bool:
     """A medication entry that is really advice: advice words, and nothing that says medicine (no reference-list hit,
-    no strength / dose / frequency / duration field)."""
+    no strength or dose with a number). Frequency, duration, route and form are NOT evidence: the model fills them
+    for anything it lists (MEASURED: it wrote 'qds' on every entry of one real prescription, advice lines included)."""
     if isinstance(m, str):
         return medicine_resolve.advice_like(m)
     if not isinstance(m, dict):
         return False
     name = m.get("drug_text") or m.get("text") or m.get("name") or ""
-    return medicine_resolve.advice_like(name, has_dose=any(m.get(k) for k in _DOSE_KEYS))
+    return medicine_resolve.advice_like(name, has_dose=_has_digit(m.get("strength")) or _has_digit(m.get("dose")))
 
 
 def _misfiled_medicine(text: str) -> bool:

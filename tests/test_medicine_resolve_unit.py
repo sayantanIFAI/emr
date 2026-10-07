@@ -36,7 +36,10 @@ def test_a_medicine_or_anything_with_a_dose_is_never_called_advice(lexicon, text
 
 def test_the_advice_filter_uses_the_dose_fields_of_the_entry(lexicon):
     assert X._advice_listed_as_medicine({"drug_text": "steam inhalation"}) is True
-    assert X._advice_listed_as_medicine({"drug_text": "steam inhalation", "frequency_text": "tds"}) is False
+    assert X._advice_listed_as_medicine({"drug_text": "steam inhalation", "strength": "5 ml"}) is False
+    # the model puts a default frequency on everything it lists: that is not evidence of a medicine (measured on a real page)
+    assert X._advice_listed_as_medicine({"drug_text": "goggle & warm water", "frequency_text": "qds", "form": "solution",
+                                         "duration_days": None, "instructions": "k betadine"}) is True
     assert X._advice_listed_as_medicine({"drug_text": "Tab Montelukast", "strength": {"value": 10}}) is False
     assert X._advice_listed_as_medicine({"drug_text": "steam inhalation", "route": "oral", "form": "other"}) is True   # filler fields say nothing
     assert X._advice_listed_as_medicine("plenty of fluids") is True and X._advice_listed_as_medicine(None) is False
