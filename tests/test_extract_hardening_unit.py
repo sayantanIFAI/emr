@@ -40,7 +40,8 @@ def test_a_multi_page_document_labels_its_pages_and_keeps_the_block_numbers():
     assert "Page 1:" not in build_extraction_prompt("prescription", blocks[:2])      # one page: no headers
 
 
-def test_the_prompt_asks_for_the_mlp1_fields_and_the_schema_carries_them():
+def test_the_prompt_asks_for_the_mlp1_fields_and_the_schema_carries_them(monkeypatch):
+    monkeypatch.setattr(settings, "abha_enabled", True)      # the pod runs with it off (test_abha_off_unit)
     p = build_extraction_prompt("prescription", [])
     for word in ("`dob`", "`phone`", "`address`", "`abha_id`", "`designation`", "`qualification`", "`clinic`",
                  "`stamp_present`", "`investigation_preparation`", "`follow_up`"):

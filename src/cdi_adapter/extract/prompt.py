@@ -142,8 +142,15 @@ def build_extraction_prompt(doc_type: str, ocr_blocks: list[dict[str, Any]]) -> 
             page_no, last = page_no + 1, b.get("page_id")
             lines.append(f"Page {page_no}:")
         lines.append(f"[b{i}] {b['text']}")
-    return (_BASE.format(doc_type=doc_type, ocr="\n".join(lines) or "(none)")
-            + _EXTRA.get(doc_type, ""))
+    from ..config import settings
+
+    extra = _EXTRA.get(doc_type, "")
+    if not settings.abha_enabled:
+        # no ABDM identification on this deployment: the model is not asked for it (it only ever made one up
+        # from a bill number or a company id) and is told to leave it empty
+        extra = extra.replace("`phone`, `address` and `abha_id`", "`phone` and `address`")
+        extra += "\nDo NOT read an ABHA / ABDM health id: leave `abha_id` null."
+    return (_BASE.format(doc_type=doc_type, ocr="\n".join(lines) or "(none)") + extra)
 
 
 def block_id_map(ocr_blocks: list[dict[str, Any]]) -> dict[str, str]:

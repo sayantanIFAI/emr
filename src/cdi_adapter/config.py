@@ -293,6 +293,8 @@ class Settings(BaseSettings):
     job_max_workers: int = 5              # documents ingested/classified/OCR'd concurrently;
                                          # _cpu.py sizes native thread pools to
                                          # (cpu_budget - 1) / this  (keep them in sync)
+    abha_enabled: bool = True             # ask the page for an ABHA / ABDM identity, check it, and match patients on it. Off
+                                          # (CDI_ABHA_ENABLED=false) the deployment never asks for, reads or validates one
     job_max_concurrent: int = 8           # uploads ("jobs") in progress at once; more wait in a queue
     fast_classify: bool = True           # try the scored heuristic classifier first; it only
                                          # short-circuits the VLM on an unambiguous, cleanly

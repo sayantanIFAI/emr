@@ -26,6 +26,8 @@ import re
 from datetime import date
 from typing import Any
 
+from ..config import settings
+
 CHECKED, NEEDS_CHECK, ABSENT, NOT_GATED = "checked", "needs_check", "absent", "not_gated"
 PREP_TYPES = ("fasting", "timing", "diet", "medicine_hold", "sample_collection", "bring_documents", "other")
 _NOT_ON_PAGE = "not found on the page as written"
@@ -206,7 +208,7 @@ def check_patient(patient: dict[str, Any], page: str, today: date) -> dict[str, 
         "sex": check_sex(patient.get("sex"), page),
         "phone": check_phone(patient.get("phone"), page),
         "address": check_text(patient.get("address"), page),
-        "abha_id": check_abha(patient.get("abha_id"), page),
+        "abha_id": check_abha(patient.get("abha_id"), page) if settings.abha_enabled else absent(),
     }
 
 

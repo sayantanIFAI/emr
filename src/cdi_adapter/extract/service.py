@@ -516,6 +516,9 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
             repo.set_document_status(sess, document_id, "error", error_detail=f"extract: {exc}")
         raise
 
+    if not settings.abha_enabled and isinstance(payload, dict) and isinstance(payload.get("patient"), dict):
+        payload["patient"]["abha_id"] = None        # never used, whatever the model wrote: not for matching, not stored
+
     blocks_by_id = {str(b["id"]): b for b in blocks}
     handler = _HANDLERS.get(schema_id)
 

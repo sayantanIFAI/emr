@@ -313,7 +313,7 @@ function summaryHtml(r){
   r=r||{}; const P=r.patient||{}, D=r.doctor||{}, C=D.clinic||{};
   const patient=rowsTable("tbl-patient","Patient details",[
     ["Name",vcell(P.name)],["Age",vcell(P.age_text)],["Date of birth",vcell(P.dob)],["Sex",vcell(P.sex)],
-    ["Patient ID (MRN)",vcell(P.mrn)],["Phone",vcell(P.phone)],["ABHA ID",vcell(P.abha_id)],["Address",vcell(P.address)]]);
+    ["Patient ID (MRN)",vcell(P.mrn)],["Phone",vcell(P.phone)],["Address",vcell(P.address)]]);
   const doctor=rowsTable("tbl-doctor","Doctor details",[
     ["Name",vcell(D.name)],["Registration no.",vcell(D.reg_no)],["Department",vcell(D.department)],
     ["Designation",vcell(D.designation)],["Qualification",vcell(D.qualification)],
