@@ -78,3 +78,7 @@ def test_the_mapping_table_is_on_the_screen_and_can_be_added_to():
 # ---- 9. the latest dated visit is the one used, the others are listed
 def test_the_dated_visits_are_listed_and_the_latest_is_marked():
     assert "latest — used above" in ADMIN_PAGE and "Dated visits found on the pages" in ADMIN_PAGE
+
+
+def test_a_name_read_slightly_differently_joins_the_same_patient_on_the_same_number():
+    assert "function sameName" in ADMIN_PAGE and "find(h=>h.phone===phone&&sameName(h.name,name))" in ADMIN_PAGE

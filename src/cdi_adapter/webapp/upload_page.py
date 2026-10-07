@@ -423,9 +423,13 @@ $("#go").onclick=async()=>{
 const GROUPS=new Map(), OPEN=new Set();               // GROUPS: "phone|name" -> {phone,name,docs:Map(document_id -> doc)}
 let SEQ=0;
 function gkey(phone,name){ return phone+"|"+(name||""); }
+// a name read a little differently each time ("Onkar" / "Oukar") is the same patient on the same mobile number
+function nameKey(n){ return String(n||"").replace(/^\s*(mr|mrs|ms|miss|master|baby|dr|smt|shri|sri|sh|late)\.?\s*/i,"").toLowerCase().replace(/[^a-z ]/g,"").replace(/\s+/g," ").trim(); }
+function lev(a,b){ const m=a.length,n=b.length; let p=Array.from({length:n+1},(_,j)=>j); for(let i=1;i<=m;i++){ const c=[i]; for(let j=1;j<=n;j++) c[j]=Math.min(p[j]+1,c[j-1]+1,p[j-1]+(a[i-1]===b[j-1]?0:1)); p=c; } return p[n]; }
+function sameName(a,b){ const x=nameKey(a),y=nameKey(b); if(!x||!y) return x===y; if(x===y) return true; return 1-lev(x,y)/Math.max(x.length,y.length)>=0.8; }
 function addDoc(phone,name,doc){
-  const k=gkey(phone,name); let g=GROUPS.get(k);
-  if(!g){ g={key:k,phone,name:name||null,docs:new Map()}; GROUPS.set(k,g); }
+  let g=[...GROUPS.values()].find(h=>h.phone===phone&&sameName(h.name,name));
+  if(!g){ const k=gkey(phone,name); g={key:k,phone,name:name||null,docs:new Map()}; GROUPS.set(k,g); }
   const old=g.docs.get(doc.document_id)||{};
   g.docs.set(doc.document_id,{...old,...doc,seq:old.seq||++SEQ});
   return g;
@@ -434,8 +438,9 @@ async function showPatient(p){                         // chosen from the search
   let list=[];
   try{ const r=await fetch("api/intake/prescriptions?phone="+encodeURIComponent(p.phone)+"&name="+encodeURIComponent(p.name||"")); if(r.ok) list=(await r.json()).prescriptions; }catch(e){}
   for(const d of list) addDoc(p.phone,p.name,d);
-  OPEN.add("g:"+gkey(p.phone,p.name)); renderGroups();
-  const el=document.querySelector('details.grp[data-k="'+CSS.escape(gkey(p.phone,p.name))+'"]'); if(el) el.scrollIntoView({block:"nearest"});
+  const gk=([...GROUPS.values()].find(h=>h.phone===p.phone&&sameName(h.name,p.name))||{key:gkey(p.phone,p.name)}).key;
+  OPEN.add("g:"+gk); renderGroups();
+  const el=document.querySelector('details.grp[data-k="'+CSS.escape(gk)+'"]'); if(el) el.scrollIntoView({block:"nearest"});
 }
 async function loadResultsOf(job){                     // the finished job's JSON: put each document under its patient
   let j;
@@ -443,8 +448,8 @@ async function loadResultsOf(job){                     // the finished job's JSO
   catch(e){ job.err="The result could not be loaded. Please try again in a moment."; return; }
   for(const r of (j.results||[])){
     const it=r.intake||{}, name=it.patient_name||((r.patient||{}).name||{}).value||null, phone=it.phone||job.phone;
-    addDoc(phone,name,{document_id:r.document_id,token_no:it.token_no||job.token,filename:r.filename,status:r.status,result:r,uploaded:new Date().toISOString()});
-    OPEN.add("g:"+gkey(phone,name)); OPEN.add("d:"+r.document_id);
+    const g=addDoc(phone,name,{document_id:r.document_id,token_no:it.token_no||job.token,filename:r.filename,status:r.status,result:r,uploaded:new Date().toISOString()});
+    OPEN.add("g:"+g.key); OPEN.add("d:"+r.document_id);
   }
   renderGroups();
 }
