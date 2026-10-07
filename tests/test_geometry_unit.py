@@ -239,17 +239,71 @@ def test_the_recovered_page_corners_are_close_to_the_true_ones():
     assert float(np.max(np.linalg.norm(quad - truth, axis=1))) < 25, quad
 
 
-def test_ac4_a_photo_whose_page_edges_cannot_be_found_is_left_alone_and_held():
+def _clutter_with_text():
     rng = np.random.default_rng(9)
     clutter = np.clip(rng.normal(90, 40, (1900, 2400, 3)), 0, 255).astype(np.uint8)      # no page, just a busy desk
     clutter[700:1200, 900:1500] = 20
     text = _page()[:, :1500]
     clutter[300:300 + text.shape[0] // 2, 200:200 + text.shape[1] // 2] = cv2.resize(
         text, (text.shape[1] // 2, text.shape[0] // 2))
-    out, meta = _norm(clutter)
-    assert "perspective" not in meta["steps"] and meta["quality"]["passed"] is False
-    assert meta["quality"]["reason_codes"] == ["page_edges_not_found"]
-    assert out.shape[:2] == clutter.shape[:2]                                     # untouched
+    return clutter
+
+
+def test_ac4_a_photo_whose_page_edges_cannot_be_found_is_read_and_flagged_not_held():
+    out, meta = _norm(_clutter_with_text())
+    assert "perspective" not in meta["steps"]
+    assert meta["quality"]["passed"] is True and meta["quality"]["reasons"] == []        # never refused
+    assert meta["quality"]["warning_codes"] == ["page_edges_not_found"]                   # but flagged: needs a check
+    assert "page_edges_not_found" not in meta["quality"]["reason_codes"]
+
+
+def test_the_content_box_wraps_the_writing_with_a_margin_and_cuts_the_background_away():
+    rng = np.random.default_rng(4)
+    bg = cv2.GaussianBlur(rng.normal(110, 60, (1900, 2400)).astype(np.float32), (0, 0), 60)   # soft blotches, no strokes
+    gray = np.clip(bg, 0, 255).astype(np.uint8)
+    text = _page()[:, :1500]
+    th, tw = text.shape[:2]
+    patch = cv2.resize(cv2.cvtColor(text, cv2.COLOR_BGR2GRAY), (tw // 2, th // 2))
+    gray[500:500 + th // 2, 700:700 + tw // 2] = patch
+    ys, xs = np.nonzero(patch < 100)                                                      # where the writing really is
+    wx0, wx1, wy0, wy1 = 700 + xs.min(), 700 + xs.max(), 500 + ys.min(), 500 + ys.max()
+    x0, y0, x1, y1 = G.find_content_box(gray)
+    assert (x1 - x0) * (y1 - y0) < 0.5 * gray.size                                        # the background is cut away
+    assert x0 <= wx0 and y0 <= wy0 and x1 > wx1 and y1 > wy1                              # ... never into the writing
+
+
+def test_the_content_box_is_none_when_there_is_nothing_to_crop():
+    assert G.find_content_box(np.full((1000, 800), 200, np.uint8)) is None               # blank: no writing found
+    rng = np.random.default_rng(2)
+    assert G.find_content_box(rng.integers(0, 255, (1000, 800)).astype(np.uint8)) is None  # strokes everywhere: no block
+
+
+def test_a_crop_step_is_a_translation_so_boxes_map_back_to_the_original_pixels():
+    t = G.new_transform(2000, 1500)
+    G.add_step(t, {"op": "crop_to_content", "box": [300, 200, 1300, 1100]},
+               G.affine3(np.array([[1, 0, -300], [0, 1, -200]], float)), (1000, 900))
+    assert G.map_box_to_original([10, 20, 60, 50], t) == [310, 220, 360, 250]             # shifted by the crop's corner
+
+
+def test_a_page_that_fills_the_frame_is_not_flagged_even_with_a_dark_strip_beside_it():
+    page = _page()
+    framed = page.copy()
+    framed[:, :90] = 25                                                                   # a hand / dark edge at one side
+    _out, meta = _norm(framed)
+    assert meta["quality"]["passed"] is True
+    assert "page_edges_not_found" not in (meta["quality"].get("warning_codes") or [])
+
+
+def test_the_loose_search_never_returns_a_quad_that_cuts_through_the_writing():
+    # a bright page whose lower half sits in shadow, on a bright busy background: the bright part alone
+    # is "a page-shaped region", but writing continues below it, so it must not be taken as the page
+    photo, _h = _photo(_page(), CORNERS)
+    gray = cv2.cvtColor(photo, cv2.COLOR_BGR2GRAY)
+    shaded = gray.copy()
+    shaded[1000:, :] = (shaded[1000:, :] * 0.55).astype(np.uint8)
+    quad = G.find_page_quad_loose(shaded)
+    if quad is not None:
+        assert float(quad[:, 1].max()) > 1500, quad                                       # reaches the page's bottom
 
 
 def test_a_flat_scan_that_fills_the_frame_is_not_treated_as_a_photo():

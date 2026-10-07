@@ -289,6 +289,7 @@ class Settings(BaseSettings):
     job_max_workers: int = 5              # documents ingested/classified/OCR'd concurrently;
                                          # _cpu.py sizes native thread pools to
                                          # (cpu_budget - 1) / this  (keep them in sync)
+    job_max_concurrent: int = 8           # uploads ("jobs") in progress at once; more wait in a queue
     fast_classify: bool = True           # try the scored heuristic classifier first; it only
                                          # short-circuits the VLM on an unambiguous, cleanly
                                          # OCR'd page - everything else still goes to the VLM

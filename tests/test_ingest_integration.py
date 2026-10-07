@@ -50,3 +50,30 @@ def test_ingest_creates_rows_and_pages(infra):
         ).all()
         stages = {r[0]: r[1] for r in runs}
         assert stages.get("ingest") == "ok"
+
+
+def test_a_document_held_for_rescan_is_processed_again_when_the_same_bytes_arrive(infra):
+    """A hold must never be permanent: the same picture sent again is read by today's code, not answered
+    from the old hold (a fixed check or a changed setting may now read it)."""
+    import uuid
+
+    from cdi_adapter import repo, storage
+    from cdi_adapter.db import session_scope
+    from cdi_adapter.ingest.service import ingest_bytes
+
+    storage.ensure_bucket()
+    raw = _pdf(f"City Care Hospital\nHeld then retried {uuid.uuid4()}\nHbA1c 7.8 %")      # new bytes every run
+    first = ingest_bytes(raw, filename="held.pdf", source_channel="test")
+    with session_scope() as sess:
+        repo.set_document_status(sess, first.document_id, "quality_hold", error_detail="rescan: page 1: test")
+
+    again = ingest_bytes(raw, filename="held.pdf", source_channel="test")
+    assert again.deduplicated is False and again.document_id == first.document_id
+    assert again.status == "pages_rendered" and again.page_count == 1
+    with session_scope() as sess:
+        assert repo.get_document(sess, first.document_id)["error_detail"] is None
+        assert len(repo.list_document_pages(sess, first.document_id)) == 1                 # redone, not doubled
+
+    # and a document that is NOT held is still deduplicated as before
+    third = ingest_bytes(raw, filename="held.pdf", source_channel="test")
+    assert third.deduplicated is True

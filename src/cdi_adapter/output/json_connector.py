@@ -154,6 +154,13 @@ def _quality(pages: list[dict[str, Any]], doc: dict[str, Any]) -> dict[str, Any]
             "reasons": reasons, "reason_codes": codes, "warnings": warnings}
 
 
+def _capture_flagged(pages: list[dict[str, Any]]) -> bool:
+    """True if a page was read despite a capture problem that is not worth a retake (the page's edges
+    could not be found, so it was cropped to its writing or read whole): the result needs a check."""
+    return any("page_edges_not_found" in ((p.get("preproc") or {}).get("quality") or {}).get("warning_codes", [])
+               for p in pages)
+
+
 def _v(c: dict[str, Any]) -> dict[str, Any]:
     """A checked field as a value object."""
     return value(c["value"], c["status"], c["reason"])
@@ -217,7 +224,7 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         status = "error"
     elif doc.get("status") not in _FINISHED:
         status = "processing"
-    elif n_check or any(i["status"] == "rejected" for i in items):
+    elif n_check or any(i["status"] == "rejected" for i in items) or _capture_flagged(inp.pages):
         status = "needs_check"
     elif not items:
         status = "incomplete"          # finished, but nothing could be read
