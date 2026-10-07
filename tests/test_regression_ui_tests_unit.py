@@ -167,3 +167,17 @@ def test_every_view_is_asked_and_the_answers_are_pooled():
 def test_test_names_lose_braces_and_results_and_lists_are_split(text, expected):
     from cdi_adapter.extract.test_names import split_tests
     assert split_tests(text) == expected
+
+
+def test_the_wider_look_keeps_only_names_the_lab_gate_places():
+    cl = _Client({"tests": ["HbA1c", "I Revet su", "Sedox tin - 2.5w", "Reduced Hb", "NS - 30m", "Ok-pins", "FBS"]})
+    got = R.followup_tests(cl, b"img", None, known=[])
+    assert "HbA1c" in got and "FBS" in got
+    assert not any(x in got for x in ("I Revet su", "Sedox tin - 2.5w", "NS - 30m", "Ok-pins"))
+
+
+def test_a_misread_close_to_a_reference_test_stays_so_the_choice_step_can_pick_it(monkeypatch):
+    monkeypatch.setattr(R.lab_resolve, "resolve", lambda t: None)
+    monkeypatch.setattr(R.lab_resolve, "suggest", lambda t, k=5, floor=0.6: ["Free T4"] if "ft4" in (t or "").lower() else [])
+    cl = _Client({"tests": ["Fl4 ft4", "Sedox tin"]})
+    assert R.followup_tests(cl, b"img", None, known=[]) == ["Fl4 ft4"]

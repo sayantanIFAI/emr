@@ -10,6 +10,17 @@ def _infra_available() -> bool:
 
 
 @pytest.fixture(autouse=True)
+def _no_enlarging_by_default(request, monkeypatch):
+    """Many tests pin the size of a normalised page to the size it was rendered at; enlarging a small picture (ingest/enhance)
+    changes that on purpose. Only test_enhance_unit tests it, and turns it on itself."""
+    if not request.module.__name__.endswith("test_enhance_unit"):
+        from cdi_adapter.config import settings
+
+        monkeypatch.setattr(settings, "enhance_enabled", False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _fresh_upload_rate_limit():
     """The send-rate window is per process: every test starts with an empty one."""
     from cdi_adapter.webapp import upload

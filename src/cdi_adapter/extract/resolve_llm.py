@@ -216,7 +216,10 @@ def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list
         if not isinstance(item, str):
             continue
         for one in split_tests(item):
+            # the lab gate: a name found by looking harder is kept ONLY if the test lists place it (a known test word, or
+            # the national lab list / gazetteer). A medicine line, a diagnosis or a misreading never gets in as a test.
             if 2 <= len(one) <= 40 and any(ch.isalpha() for ch in one) and norm(one) not in have \
+                    and (is_known_test(one) or lab_resolve.resolve(one) is not None or lab_resolve.suggest(one, k=1, floor=0.72)) \
                     and not medicine_resolve.advice_like(one) and not (medicine_resolve.known(one) and not is_known_test(one)):
                 have.add(norm(one))
                 out.append(one)

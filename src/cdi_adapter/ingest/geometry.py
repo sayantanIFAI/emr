@@ -330,6 +330,8 @@ def page_cutout(arr: np.ndarray) -> tuple[np.ndarray, tuple[int, int, int, int],
     lab = cv2.cvtColor(arr, cv2.COLOR_BGR2LAB).astype(np.float32)
     mask = nontext.paper_mask(lab, nontext.paper_colour(arr))
     frac = float(mask.mean())
+    if min(h, w) < 300 or frac < 0.35:                          # a thumbnail, or a 'page' that is a small part of the picture: not reliable, leave it
+        return None
     if frac >= 0.97:                                            # nothing to cut away (or the page was not found)
         return None
     # the mask comes from a heavy blur, so its edge sits a few px out in the floor. Tighten the thin ring along the edge to

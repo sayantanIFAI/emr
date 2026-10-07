@@ -244,6 +244,16 @@ def normalize_with_source(png_bytes: bytes) -> tuple[bytes, bytes, dict[str, Any
     if settings.quality_gate_mode != "off":
         meta["quality"] = assess(arr).as_dict()
     arr, transform = _straighten(arr, meta)
+    from . import enhance
+
+    f = enhance.upscale_factor(*arr.shape[:2])
+    if f > 1.001:                                  # a small photo: enlarge it (bicubic) before it is read; recorded in the transform
+        from . import geometry as G
+
+        arr = enhance.upscale(arr, f)
+        G.add_step(transform, {"op": "upscale", "factor": round(f, 3)}, G.affine3(np.array([[f, 0, 0], [0, f, 0]], float)),
+                   (arr.shape[1], arr.shape[0]))
+        meta["steps"].append("upscale")
     gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
 
     skew = 0.0
@@ -265,6 +275,10 @@ def normalize_with_source(png_bytes: bytes) -> tuple[bytes, bytes, dict[str, Any
         gray = cv2.fastNlMeansDenoising(gray, h=7, templateWindowSize=7, searchWindowSize=21)
         meta["steps"].append("denoise")
 
+    gray, arr, sinfo = enhance.sharpen(gray, arr)    # soft pictures only, checked; the verdict is kept in the page meta
+    meta["sharpen"] = sinfo
+    if sinfo["applied"]:
+        meta["steps"].append("sharpen")
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
     meta["steps"].append("clahe")

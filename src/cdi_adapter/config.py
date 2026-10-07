@@ -79,6 +79,18 @@ class Settings(BaseSettings):
     # --- image preprocessing ---
     deskew_enabled: bool = True
     denoise_enabled: bool = True
+    # make a small / soft photo easier to read before anything reads it (ingest/enhance.py): enlarge it, then sharpen it by
+    # how soft it measures. Both are checked and undone when they would make the picture worse. PLACEHOLDER thresholds until
+    # measured on the pilot's own photos.
+    enhance_enabled: bool = True
+    enhance_target_long_side: int = 2000   # a picture shorter than this (long side, px) is enlarged towards it
+    enhance_max_scale: float = 2.5
+    enhance_soft_below: float = 150.0      # Laplacian variance (at 1000 px) at or under which sharpening is at full strength
+    enhance_crisp_above: float = 900.0     # ... at or over which none is applied
+    enhance_max_amount: float = 1.0        # unsharp-mask amount at full strength
+    enhance_sigma: float = 1.6             # unsharp-mask radius (px, after enlarging)
+    enhance_max_new_clipping: float = 0.01  # sharpening may not clip more than 1% extra of the page to pure black / white
+    enhance_max_gain: float = 12.0         # a sharpness gain above this x is ringing / halos, not detail: refused
     max_deskew_deg: float = 15.0
     # page geometry (IM-S2). All thresholds are PLACEHOLDERS measured on synthetic pages only.
     orient_enabled: bool = True           # turn a sideways page (90 / 270 degrees) upright when the way up is clear
