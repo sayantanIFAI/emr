@@ -31,8 +31,8 @@ def test_the_default_setup_resolves_at_start_up():
 
 
 def test_a_wrong_name_stops_the_service_and_names_the_setting(monkeypatch):
-    monkeypatch.setattr(settings, "pdf_renderer", "pymupdf")                  # not an option
-    with pytest.raises(swap.SwapConfigError, match=r"CDI_PDF_RENDERER='pymupdf'.*pypdfium2"):
+    monkeypatch.setattr(settings, "pdf_renderer", "some-other-renderer")      # not an option
+    with pytest.raises(swap.SwapConfigError, match=r"CDI_PDF_RENDERER=.*pypdfium2"):
         swap.check_all()
     swap.reset()
 

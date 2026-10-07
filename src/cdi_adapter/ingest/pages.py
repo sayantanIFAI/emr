@@ -302,7 +302,7 @@ def render_pdf_pngs(raw: bytes, dpi: int) -> list[bytes]:
 
 
 class PdfiumRenderer:
-    """The pypdfium2 adapter behind the ``PdfRenderer`` interface (the only renderer: no PyMuPDF option)."""
+    """The pypdfium2 adapter behind the ``PdfRenderer`` interface (the only renderer: the AGPL one is not an option)."""
 
     name = "pypdfium2"
 

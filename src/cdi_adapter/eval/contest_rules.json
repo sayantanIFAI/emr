@@ -1,0 +1,10 @@
+{
+  "_comment": "Promotion rules for a model contest (SW-S4). The numbers are PLACEHOLDERS (an engineering assumption) until the product owner AND a clinician fill approved_by / approved_on. They are fixed BEFORE the first run.",
+  "max_slice_precision_drop": 0.02,
+  "min_slice_accepted_values": 30,
+  "min_accepted_values": 300,
+  "max_seconds_ratio": 1.5,
+  "max_cost_per_document": null,
+  "approved_by": null,
+  "approved_on": null
+}

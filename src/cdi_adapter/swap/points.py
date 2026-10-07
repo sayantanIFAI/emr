@@ -51,7 +51,7 @@ class JobQueue(Protocol):
 
 # ----------------------------------------------------------------------------- the points
 point("pdf_renderer", setting="CDI_PDF_RENDERER", attr="pdf_renderer",
-      doc="turns a PDF into one picture per page (pypdfium2: Apache-2.0 / BSD-3; no PyMuPDF option)")
+      doc="turns a PDF into one picture per page (pypdfium2: Apache-2.0 / BSD-3; no AGPL renderer)")
 point("object_store", setting="CDI_OBJECT_STORE", attr="object_store",
       doc="where the original documents and page pictures are kept (S3 API: SeaweedFS, cloud S3 ... | a folder)")
 point("job_queue", setting="CDI_QUEUE_BACKEND", attr="queue_backend",

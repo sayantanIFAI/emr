@@ -1,0 +1,10 @@
+{
+  "_comment": "Release-gate thresholds for the scoreboard (ENT-S3). PLACEHOLDERS: the owner and a clinician set the real numbers. Nothing here has been measured on real handwriting.",
+  "min_documents": 300,
+  "min_accepted_precision_lower_bound": 0.97,
+  "min_coverage": 0.60,
+  "max_context_error_rate_upper_bound": 0.05,
+  "max_made_up_preparation_accepted": 0,
+  "min_slice_accepted_values": 50,
+  "min_slice_precision_lower_bound": 0.95
+}

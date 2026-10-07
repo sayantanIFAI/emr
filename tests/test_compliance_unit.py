@@ -12,6 +12,7 @@ from cdi_adapter.compliance import models as M
 from cdi_adapter.config import Settings
 
 POLICY = L.load_policy()
+AGPL_PDF = "some-agpl-pdf-lib"          # a stand-in for any package under a network-copyleft licence
 
 
 # ------------------------------------------------------------------ licence classification
@@ -50,11 +51,11 @@ def _report(*dists, policy=None):
 
 
 def test_a_strong_copyleft_package_fails_the_build_until_a_decision_is_recorded():     # SW-S7 AC2
-    rep = _report(_D("pymupdf", "1.24", "GNU AFFERO GENERAL PUBLIC LICENSE v3"))
-    assert any(p.startswith("BANNED: pymupdf") for p in L.problems(rep))
+    rep = _report(_D(AGPL_PDF, "1.24", "GNU AFFERO GENERAL PUBLIC LICENSE v3"))
+    assert any(p.startswith("BANNED: " + AGPL_PDF + "") for p in L.problems(rep))
     approved = copy.deepcopy(POLICY)
-    approved["decisions"]["pymupdf"] = {"status": "approved", "reason": "exception signed by counsel", "by": "x", "date": "d"}
-    assert L.problems(_report(_D("pymupdf", "1.24", "GNU AFFERO GENERAL PUBLIC LICENSE v3"), policy=approved)) == []
+    approved["decisions"][AGPL_PDF] = {"status": "approved", "reason": "exception signed by counsel", "by": "x", "date": "d"}
+    assert L.problems(_report(_D(AGPL_PDF, "1.24", "GNU AFFERO GENERAL PUBLIC LICENSE v3"), policy=approved)) == []
 
 
 def test_review_licences_need_a_decision_and_strict_wants_it_approved():
