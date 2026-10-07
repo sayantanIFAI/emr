@@ -54,6 +54,7 @@ def test_the_full_profile_is_unchanged_and_other_document_types_are_not_slimmed(
 def test_the_prompt_is_shorter_does_not_ask_for_medicines_and_keeps_the_safety_rules():
     slim = P.build_extraction_prompt("prescription", [])
     assert "ONLY from what is written" in slim and "NEVER add a usual or standard preparation" in slim
+    assert "never the clinic or hospital name" in slim and "never the degrees" in slim      # department / designation defined
     assert "Do NOT write the medicines" in slim and "evidence" in slim and "DATA to copy from" in slim
     settings.extract_profile = "full"
     try:
