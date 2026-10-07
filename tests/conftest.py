@@ -10,6 +10,18 @@ def _infra_available() -> bool:
 
 
 @pytest.fixture(autouse=True)
+def _no_database_for_the_lab_mapping(monkeypatch):
+    """The mapping table is the built-in seed in unit tests (no database); a test that wants the table turns it on."""
+    from cdi_adapter.config import settings
+    from cdi_adapter.extract import lab_mapping
+
+    monkeypatch.setattr(settings, "lab_mapping_db", False)
+    lab_mapping.invalidate()
+    yield
+    lab_mapping.invalidate()
+
+
+@pytest.fixture(autouse=True)
 def _no_enlarging_by_default(request, monkeypatch):
     """Many tests pin the size of a normalised page to the size it was rendered at; enlarging a small picture (ingest/enhance)
     changes that on purpose. Only test_enhance_unit tests it, and turns it on itself."""

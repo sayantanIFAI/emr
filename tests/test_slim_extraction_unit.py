@@ -26,7 +26,8 @@ def test_the_schema_asks_only_for_what_mlp1_needs(doc):
             "diagnoses", "extracted_at_confidence"} <= set(p)
     assert set(p["patient"]["properties"]) <= {"name", "age_text", "sex", "dob", "phone", "address", "evidence"}
     assert {"name", "age_text", "sex"} <= set(p["patient"]["properties"])
-    assert set(p["prescriber"]["properties"]) == {"name", "department", "designation", "evidence"}
+    assert set(p["prescriber"]["properties"]) == {"name", "department", "designation", "clinic", "evidence"}   # clinic = the organisation
+    assert "earlier_entries" in p and "encounter_date" in p                                                   # the dated entries of a page
 
 
 def test_every_kept_field_keeps_its_original_definition_and_required_is_consistent():

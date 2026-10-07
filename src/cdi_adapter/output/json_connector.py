@@ -112,6 +112,7 @@ def _lab_order(f: dict[str, Any]) -> dict[str, Any]:
     return _item(f, {
         "as_written": f.get("local_text"), "code": f.get("code"), "code_system": f.get("code_system"),
         "code_display": f.get("code_display"), "code_status": f.get("code_status"),
+        "standard_name": None, "standard_source": None,
         "context": [], "preparation": []})
 
 
@@ -206,6 +207,21 @@ def _not_extracted(doc: dict[str, Any]) -> list[str]:
     return NOT_EXTRACTED + (P.SLIM_NOT_EXTRACTED if P.slim_active("prescription") else [])
 
 
+def _visits(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """The dated visits found on the pages (newest first), as stored by the page merge (extract/visits.py)."""
+    out: list[dict[str, Any]] = []
+    for v in payload.get("visits") or []:
+        if not isinstance(v, dict):
+            continue
+        out.append({"page": v.get("page") if isinstance(v.get("page"), int) else None, "where": str(v.get("where") or ""),
+                    "date": v.get("date") if isinstance(v.get("date"), str) else None,
+                    "date_text": v.get("date_text") if isinstance(v.get("date_text"), str) else None,
+                    "is_latest": bool(v.get("is_latest")),
+                    "lab_tests": [str(x) for x in (v.get("lab_tests") or []) if isinstance(x, str)],
+                    "follow_up": v.get("follow_up") if isinstance(v.get("follow_up"), str) else None})
+    return out
+
+
 def build_result(inp: ResultInputs) -> dict[str, Any]:
     doc, payload = inp.document, inp.payload or {}
     checks = F.build_checks(payload, inp.blocks, _doc_date(doc))
@@ -247,6 +263,10 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
             t["status"] = "needs_check"
             t["reason"] = f"read as '{alt}' (chosen from the reference list by the model; check the page)" + (
                 f": {t['reason']}" if t.get("reason") else "")
+        if rz is not None and t.get("status") != "rejected":
+            # the one standard test this written name stands for (the mapping table, then the national list / table)
+            t["standard_name"] = rz.long_name
+            t["standard_source"] = {"mapping": "mapping table", "CLCI": "Indian lab list"}.get(rz.source, "abbreviation table")
         if rz is not None and rz.kind == "test" and rz.loinc and not t.get("code") and t.get("status") != "rejected":
             # the name is a test the Indian list knows: give it its standard code (only for a licensed code system)
             up = licensed_only({"code_system": "http://loinc.org", "code": rz.loinc, "code_display": rz.long_name,
@@ -307,6 +327,9 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         "doctor": {**{k: _v(d[k]) for k in ("name", "reg_no", "department", "designation", "qualification")},
                    "clinic": {k: _v(d["clinic"][k]) for k in ("name", "address", "phone")},
                    "stamp_present": _v(d["stamp_present"]), "signature_present": _v(d["signature_present"])},
+        "organization": {k: _v(d["clinic"][k]) for k in ("name", "address", "phone")},
+        "intake": {"token_no": doc.get("token_no"), "phone": doc.get("phone"), "patient_name": doc.get("patient_name")},
+        "visits": _visits(payload),
         "lab_tests": buckets.pop("lab_tests"),
         "lab_preparation": checks["preparation"],
         "retracted_preparation": checks["retracted"],

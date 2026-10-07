@@ -327,6 +327,7 @@ class Settings(BaseSettings):
     # medicines are not what this product is judged on (lab tests are): the model's choice among reference medicine names
     # costs a call per page, so it is off by default
     llm_resolve_medicines: bool = False
+    lab_mapping_db: bool = True            # the lab-name mapping table is read from the database (False: the built-in seed only)
     llm_resolve_enabled: bool = True       # the model may CHOOSE among reference names for a misread test (resolve_llm.py)
     job_max_concurrent: int = 8           # uploads ("jobs") in progress at once; more wait in a queue
     fast_classify: bool = True           # try the scored heuristic classifier first; it only
@@ -342,7 +343,8 @@ class Settings(BaseSettings):
     #          stamp / signature are NOT asked for.
     #   full = everything the schema has (the earlier behaviour).
     extract_profile: str = "mlp1"
-    extract_max_tokens_mlp1: int = 1200
+    extract_max_tokens_mlp1: int = 1500
+    extract_per_page: bool = True          # a paper of several pages: each page is read on its own, then the latest dated visit is picked
     extract_max_tokens: int = 1400       # base; long doc types get more (see extract/prompt.py)
 
     # --- S6 governance gate (fact -> auto_accepted | in_review) ---

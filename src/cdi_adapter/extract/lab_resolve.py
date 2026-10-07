@@ -11,7 +11,7 @@ from __future__ import annotations
 import difflib
 from dataclasses import dataclass
 
-from . import indian_codes, lab_gazetteer
+from . import indian_codes, lab_gazetteer, lab_mapping
 from .indian_codes import norm
 
 
@@ -22,11 +22,15 @@ class Resolved:
     status: str | None              # "bound" | "candidate" | None (a recognised name that has no code)
     candidates: tuple[str, ...]
     long_name: str | None
-    source: str                     # "CLCI" | "gazetteer"
+    source: str                     # "mapping" | "CLCI" | "gazetteer"
     fuzzy: bool
 
 
 def resolve(text: str | None) -> Resolved | None:
+    mp = lab_mapping.lookup(text)              # the mapping table first: many written names -> one standard test
+    if mp is not None:
+        return Resolved("test", mp.loinc, "bound" if mp.loinc else None, (mp.loinc,) if mp.loinc else (), mp.canonical,
+                        "mapping", False)
     cl = indian_codes.lab_candidates(text)
     cur = lab_gazetteer.lookup(text)
     if cl:

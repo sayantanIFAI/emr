@@ -109,11 +109,23 @@ _EXTRA["opd_note"] += _TELL_APART
 SLIM_DOC_TYPES = ("prescription", "opd_note", "referral")
 _DROP_TOP = {"medications", "vitals", "notes_for_reviewer", "medications_on_discharge"}
 _KEEP_SUB = {"patient": {"name", "age_text", "sex", "dob", "phone", "address", "evidence"},
-             "prescriber": {"name", "department", "designation", "evidence"}}
+             "prescriber": {"name", "department", "designation", "clinic", "evidence"}}
 # what the result says was not asked for in this profile (shown under "not_extracted")
 SLIM_NOT_EXTRACTED = ["medications", "vitals", "patient.mrn", "patient.abha_id", "doctor.reg_no", "doctor.qualification",
-                      "doctor.clinic.name", "doctor.clinic.address", "doctor.clinic.phone", "doctor.stamp_present",
-                      "doctor.signature_present"]
+                      "doctor.stamp_present", "doctor.signature_present"]
+# the organisation printed on the letterhead / stamp (a note schema that has no `clinic` gets this one)
+_CLINIC = {"type": ["object", "null"], "additionalProperties": True,
+           "description": "the clinic / hospital / organisation printed on the letterhead or stamp",
+           "properties": {"name": {"type": ["string", "null"]}, "address": {"type": ["string", "null"]},
+                          "phone": {"type": ["string", "null"]}}}
+# other dated entries on the same page (older visits below a ruled line, a continuation list): added to the slim schema only
+_EARLIER_ENTRIES = {
+    "type": ["array", "null"],
+    "description": "other DATED entries on this page besides the main one (older visits below a ruled line, a continuation list)",
+    "items": {"type": "object", "additionalProperties": True,
+              "properties": {"date_text": {"type": ["string", "null"]},
+                             "investigations": {"type": "array", "items": {"type": "string"}},
+                             "follow_up": {"type": ["string", "null"]}}}}
 
 
 def slim_active(doc_type: str) -> bool:
@@ -138,6 +150,10 @@ def slim_schema(schema: dict[str, Any]) -> dict[str, Any]:
             sub["properties"] = {k: v for k, v in sub["properties"].items() if k in keep}
             if isinstance(sub.get("required"), list):
                 sub["required"] = [r for r in sub["required"] if r in keep]
+    pres = props.get("prescriber")
+    if isinstance(pres, dict) and isinstance(pres.get("properties"), dict) and "clinic" not in pres["properties"]:
+        pres["properties"]["clinic"] = copy.deepcopy(_CLINIC)
+    props["earlier_entries"] = copy.deepcopy(_EARLIER_ENTRIES)
     if isinstance(s.get("required"), list):
         s["required"] = [r for r in s["required"] if r in props]
     return s
@@ -158,7 +174,13 @@ _EXTRA_SLIM = (
     "tests it belongs to in `applies_to` ([\"all\"] when it covers the whole order); return [] when none is written and "
     "NEVER add a usual or standard preparation; `advice`: the written advice that is not a test or a medicine; "
     "`follow_up`: the written instruction to come back or review, copied exactly (printed form text such as 'Please "
-    "bring the prescription on the next visit' is NOT a follow-up)."
+    "bring the prescription on the next visit' is NOT a follow-up). `prescriber.clinic`: the hospital / clinic / "
+    "organisation `name`, `address` and `phone` printed on the letterhead or stamp. A government hospital often prints "
+    "only the hospital name and no doctor's name: then leave the doctor's `name` null and still fill `clinic`. "
+    "`encounter_date`: the date written for this page's MAIN entry (the top one), exactly as written, null if none. If the "
+    "page holds OTHER dated entries (older visits written below a ruled line, or a list continued from another sheet), put "
+    "each in `earlier_entries` with its `date_text` exactly as written, its `investigations` (one string per test) and its "
+    "`follow_up`; return [] when the page has one entry. Never mix the entries' tests."
 )
 
 
@@ -213,12 +235,16 @@ OCR blocks (id, text) - noisy, use together with the image:
 """
 
 
-def build_extraction_prompt(doc_type: str, ocr_blocks: list[dict[str, Any]]) -> str:
+def build_extraction_prompt(doc_type: str, ocr_blocks: list[dict[str, Any]], only_page: Any = None) -> str:
+    """``only_page``: a page id, to prompt for that page alone (the [bN] numbers stay the document's own, so evidence
+    still points at the right OCR block)."""
     pages = [b.get("page_id") for b in ocr_blocks]
-    multi = len({p for p in pages if p is not None}) > 1
+    multi = len({p for p in pages if p is not None}) > 1 and only_page is None
     lines: list[str] = []
     page_no, last = 0, object()
     for i, b in enumerate(ocr_blocks, start=1):
+        if only_page is not None and str(b.get("page_id")) != str(only_page):
+            continue
         if multi and b.get("page_id") != last:       # 'Page N:' headers; the [bN] numbering is unchanged
             page_no, last = page_no + 1, b.get("page_id")
             lines.append(f"Page {page_no}:")

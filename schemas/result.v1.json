@@ -140,6 +140,25 @@
     "vitals": {"type": "array", "items": {"$ref": "#/$defs/vital"}},
     "diagnoses": {"type": "array", "items": {"$ref": "#/$defs/plain"}},
     "other": {"type": "array", "items": {"$ref": "#/$defs/plain"}},
+    "organization": {
+      "type": "object", "additionalProperties": false, "required": ["name", "address", "phone"],
+      "properties": {"name": {"$ref": "#/$defs/value"}, "address": {"$ref": "#/$defs/value"}, "phone": {"$ref": "#/$defs/value"}}
+    },
+    "intake": {
+      "type": "object", "additionalProperties": false, "required": ["token_no", "phone", "patient_name"],
+      "properties": {"token_no": {"type": ["string", "null"]}, "phone": {"type": ["string", "null"]}, "patient_name": {"type": ["string", "null"]}}
+    },
+    "visits": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["page", "where", "date", "date_text", "is_latest", "lab_tests", "follow_up"],
+        "properties": {
+          "page": {"type": ["integer", "null"]}, "where": {"type": "string"},
+          "date": {"type": ["string", "null"]}, "date_text": {"type": ["string", "null"]}, "is_latest": {"type": "boolean"},
+          "lab_tests": {"type": "array", "items": {"type": "string"}}, "follow_up": {"type": ["string", "null"]}
+        }
+      }
+    },
     "not_extracted": {"type": "array", "items": {"type": "string"}},
     "notice": {"type": "string"}
   },
@@ -177,6 +196,8 @@
         "code": {"type": ["string", "null"]}, "code_system": {"type": ["string", "null"]},
         "code_display": {"type": ["string", "null"]},
         "code_status": {"enum": ["unmapped", "candidate", "bound", "local_only", null]},
+        "standard_name": {"type": ["string", "null"]},
+        "standard_source": {"enum": ["mapping table", "Indian lab list", "abbreviation table", null]},
         "context": {
           "type": "array",
           "items": {"type": "object", "additionalProperties": false, "required": ["text", "kind", "relation", "quote"],
