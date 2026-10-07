@@ -47,6 +47,8 @@ if [ ! -x "$VENV/bin/vllm" ]; then
   python3 -m venv "$VENV"          # NOT --system-site-packages: vLLM brings its own torch
   "$VENV/bin/pip" install -U pip wheel
   "$VENV/bin/pip" install "$PIN"   # pulls its own pinned torch + CUDA libs
+  # an older vLLM does not know transformers 5's config format ("rope_type=default conflicts with type=mrope"): keep 4.x
+  case "$PIN" in vllm==0.1[0-9].*) "$VENV/bin/pip" install "transformers>=4.56,<5" ;; esac
 fi
 "$VENV/bin/vllm" --version || { echo "vLLM install failed"; exit 1; }
 
