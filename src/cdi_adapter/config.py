@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # how soft it measures. Both are checked and undone when they would make the picture worse. PLACEHOLDER thresholds until
     # measured on the pilot's own photos.
     enhance_enabled: bool = True
+    # which picture of a page the vision model is given for the full-page read and the focused looks: "source" = the colour page
+    # (cut out and straightened, no contrast / sharpening change) or "normalized" = the grey, contrast-stretched copy
+    model_image: str = "normalized"
     enhance_target_long_side: int = 2000   # a picture shorter than this (long side, px) is enlarged towards it
     enhance_max_scale: float = 2.5
     enhance_soft_below: float = 150.0      # Laplacian variance (at 1000 px) at or under which sharpening is at full strength

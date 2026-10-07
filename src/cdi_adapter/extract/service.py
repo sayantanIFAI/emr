@@ -571,6 +571,15 @@ def _check_the_name(client: Any, image: bytes, blocks: list[dict[str, Any]], pay
         payload["patient"]["name"] = chosen                 # most readings agree on a different spelling than the first reading
 
 
+def _page_image(pg: dict[str, Any]) -> bytes:
+    """The picture of a page the vision model reads (``CDI_MODEL_IMAGE``): the colour source page, or the normalized copy."""
+    uri = None
+    if settings.model_image == "source":
+        pre = pg.get("preproc")
+        uri = pre.get("src_uri") if isinstance(pre, dict) else None
+    return storage.get_bytes(storage.key_from_uri(uri or pg["image_uri"]))
+
+
 def _unescape(x: Any) -> Any:
     """The model sometimes writes an ampersand as ``&amp;`` (and a quote as ``&quot;``): prescriptions never contain HTML,
     so every string in the answer is turned back into the plain characters."""
@@ -594,7 +603,7 @@ def _read_each_page(client: Any, pages: list[dict[str, Any]], blocks: list[dict[
     from . import visits as V
 
     def one(pg: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
-        img = storage.get_bytes(storage.key_from_uri(pg["image_uri"]))
+        img = _page_image(pg)
         pr = build_extraction_prompt(doc_type, blocks, only_page=pg["id"])
         return client.vlm_json_ex(img, pr, schema, max_tokens=max_tokens_for(doc_type), retries=settings.extract_retries)
 
@@ -648,7 +657,7 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
     schema_id, schema = loaded
     prompt = build_extraction_prompt(cls["doc_type"], blocks)
     blkmap = block_id_map(blocks)
-    image = storage.get_bytes(storage.key_from_uri(pages[0]["image_uri"]))
+    image = _page_image(pages[0])
 
     from . import visits as V
     from .prompt import slim_active
@@ -682,7 +691,7 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
     page1_image, page1_blocks = image, [b for b in blocks if str(b.get("page_id")) == str(pages[0]["id"])] or blocks
     if len(pages) > 1 and 1 <= latest_no <= len(pages) and latest_no != 1:
         # the second look and the choose-from-list step read the page the latest visit is on
-        image = storage.get_bytes(storage.key_from_uri(pages[latest_no - 1]["image_uri"]))
+        image = _page_image(pages[latest_no - 1])
     if len(pages) > 1 and 1 <= latest_no <= len(pages):
         pid_latest = str(pages[latest_no - 1]["id"])
         focus_blocks = [b for b in blocks if str(b.get("page_id")) == pid_latest] or blocks

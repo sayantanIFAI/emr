@@ -30,6 +30,7 @@ Nothing here is a threshold: the pass/fail numbers live in a thresholds file the
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import re
 from collections import defaultdict
@@ -37,7 +38,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from ..recognition.bench_htr import wilson_lower
+from ..recognition.bench_htr import levenshtein, wilson_lower
 
 ACCEPTED = {"checked", "accepted"}
 SCALARS = [("patient", k) for k in ("name", "age_text", "dob", "sex", "mrn", "phone", "address", "abha_id")] + \
@@ -48,6 +49,27 @@ SCALARS = [("patient", k) for k in ("name", "age_text", "dob", "sex", "mrn", "ph
 def norm(v: Any) -> str:
     """Comparison form: case, spacing and punctuation do not make a value wrong; digits and letters must match."""
     return re.sub(r"[^0-9a-z]+", "", str(v).lower()) if v is not None else ""
+
+
+def _text(v: Any) -> str:
+    """Text form for error rates: lower case, punctuation as spaces, single spaces (so "S. Lipase" == "s lipase")."""
+    return re.sub(r"\s+", " ", re.sub(r"[^0-9a-z]+", " ", str(v).lower())).strip() if v is not None else ""
+
+
+def _errs(ref: str, hyp: str) -> tuple[int, int, int, int]:
+    """(character edits, reference characters, word edits, reference words): CER / WER are the sums of these."""
+    return (levenshtein(ref, hyp), len(ref), levenshtein(ref.split(), hyp.split()), len(ref.split()))
+
+
+_TEXT_KEYS = ("ch_edit", "ch_ref", "wd_edit", "wd_ref", "a_ch_edit", "a_ch_ref", "a_wd_edit", "a_wd_ref")
+
+
+def _rates(c: dict[str, int]) -> dict[str, Any]:
+    """CER / WER of everything that was read ("raw") and of the values the system accepted on its own ("accepted")."""
+    rate = lambda e, r: None if not r else round(e / r, 4)                                 # noqa: E731
+    return {"raw_cer": rate(c["ch_edit"], c["ch_ref"]), "raw_wer": rate(c["wd_edit"], c["wd_ref"]),
+            "accepted_cer": rate(c["a_ch_edit"], c["a_ch_ref"]), "accepted_wer": rate(c["a_wd_edit"], c["a_wd_ref"]),
+            "raw_chars": c["ch_ref"], "accepted_chars": c["a_ch_ref"], "raw_words": c["wd_ref"], "accepted_words": c["a_wd_ref"]}
 
 
 def _same(a: Any, b: Any) -> bool:
@@ -72,6 +94,8 @@ class Tally:
         self.expected = self.accepted = self.accepted_right = self.accepted_wrong = 0
         self.wrong_or_missing = self.flagged_of_those = 0
         self.spurious_accepted = 0                      # a value written nowhere on the page, accepted anyway
+        for k in _TEXT_KEYS:                            # character / word edits (CER / WER), see ``_errs``
+            setattr(self, k, 0)
 
     def add(self, expected: Any, got: dict[str, Any]) -> str:
         has = expected is not None
@@ -88,6 +112,13 @@ class Tally:
                 self.accepted_wrong += 1
                 if not has:
                     self.spurious_accepted += 1
+        ref, hyp = (_text(expected) if has else ""), (_text(value) if value is not None else "")
+        if has or hyp:                                   # every expected value counts; a value read where none is written is insertions
+            ce, cr, we, wr = _errs(ref, hyp)
+            self.ch_edit, self.ch_ref, self.wd_edit, self.wd_ref = self.ch_edit + ce, self.ch_ref + cr, self.wd_edit + we, self.wd_ref + wr
+            if ok_status and value is not None:          # the accepted values: what the system stands behind without a person
+                self.a_ch_edit, self.a_ch_ref = self.a_ch_edit + ce, self.a_ch_ref + cr
+                self.a_wd_edit, self.a_wd_ref = self.a_wd_edit + we, self.a_wd_ref + wr
         if has and not right or (not has and value is not None):
             self.wrong_or_missing += 1
             if status == "needs_check":                  # a silent miss ("absent") is NOT a catch
@@ -109,6 +140,7 @@ class Tally:
             "wrong_or_missing": self.wrong_or_missing,
             "flag_catch_rate": round(self.flagged_of_those / self.wrong_or_missing, 4) if self.wrong_or_missing else None,
             "spurious_accepted": self.spurious_accepted,
+            **_rates({k: getattr(self, k) for k in _TEXT_KEYS}),
         }
 
 
@@ -119,6 +151,55 @@ def _list_prf(expected: Iterable[str], got: list[dict[str, Any]], field: str = "
     extra_accepted = [k for k, g in found.items() if k not in exp and g.get("status") == "accepted"]
     return {"expected": len(exp), "found": len(found), "hit": len(hit), "missed": len(exp - found.keys()),
             "extra": len(found.keys() - exp), "extra_accepted": len(extra_accepted)}
+
+
+def _list_text(expected: Iterable[str], got: list[dict[str, Any]], field: str = "as_written") -> dict[str, int]:
+    """CER / WER inputs for a list of written names (lab tests): each expected name is paired with its most alike read name
+    (a missed one is all deletions), every unpaired read name is insertions. The accepted counts use only the read names the
+    system accepted on its own."""
+    c = dict.fromkeys(_TEXT_KEYS, 0)
+    exp = [_text(x) for x in expected if _text(x)]
+    found = [(_text(g.get(field) or g.get("text")), g.get("status") == "accepted") for g in got if _text(g.get(field) or g.get("text"))]
+    for use_accepted in (False, True):
+        p = "a_" if use_accepted else ""
+        pool = [f for f in found if f[1] or not use_accepted]
+        taken: set[int] = set()
+        for e in exp:
+            best, bi = 0.0, -1
+            for i, (f, _a) in enumerate(pool):
+                if i in taken:
+                    continue
+                sim = difflib.SequenceMatcher(None, e, f).ratio()
+                if sim > best:
+                    best, bi = sim, i
+            if bi >= 0 and best >= 0.5:
+                taken.add(bi)
+                ce, cr, we, wr = _errs(e, pool[bi][0])
+            elif use_accepted:
+                continue                                  # not accepted: that is coverage, not an accepted-value error
+            else:
+                ce, cr, we, wr = _errs(e, "")
+            c[p + "ch_edit"] += ce
+            c[p + "ch_ref"] += cr
+            c[p + "wd_edit"] += we
+            c[p + "wd_ref"] += wr
+        for i, (f, _a) in enumerate(pool):                # read names that match no expected test: insertions
+            if i not in taken:
+                c[p + "ch_edit"] += len(f)
+                c[p + "wd_edit"] += len(f.split())
+    return c
+
+
+def _misfiled(exp: dict[str, Any], res: dict[str, Any]) -> dict[str, int]:
+    """Context errors by CATEGORY: a test the doctor ordered that the system filed as advice or a medicine, and a medicine or
+    advice line that it filed as a lab test."""
+    tests = {norm(x) for x in exp.get("lab_tests", []) if norm(x)}
+    lab_found = {norm(t.get("as_written") or t.get("text")) for t in res.get("lab_tests", [])
+                 if t.get("status") != "rejected"}
+    other_found = {norm(a.get("text")) for a in res.get("advice", [])} | {norm(m.get("drug")) for m in res.get("medications", [])}
+    not_tests = {norm(x) for x in exp.get("advice", []) + exp.get("medications", []) if norm(x)}
+    return {"expected_tests": len(tests), "test_filed_elsewhere": len((tests - lab_found) & other_found),
+            "other_filed_as_test": len(lab_found & not_tests)}
 
 
 def score_document(key: dict[str, Any], res: dict[str, Any]) -> dict[str, Any]:
@@ -133,6 +214,8 @@ def score_document(key: dict[str, Any], res: dict[str, Any]) -> dict[str, Any]:
         out["fields"][f"{section}.{k}"] = {"expected": want, "got": got.get("value"), "status": got.get("status"), "outcome": outcome}
     out["scalar"] = scal
     out["lab_tests"] = _list_prf(exp.get("lab_tests", []), res.get("lab_tests", []))
+    out["lab_text"] = _list_text(exp.get("lab_tests", []), res.get("lab_tests", []))
+    out["misfiled"] = _misfiled(exp, res)
     out["advice"] = _list_prf(exp.get("advice", []), res.get("advice", []))
     out["medications"] = _list_prf(exp.get("medications", []), res.get("medications", []), "drug")
     exp_prep = {norm(p["text"]) for p in exp.get("preparation", [])}
@@ -172,6 +255,8 @@ def scoreboard(per_doc: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "documents": len(docs), "scalars": t.report(),
             "lab_tests": agg("lab_tests", ("expected", "hit", "missed", "extra", "extra_accepted")),
+            "text_errors": _rates({k: getattr(t, k) + sum(d["lab_text"][k] for d in docs) for k in _TEXT_KEYS}),
+            "misfiled": _misfiled_total(agg("misfiled", ("expected_tests", "test_filed_elsewhere", "other_filed_as_test"))),
             "advice": agg("advice", ("expected", "hit", "missed", "extra", "extra_accepted")),
             "medications": agg("medications", ("expected", "hit", "missed", "extra", "extra_accepted")),
             "preparation": prep,
@@ -195,6 +280,11 @@ def scoreboard(per_doc: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def _misfiled_total(m: dict[str, int]) -> dict[str, Any]:
+    n = m["expected_tests"]
+    return {**m, "rate": None if not n else round((m["test_filed_elsewhere"] + m["other_filed_as_test"]) / n, 4)}
+
+
 # ------------------------------------------------------------------ the gate
 def gate(board: dict[str, Any], thresholds: dict[str, Any]) -> list[str]:
     """Reasons the release is blocked (empty = pass). Thresholds are PLACEHOLDERS until the owner and a clinician set them."""
@@ -211,6 +301,16 @@ def gate(board: dict[str, Any], thresholds: dict[str, Any]) -> list[str]:
     ce = o["context"]["error_rate_upper_bound"]
     if ce is not None and ce > thresholds["max_context_error_rate_upper_bound"]:
         bad.append(f"context error rate upper bound {ce} is above {thresholds['max_context_error_rate_upper_bound']}")
+    te = o["text_errors"]
+    if te["accepted_chars"] < thresholds.get("min_accepted_chars", 0):
+        bad.append(f"only {te['accepted_chars']} accepted characters scored; at least {thresholds['min_accepted_chars']} are required to claim a CER / WER")
+    for k, name in (("accepted_cer", "character error rate (CER)"), ("accepted_wer", "word error rate (WER)")):
+        lim = thresholds.get("max_" + k)
+        if lim is not None and te[k] is not None and te[k] > lim:
+            bad.append(f"accepted-value {name} {te[k]} is above {lim}")
+    mf = o["misfiled"]["rate"]
+    if mf is not None and mf > thresholds.get("max_misfiled_rate", 1.0):
+        bad.append(f"{mf} of the ordered tests were filed in the wrong category (limit {thresholds['max_misfiled_rate']})")
     if o["refusal_missed"]:
         bad.append(f"{o['refusal_missed']} unreadable document(s) were read instead of being sent back for a retake")
     if o["preparation"]["made_up_accepted"] > thresholds["max_made_up_preparation_accepted"]:

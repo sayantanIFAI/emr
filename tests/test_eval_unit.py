@@ -237,3 +237,65 @@ def test_the_report_has_both_models_on_the_same_slices(tmp_path):               
     assert rep["candidate_scalars"]["accepted_values"] == rep["champion_scalars"]["accepted_values"]
     assert set(rep["slices"]) == {"source=printed", "kind=typical"} and rep["speed"]["ratio"] == 1.0
     assert rep["verdict_note"].startswith("UNAPPROVED RULES") and rep["candidate_gpu_memory_gb"]["value"] == 17.1
+
+
+# ---- CER / WER, accepted vs raw, and the category (context) errors
+def _got(value, status="checked"):
+    return {"value": value, "status": status, "reason": None, "confidence": None}
+
+
+def test_cer_and_wer_are_total_edits_over_total_reference_length():
+    t = scorer.Tally()
+    t.add("Dr A Sen", _got("Dr A Sen"))                 # exact
+    t.add("FBS", _got("FPS"))                            # one character wrong, accepted
+    r = t.report()
+    assert r["accepted_cer"] == round(1 / (len("dr a sen") + len("fbs")), 4)       # 1 edit in 11 reference characters
+    assert r["accepted_wer"] == round(1 / (3 + 1), 4)                              # 1 wrong word in 4 reference words
+    assert r["raw_cer"] == r["accepted_cer"]
+
+
+def test_a_value_the_system_did_not_accept_counts_in_the_raw_rate_only():
+    t = scorer.Tally()
+    t.add("Oukar Chowdhury", _got("Oukar Broadway", "needs_check"))                 # read wrong, but sent to a person
+    r = t.report()
+    assert r["accepted_cer"] is None and r["accepted_chars"] == 0                   # nothing was accepted on its own
+    assert r["raw_cer"] > 0.3 and r["raw_wer"] == 0.5                                # 1 of the 2 words is wrong
+
+
+def test_a_missed_value_is_all_deletions_and_an_invented_one_is_all_insertions():
+    t = scorer.Tally()
+    t.add("TSH", {"value": None, "status": "absent"})
+    t.add(None, _got("Asha"))                                                       # nothing written, one accepted anyway
+    r = t.report()
+    assert r["raw_cer"] == round((3 + 4) / 3, 4) and r["accepted_chars"] == 0       # insertions raise the rate above 1
+    assert r["spurious_accepted"] == 1
+
+
+def test_lab_test_names_are_paired_with_their_most_alike_reading():
+    exp = ["HbA1c", "FBS", "PPBS"]
+    got = [{"as_written": "HbA1c", "status": "accepted"}, {"as_written": "FPS", "status": "accepted"},
+           {"as_written": "Fructosamine", "status": "needs_check"}]
+    c = scorer._list_text(exp, got)
+    assert c["ch_ref"] == len("hba1c") + len("fbs") + len("ppbs")
+    assert c["ch_edit"] == 0 + 1 + len("ppbs") + len("fructosamine")                # FBS->FPS, PPBS missed, one extra name read
+    assert c["a_ch_ref"] == len("hba1c") + len("fbs") and c["a_ch_edit"] == 1       # the accepted names: one wrong character
+
+
+def test_a_test_filed_as_advice_or_a_medicine_filed_as_a_test_is_a_context_error():
+    exp = {"lab_tests": ["HbA1c", "FBS"], "advice": ["low salt diet"], "medications": ["Metformin"]}
+    res = {"lab_tests": [{"as_written": "Metformin", "status": "needs_check"}], "advice": [{"text": "HbA1c"}], "medications": []}
+    m = scorer._misfiled(exp, res)
+    assert m == {"expected_tests": 2, "test_filed_elsewhere": 1, "other_filed_as_test": 1}
+
+
+def test_the_owners_99_percent_target_is_in_the_gate_and_blocks_a_one_percent_error_rate():
+    th = json.loads((scorer.Path(scorer.__file__).parent / "thresholds.json").read_text())
+    assert th["min_accepted_precision_lower_bound"] == 0.99 and th["max_accepted_cer"] == 0.01 and th["max_accepted_wer"] == 0.01
+    assert th["max_context_error_rate_upper_bound"] == 0.01 and th["max_misfiled_rate"] == 0.01
+    docs = [scorer.score_document(_key(id=f"k{i}"), _result()) for i in range(320)]
+    assert scorer.gate(scorer.scoreboard(docs), th) == []                            # all right: passes
+    worse = copy.deepcopy(docs)
+    for d in worse[:60]:                                                             # a wrong character in 60 of 320 documents
+        d["scalar"].a_ch_edit += 5
+    bad = scorer.gate(scorer.scoreboard(worse), th)
+    assert any("character error rate" in b for b in bad), bad

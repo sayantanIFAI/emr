@@ -59,3 +59,16 @@ def test_a_failed_or_switched_off_reread_changes_nothing(monkeypatch):
     q = {"patient": {"name": "Asha Rao"}}
     X._check_the_name(Seq("Other Name"), _png(), BLOCKS, q)
     assert q["patient"]["name"] == "Asha Rao"
+
+
+def test_the_model_is_given_the_picture_the_setting_names(monkeypatch):
+    asked = []
+    monkeypatch.setattr(X.storage, "key_from_uri", lambda u: u)
+    monkeypatch.setattr(X.storage, "get_bytes", lambda k: asked.append(k) or b"img")
+    pg = {"image_uri": "s3://p/norm.png", "preproc": {"src_uri": "s3://p/src.png"}}
+    monkeypatch.setattr(settings, "model_image", "normalized")
+    X._page_image(pg)
+    monkeypatch.setattr(settings, "model_image", "source")
+    X._page_image(pg)
+    X._page_image({"image_uri": "s3://p/norm.png", "preproc": None})              # no source copy kept: the normalized one
+    assert asked == ["s3://p/norm.png", "s3://p/src.png", "s3://p/norm.png"]

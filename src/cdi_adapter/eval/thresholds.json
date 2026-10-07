@@ -1,10 +1,14 @@
 {
-  "_comment": "Release-gate thresholds for the scoreboard (ENT-S3). PLACEHOLDERS: the owner and a clinician set the real numbers. Nothing here has been measured on real handwriting.",
+  "_comment": "Release-gate thresholds for the scoreboard (ENT-S3). TARGET set by the owner: 99 % on what the system accepts on its own (precision, CER, WER, context). NOTHING has been measured on real handwriting, so this gate BLOCKS until a labelled real-handwriting set passes it. 'Accepted' = values the system stands behind without a person; every other value goes to a person to confirm.",
   "min_documents": 300,
-  "min_accepted_precision_lower_bound": 0.97,
-  "min_coverage": 0.60,
-  "max_context_error_rate_upper_bound": 0.05,
+  "min_accepted_precision_lower_bound": 0.99,
+  "min_coverage": 0.6,
+  "max_context_error_rate_upper_bound": 0.01,
+  "max_accepted_cer": 0.01,
+  "max_accepted_wer": 0.01,
+  "min_accepted_chars": 5000,
+  "max_misfiled_rate": 0.01,
   "max_made_up_preparation_accepted": 0,
-  "min_slice_accepted_values": 50,
-  "min_slice_precision_lower_bound": 0.95
+  "min_slice_accepted_values": 400,
+  "min_slice_precision_lower_bound": 0.99
 }
