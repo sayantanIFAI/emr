@@ -199,6 +199,13 @@ def _provenance(ext: dict[str, Any]) -> dict[str, Any]:
             "engines": {k: eng.get(k) for k in ENGINE_KEYS}}
 
 
+def _not_extracted(doc: dict[str, Any]) -> list[str]:
+    """What this result does not carry: the standing list, plus what the slim extraction profile never asks for."""
+    from ..extract import prompt as P
+
+    return NOT_EXTRACTED + (P.SLIM_NOT_EXTRACTED if P.slim_active("prescription") else [])
+
+
 def build_result(inp: ResultInputs) -> dict[str, Any]:
     doc, payload = inp.document, inp.payload or {}
     checks = F.build_checks(payload, inp.blocks, _doc_date(doc))
@@ -307,7 +314,7 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         "follow_up": {**_v(fu), **fu["detail"]},
         **buckets,
         "other": other,
-        "not_extracted": NOT_EXTRACTED,
+        "not_extracted": _not_extracted(doc),
         "notice": NOTICE,
     }
 

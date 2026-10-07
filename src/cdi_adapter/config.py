@@ -317,6 +317,13 @@ class Settings(BaseSettings):
                                          # were relaxed so a first-pass slip is now rare)
     extract_concurrency: int = 4         # concurrent VLM extract calls in flight (vllm backend
                                          # batches them; 1 = the old serial behaviour for `hf`)
+    # What Qwen is asked to WRITE for a prescription / consultation note (the time of the extraction is its output length):
+    #   mlp1 = patient details, doctor name / department / designation, the lab tests with their preparation, the diagnoses
+    #          (for context), advice and follow-up. Medicines, vitals, registration number, qualification, clinic and
+    #          stamp / signature are NOT asked for.
+    #   full = everything the schema has (the earlier behaviour).
+    extract_profile: str = "mlp1"
+    extract_max_tokens_mlp1: int = 1200
     extract_max_tokens: int = 1400       # base; long doc types get more (see extract/prompt.py)
 
     # --- S6 governance gate (fact -> auto_accepted | in_review) ---

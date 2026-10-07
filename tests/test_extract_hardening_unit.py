@@ -5,11 +5,22 @@ import json
 from datetime import date
 
 import httpx
+import pytest
 
 from cdi_adapter.config import settings
 from cdi_adapter.extract.prompt import build_extraction_prompt, load_schema
 from cdi_adapter.ml import client as mc
 from cdi_adapter.validate.service import field_review_items
+
+
+@pytest.fixture(autouse=True)
+def _full_profile(monkeypatch):
+    """These tests check the wording of the FULL extraction prompt; the slim profile has its own tests."""
+    from cdi_adapter.config import settings as _s
+
+    monkeypatch.setattr(_s, "extract_profile", "full")
+
+
 
 FALLBACK = "Qwen/Qwen2-VL-7B-Instruct"
 SCHEMA = {"type": "object", "properties": {"name": {"type": "string"}, "confidence": {"type": "number"}},

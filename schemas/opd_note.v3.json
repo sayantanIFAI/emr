@@ -39,6 +39,24 @@
         },
         "evidence": {
           "$ref": "cdi:common.defs#/$defs/evidence"
+        },
+        "dob": {
+          "$ref": "cdi:common.defs#/$defs/date_partial",
+          "description": "date of birth exactly as written; null if not written. Never work it out from the age."
+        },
+        "phone": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "patient phone number as written (digits exactly); null if absent"
+        },
+        "address": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "patient address as written; null if absent"
         }
       },
       "description": "patient identity as printed; may be absent/illegible on handwritten notes"
@@ -68,6 +86,13 @@
         },
         "evidence": {
           "$ref": "cdi:common.defs#/$defs/evidence"
+        },
+        "designation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "post as written (e.g. Consultant Physician); null if absent"
         }
       }
     },

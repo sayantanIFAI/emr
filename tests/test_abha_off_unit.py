@@ -7,6 +7,17 @@ from datetime import date
 from cdi_adapter.config import settings
 from cdi_adapter.extract import fields as F
 from cdi_adapter.extract.prompt import build_extraction_prompt
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _full_profile(monkeypatch):
+    """These tests check the wording of the FULL extraction prompt; the slim profile has its own tests."""
+    from cdi_adapter.config import settings as _s
+
+    monkeypatch.setattr(_s, "extract_profile", "full")
+
+
 
 PAGE = "Patient: Anil Mehra 54 y M ph 9830011234 ABHA 14-1111-2222-3333"
 RAW = {"name": "Anil Mehra", "age_text": "54 y", "sex": "M", "phone": "9830011234", "abha_id": "14-1111-2222-3333"}

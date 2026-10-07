@@ -105,9 +105,66 @@ _EXTRA["prescription"] += _TELL_APART
 _EXTRA["opd_note"] += _TELL_APART
 
 
+# ---- the slim profile (CDI_EXTRACT_PROFILE=mlp1): ask the model to write only what MLP1 needs ----
+SLIM_DOC_TYPES = ("prescription", "opd_note", "referral")
+_DROP_TOP = {"medications", "vitals", "notes_for_reviewer", "medications_on_discharge"}
+_KEEP_SUB = {"patient": {"name", "age_text", "sex", "dob", "phone", "address", "evidence"},
+             "prescriber": {"name", "department", "designation", "evidence"}}
+# what the result says was not asked for in this profile (shown under "not_extracted")
+SLIM_NOT_EXTRACTED = ["medications", "vitals", "patient.mrn", "patient.abha_id", "doctor.reg_no", "doctor.qualification",
+                      "doctor.clinic.name", "doctor.clinic.address", "doctor.clinic.phone", "doctor.stamp_present",
+                      "doctor.signature_present"]
+
+
+def slim_active(doc_type: str) -> bool:
+    from ..config import settings
+
+    return settings.extract_profile.strip().lower() == "mlp1" and doc_type in SLIM_DOC_TYPES
+
+
+def slim_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """The same schema with the fields the profile does not ask for removed (a shorter schema is a shorter prompt and a
+    shorter answer). Nothing else changes: every kept field has its original definition."""
+    import copy
+
+    s = copy.deepcopy(schema)
+    props = s.get("properties", {})
+    for k in list(props):
+        if k in _DROP_TOP:
+            del props[k]
+    for obj, keep in _KEEP_SUB.items():
+        sub = props.get(obj)
+        if isinstance(sub, dict) and isinstance(sub.get("properties"), dict):
+            sub["properties"] = {k: v for k, v in sub["properties"].items() if k in keep}
+            if isinstance(sub.get("required"), list):
+                sub["required"] = [r for r in sub["required"] if r in keep]
+    if isinstance(s.get("required"), list):
+        s["required"] = [r for r in s["required"] if r in props]
+    return s
+
+
+_EXTRA_SLIM = (
+    "\nThis is a PRESCRIPTION or consultation note. Fill ONLY the fields in the schema; it does not ask for medicines. "
+    "Do NOT write the medicines (a line with a drug name and a dose, schedule or duration such as '1-0-1', 'BD', "
+    "'x 5d') anywhere: not in `investigations`, not in `advice`. Fill, ONLY from what is written: the patient's `name`, "
+    "`age_text`, `sex`, `dob`, `phone`, `address` exactly as written (null if not written; never work a date of birth "
+    "out from the age, never infer sex or age from a name); the prescriber's `name`, `department` and `designation` "
+    "(from the letterhead or stamp); `diagnoses` (short phrases); every test or scan the doctor ORDERS/advises (a line "
+    "after 'Adv' or 'Investigations', or a test named in a follow-up line) in `investigations`, one item per test, "
+    "panels as written (never expand a panel); `investigation_preparation`: only preparation that is WRITTEN for the "
+    "tests (for example 'fasting 12 hrs', 'morning sample'): copy the words in `text`, the number in `value`, and the "
+    "tests it belongs to in `applies_to` ([\"all\"] when it covers the whole order); return [] when none is written and "
+    "NEVER add a usual or standard preparation; `advice`: the written advice that is not a test or a medicine; "
+    "`follow_up`: the written instruction to come back or review, copied exactly (printed form text such as 'Please "
+    "bring the prescription on the next visit' is NOT a follow-up)."
+)
+
+
 def max_tokens_for(doc_type: str) -> int:
     from ..config import settings
 
+    if slim_active(doc_type):
+        return settings.extract_max_tokens_mlp1
     return MAX_TOKENS_BY_DOC_TYPE.get(doc_type, settings.extract_max_tokens)
 
 
@@ -117,7 +174,13 @@ def load_schema(doc_type: str) -> tuple[str, dict[str, Any]] | None:
         return None
     if fname not in _cache:
         _cache[fname] = json.loads((_SCHEMA_DIR / fname).read_text(encoding="utf-8"))
-    return _cache[fname]["$id"], _cache[fname]
+    full = _cache[fname]
+    if slim_active(doc_type):
+        key = fname + "#mlp1"
+        if key not in _cache:
+            _cache[key] = slim_schema(full)
+        return full["$id"], _cache[key]
+    return full["$id"], full
 
 
 _BASE = """\
@@ -160,8 +223,8 @@ def build_extraction_prompt(doc_type: str, ocr_blocks: list[dict[str, Any]]) -> 
         lines.append(f"[b{i}] {b['text']}")
     from ..config import settings
 
-    extra = _EXTRA.get(doc_type, "")
-    if not settings.abha_enabled:
+    extra = _EXTRA_SLIM if slim_active(doc_type) else _EXTRA.get(doc_type, "")
+    if not slim_active(doc_type) and not settings.abha_enabled:
         # no ABDM identification on this deployment: the model is not asked for it (it only ever made one up
         # from a bill number or a company id) and is told to leave it empty
         extra = extra.replace("`phone`, `address` and `abha_id`", "`phone` and `address`")
