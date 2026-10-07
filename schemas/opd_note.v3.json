@@ -206,7 +206,7 @@
     },
     "investigations": {
       "type": "array",
-      "description": "tests / imaging ordered or advised on this prescription (e.g. 'CBC', 'KFT', 'X-ray LS spine'). Orders, not results.",
+      "description": "tests / imaging ordered or advised on this prescription, each exactly as written. Orders, not results. Never a medicine, and never a test that is not written on the page.",
       "items": {
         "$ref": "cdi:common.defs#/$defs/coded"
       }

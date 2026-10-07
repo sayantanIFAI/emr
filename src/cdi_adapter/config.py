@@ -295,6 +295,7 @@ class Settings(BaseSettings):
                                          # (cpu_budget - 1) / this  (keep them in sync)
     abha_enabled: bool = True             # ask the page for an ABHA / ABDM identity, check it, and match patients on it. Off
                                           # (CDI_ABHA_ENABLED=false) the deployment never asks for, reads or validates one
+    medicine_lexicon_path: str = ""          # list of medicine names (scripts/build_medicine_lexicon.py); empty = not used
     job_max_concurrent: int = 8           # uploads ("jobs") in progress at once; more wait in a queue
     fast_classify: bool = True           # try the scored heuristic classifier first; it only
                                          # short-circuits the VLM on an unambiguous, cleanly

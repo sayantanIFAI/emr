@@ -12,6 +12,7 @@ from ..db import session_scope
 from ..logging import get_logger
 from ..ml.client import MLError, get_client
 from .prompt import block_id_map, build_extraction_prompt, load_schema, max_tokens_for
+from .test_names import is_test_list, split_tests
 
 log = get_logger(__name__)
 
@@ -173,9 +174,9 @@ def _facts_prescription(c: _Ctx, p: dict[str, Any]) -> None:
             c.add(fact_type="advice", local_text=t, value_text=t, evidence=ev)
     for io in p.get("investigations") or []:
         t, ev = _coded_text(io)
-        if t:
-            c.add(fact_type="investigation_order", local_text=t, value_code_display=t,
-                  value_text=t, evidence=ev)
+        for one in split_tests(t) if t else []:          # one fact per test, however the doctor wrote the list
+            c.add(fact_type="investigation_order", local_text=one, value_code_display=one,
+                  value_text=one, evidence=ev)
     _add_vitals(c, p.get("vitals") or [])
 
 
@@ -416,6 +417,14 @@ def _add_medication(c: _Ctx, m: Any, *, intent: str, status: str | None = None) 
         else:
             return
     raw_drug = m.get("drug_text") or m.get("text") or m.get("name") or ""
+    if is_test_list(raw_drug) and not any(m.get(k) for k in (
+            "strength", "dose", "frequency_text", "frequency", "duration_days", "timing", "dosage", "sig",
+            "schedule", "dose_pattern")):
+        # a list of test abbreviations with no dose or duration is an order for tests, not a medicine
+        for t in split_tests(raw_drug):
+            c.add(fact_type="investigation_order", local_text=t, value_code_display=t, value_text=t,
+                  evidence=m.get("evidence"))
+        return
     drug, name_str, name_unit = _parse_strength_from_name(raw_drug)
     s_val, s_unit, _ = _qty(m.get("strength"))
     d_val, d_unit, _ = _qty(m.get("dose"))

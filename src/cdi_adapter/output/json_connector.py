@@ -37,6 +37,9 @@ from sqlalchemy import text
 from .. import repo
 from ..db import session_scope
 from ..extract import fields as F
+from ..extract import lab_gazetteer
+from ..extract.medicine_lexicon import medicine_match
+from ..extract.test_names import UNCONFIRMED, UNRECOGNISED, is_grounded, is_known_test, looks_like_medicine
 
 SCHEMA_VERSION = "result.v1"
 NOTICE = ("Read by a machine. Values marked needs a check must be verified by a person. "
@@ -200,10 +203,31 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         (buckets.get(name) if name != "other" else other).append(build(f))      # type: ignore[union-attr]
 
     context = {c["test"]: c["context"] for c in checks["context"]}
+    page_text = " ".join(str(b.get("text") or "") for b in inp.blocks)       # what the page readers saw
     for t in buckets["lab_tests"]:
         key = t["as_written"]
         t["context"] = context.get(key, [])
         t["preparation"] = [p["text"] for p in checks["preparation"] if _applies(p, key)]
+        gz = lab_gazetteer.lookup(key)                                      # the lab-test gate: names doctors abbreviate
+        known = gz is not None or is_known_test(key)
+        med = None if known else medicine_match(key)                        # a brand / generic name from the medicine list
+        if t.get("status") != "rejected" and (med or looks_like_medicine(key)):
+            # a drug line the reader filed under the tests (a crowded handwritten page): never shown as a test
+            t["status"] = "rejected"
+            t["reason"] = f"looks like a medicine ('{med}'), not a test" if med else "looks like a medicine, not a test"
+        elif t.get("status") != "rejected" and not known and not t.get("code"):
+            # no test name in it and no standard code: a misreading, a procedure or a diagnosis, not a test the
+            # screen can stand behind. Kept (nothing is lost) but marked, so it is not shown as a test.
+            t["status"] = "needs_check"
+            t["reason"] = UNRECOGNISED + (f": {t['reason']}" if t.get("reason") else "")
+        elif t.get("status") != "rejected" and page_text and not is_grounded(key, page_text):
+            # a valid test name that nothing on the page supports: what a reader says about a page it cannot read
+            t["status"] = "needs_check"
+            t["reason"] = UNCONFIRMED + (f": {t['reason']}" if t.get("reason") else "")
+        if gz is not None and gz.kind == "test" and gz.loinc and not t.get("code") and t.get("status") != "rejected":
+            # the name is a test the gazetteer knows by that abbreviation: give it its standard code
+            t["code"], t["code_system"] = gz.loinc, "http://loinc.org"
+            t["code_display"], t["code_status"] = gz.long_name, "bound"
 
     earlier: dict[str, list[dict[str, Any]]] = {}
     for c in inp.corrections:                      # the replaced reading stays referenced (OUT-S2 AC4)

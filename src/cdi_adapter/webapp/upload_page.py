@@ -328,7 +328,13 @@ function summaryHtml(r){
     ["As written",b.text?esc(b.text):'<span class="none">—</span>'],
     ["Bring to the visit",b.bring&&b.tests.length?esc("Results of: "+b.tests.join(", ")):b.bring?"Reports (as written)":'<span class="none">nothing written</span>']],
     b.needed==="Yes"?"The date is not guessed: it is counted from the day of the visit written on the prescription.":"");
-  const labs=r.lab_tests||[];
+  const allLabs=r.lab_tests||[];
+  const isUnrec=t=>/^not a recognised test name/.test(t.reason||"");
+  const isUnconf=t=>/^not confirmed on the page/.test(t.reason||"");
+  const labs=allLabs.filter(t=>t.status!=="rejected"&&!isUnrec(t)&&!isUnconf(t));
+  const unrec=allLabs.filter(t=>t.status!=="rejected"&&isUnrec(t));
+  const unconf=allLabs.filter(t=>t.status!=="rejected"&&isUnconf(t));
+  const dropped=allLabs.filter(t=>t.status==="rejected");
   const prep=r.lab_preparation||[];
   const labRows=labs.map((t,i)=>{
     const ctx=(t.context||[]).map(c=>esc(c.text)+' <span class="none">('+esc(c.kind)+')</span>').join("<br>");
@@ -338,10 +344,13 @@ function summaryHtml(r){
       :'<span class="pill warn" title="'+esc(t.reason||"")+'">needs a check</span>';
     return '<tr><td>'+(i+1)+'</td><td>'+esc(t.as_written||t.text||"")+'</td><td>'+code+'</td><td>'+pr+'</td><td>'+(ctx||'<span class="none">—</span>')+'</td><td>'+st+'</td></tr>';
   }).join("");
+  const droppedNote=dropped.length?'<p class="note">Left out because they look like medicines, not tests: '+dropped.map(t=>esc(t.as_written||t.text||"")).join("; ")+'.</p>':"";
+  const unrecNote=unrec.length?'<p class="note">Read from the page but not recognised as a test name, so not listed above (please check the page): '+unrec.map(t=>esc(t.as_written||t.text||"")).join("; ")+'.</p>':"";
+  const unconfNote=unconf.length?'<p class="note">The reader suggested these, but nothing on the page supports them, so they are not listed as tests (check the page): '+unconf.map(t=>esc(t.as_written||t.text||"")).join("; ")+'.</p>':"";
   const prepOnly=!labs.length&&prep.length?'<p class="note">Preparation written on the page: '+prep.map(p=>esc(p.text)).join("; ")+'</p>':"";
   const lab='<section class="sumtbl" id="tbl-labs"><h3>Lab tests <span class="pill">'+labs.length+'</span></h3>'
     +(labs.length?'<div class="tbox"><table><thead><tr><th>#</th><th>Test (as written)</th><th>Standard name</th><th>Preparation</th><th>Why (linked to)</th><th>Check</th></tr></thead><tbody>'+labRows+'</tbody></table></div>'
-      :'<p class="none" style="margin:4px 0">No lab test is written on this page.</p>')+prepOnly+'</section>';
+      :'<p class="none" style="margin:4px 0">No lab test is written on this page.</p>')+prepOnly+unrecNote+unconfNote+droppedNote+'</section>';
   return patient+doctor+booking+lab;
 }
 
