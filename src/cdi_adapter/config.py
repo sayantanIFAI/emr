@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     pdf_renderer: str = "pypdfium2"
     object_store: str = "s3"                      # s3 (SeaweedFS / any S3 API) | filesystem
     object_store_dir: str = "./data/objects"      # the folder when object_store=filesystem (an encrypted volume)
+    server_licence_enforce: bool = True           # the queue server's version is checked at start-up (compliance/servers.py)
     queue_backend: str = "redis"                  # redis (7.2 or older) | valkey
     terminology_provider: str = "internal"
     # External code systems that may be attached to a result. SNOMED CT and ICD are NOT in the default: they are

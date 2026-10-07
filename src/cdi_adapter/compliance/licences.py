@@ -219,6 +219,9 @@ def notice(report: Report, policy: dict[str, Any] | None = None) -> str:
     for c in report.components:
         if c.state in ("allowed", "review") and (c.notice_duty or c.state == "review"):
             lines.append(f"- {c.name} {c.version}: {c.licence or c.family}")
+    from .servers import NOTICE_LINES
+
+    lines += ["", "Servers (installed from the operating system, not bundled)", "-" * 56, *NOTICE_LINES]
     lines += ["", "Models", "-" * 6]
     try:
         from .models import load_registry

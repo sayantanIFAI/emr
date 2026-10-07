@@ -75,6 +75,9 @@ def startup_checks() -> None:
     require_no_default_credentials()
     swap.check_all()               # a wrong name or a missing library stops the service, naming the setting
     require_registered()
+    from ..compliance import servers
+
+    servers.require_allowed()      # Redis 7.4+ (RSALv2 / SSPLv1 / AGPLv3) is refused outside dev; 7.2 or older and Valkey are fine
 
 
 def credentials_ok(header: str | None) -> bool:

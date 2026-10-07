@@ -33,6 +33,20 @@ if ! command -v psql >/dev/null || ! command -v redis-server >/dev/null || ! com
                         libgl1 libglib2.0-0 >/dev/null
 fi
 
+# Licence guard: only Redis 7.2 or older (BSD-3-Clause) or Valkey. Redis 7.4+ is RSALv2/SSPLv1 (8.0 adds AGPLv3), so a
+# newer Redis from another apt source or a floating tag is refused here, before anything starts.
+RV="$(redis-server --version 2>/dev/null | grep -o 'v=[0-9]*[.][0-9]*' | cut -c3-)"
+if redis-server --version 2>/dev/null | grep -qi valkey; then
+  echo "queue server: Valkey (BSD-3-Clause)"
+elif [ -n "$RV" ]; then
+  RMAJ="${RV%%.*}"; RMIN="${RV#*.}"
+  if [ "$RMAJ" -gt 7 ] || { [ "$RMAJ" -eq 7 ] && [ "$RMIN" -gt 2 ]; }; then
+    echo "REFUSED: redis-server $RV is not allowed (only Redis 7.2 or older, or Valkey). Remove it and install the OS package."
+    exit 1
+  fi
+  echo "queue server: Redis $RV (BSD-3-Clause, 7.2 or older)"
+fi
+
 echo "== 2/6 Postgres cluster on overlay =="
 if [ ! -s "$PGDATA/PG_VERSION" ]; then
   install -d -o postgres -g postgres -m 700 "$PGDATA"
