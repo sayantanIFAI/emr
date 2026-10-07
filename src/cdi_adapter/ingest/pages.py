@@ -132,6 +132,15 @@ def _hold(meta: dict[str, Any], code: str, message: str) -> None:
     q.setdefault("reason_codes", []).append(code)
 
 
+def _warn(meta: dict[str, Any], code: str, message: str) -> None:
+    """Record a non-blocking finding on the page's quality record: the page still goes on."""
+    q = meta.get("quality")
+    if q is None:
+        return
+    q.setdefault("warnings", []).append(message)
+    q.setdefault("warning_codes", []).append(code)
+
+
 def _straighten(arr: np.ndarray, meta: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
     """IM-S2: cut the page out of a photo, turn it upright, record every step as one matrix.
 
@@ -148,15 +157,31 @@ def _straighten(arr: np.ndarray, meta: dict[str, Any]) -> tuple[np.ndarray, dict
 
     if settings.perspective_enabled:
         quad = G.find_page_quad(gray)
+        if quad is None and is_photo and not G.page_fills_frame(gray):
+            quad = G.find_page_quad_loose(gray)      # a busy / partly bright background (patterned bedding)
         if quad is not None and G.quad_moves_enough(quad, w0, h0):
             arr, m = G.rectify(arr, quad)
             G.add_step(t, {"op": "perspective", "quad": [[round(float(x), 1) for x in p] for p in quad]}, m,
                        (arr.shape[1], arr.shape[0]))
             meta["steps"].append("perspective")
             gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
-        elif quad is None and is_photo:
-            _hold(meta, PAGE_EDGES_NOT_FOUND, "the edges of the page could not be found - take the picture on a "
-                  "plain background with the whole page in view, and retake it")
+        elif quad is None and is_photo and not G.page_fills_frame(gray):
+            # the picture is still readable, so it is never refused: crop to the writing so the background is
+            # not read, and flag it (the document is marked "needs check" in the result). A page that fills
+            # the frame has nothing to cut away and is not flagged.
+            box = G.find_content_box(gray)
+            if box is not None:
+                x0, y0, x1, y1 = box
+                arr = np.ascontiguousarray(arr[y0:y1, x0:x1])
+                m = G.affine3(np.array([[1, 0, -x0], [0, 1, -y0]], float))
+                G.add_step(t, {"op": "crop_to_content", "box": [x0, y0, x1, y1]}, m, (x1 - x0, y1 - y0))
+                meta["steps"].append("crop_to_content")
+                gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+            _warn(meta, PAGE_EDGES_NOT_FOUND,
+                  "the exact page edges could not be found, so the picture was cropped to the writing - "
+                  "check the result, or retake it on a plain background" if box is not None else
+                  "the edges of the page could not be found, so the whole picture was read as it is - "
+                  "check the result, or retake it on a plain background")
 
     # a photo's background fools the axis test: judge orientation on a flat scan or a page cut out of a photo
     if settings.orient_enabled and (not is_photo or "perspective" in meta["steps"]):

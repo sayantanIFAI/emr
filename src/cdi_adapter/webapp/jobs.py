@@ -34,6 +34,11 @@ STAGES = ["ingest", "classify", "ocr", "extract", "terminology", "validate"]
 # to keep the old serial behaviour.
 _pool = ThreadPoolExecutor(max_workers=max(2, settings.job_max_workers),
                            thread_name_prefix="cdi-job")
+# Each upload (a "job") gets a thread of its own that waits on its files' work in _pool. They must not
+# share _pool: with as many jobs in flight as _pool has threads, every thread would be a job waiting on
+# children that can never start (a hang). Jobs wait in this queue; more can be sent while others run.
+_job_pool = ThreadPoolExecutor(max_workers=max(4, settings.job_max_concurrent),
+                               thread_name_prefix="cdi-run")
 # separate pool for the phase-2 fan-out so a _run_job thread waiting on its
 # children can never starve _pool (which also hosts _run_job itself)
 _stage2_pool = ThreadPoolExecutor(max_workers=max(2, settings.job_max_workers),
@@ -177,7 +182,7 @@ def _create_job(jid: str, abha: str | None, files: list[tuple[str, bytes]],
 
     with _lock:
         _jobs[jid] = job
-    _pool.submit(_run_job, jid, files)
+    _job_pool.submit(_run_job, jid, files)
     return jid
 
 
@@ -217,8 +222,21 @@ def _job_from_db(jid: str) -> Job | None:
         job.state = "review" if settings.review_ui_enabled else "done"
     else:
         job.state = "error"
+        job.error = job.error or why_stopped(job)
     _refresh_result(job)
     return job
+
+
+def why_stopped(job: "Job") -> str | None:
+    """The real reason a job ended in error, one line per failed file, from what each document recorded
+    ("rescan: " is an internal prefix; the sentence after it is already written for the person). The
+    screen shows this instead of a generic "Processing stopped"."""
+    out = []
+    for d in job.docs:
+        if d.error:
+            msg = d.error.removeprefix("rescan: ")
+            out.append(f"{d.filename}: {msg}")
+    return " ".join(out)[:600] or None
 
 
 def _durable_key(key: str, jid: str) -> str:
@@ -425,6 +443,8 @@ def _run_job(jid: str, files: list[tuple[str, bytes]]) -> None:
         ok = any(d.status == "done" for d in job.docs)
         # with the review screens off the job simply ends: "done" (the result JSON is the output)
         job.state = ("review" if settings.review_ui_enabled else "done") if ok else "error"
+        if job.state == "error" and not job.error:
+            job.error = why_stopped(job)
         _refresh_result(job)
         if job.state == "review":
             try:

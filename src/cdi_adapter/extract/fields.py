@@ -26,6 +26,8 @@ import re
 from datetime import date
 from typing import Any
 
+from ..config import settings
+
 CHECKED, NEEDS_CHECK, ABSENT, NOT_GATED = "checked", "needs_check", "absent", "not_gated"
 PREP_TYPES = ("fasting", "timing", "diet", "medicine_hold", "sample_collection", "bring_documents", "other")
 _NOT_ON_PAGE = "not found on the page as written"
@@ -206,7 +208,7 @@ def check_patient(patient: dict[str, Any], page: str, today: date) -> dict[str, 
         "sex": check_sex(patient.get("sex"), page),
         "phone": check_phone(patient.get("phone"), page),
         "address": check_text(patient.get("address"), page),
-        "abha_id": check_abha(patient.get("abha_id"), page),
+        "abha_id": check_abha(patient.get("abha_id"), page) if settings.abha_enabled else absent(),
     }
 
 
@@ -377,12 +379,18 @@ _UNIT_NORM = {"day": "days", "days": "days", "week": "weeks", "weeks": "weeks", 
               "month": "months", "months": "months", "mo": "months", "year": "years", "years": "years"}
 
 
+# printed form text that is not the doctor's instruction (a letterhead footer, a booking line)
+_FU_PRINTED = re.compile(r"\bbring\b.{0,30}\bprescription\b|\bfor\s+appointment\b.{0,12}\bcall\b|\bappointment\s+call\b", re.I)
+
+
 def parse_follow_up(text: Any, page: str) -> dict[str, Any]:
     """The follow-up as written plus a structured reading of it. Nothing is guessed: no interval is
     produced unless the words give one, and the words must be on the page."""
     t = text.strip() if isinstance(text, str) else ""
     base: dict[str, Any] = {"text": t or None, "kind": None, "interval_value": None, "interval_unit": None,
                             "interval_value_max": None, "date": None}
+    if t and _FU_PRINTED.search(t):
+        return {**absent(), "detail": {**base, "text": None}}          # printed form text: nothing written for a visit
     if not t:
         return {**absent(), "detail": base}
     if not _on_page(t, page):

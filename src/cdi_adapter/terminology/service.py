@@ -48,7 +48,7 @@ def freq_per_day(freq_text: str | None) -> float | None:
     return None
 
 
-_SYSTEM_SHORT = {"http://snomed.info/sct": "SNOMED", "http://loinc.org": "LOINC",
+_SYSTEM_SHORT = {"http://snomed.info/sct": "SNOMED", "http://loinc.org": "LOINC", "urn:cdac:cdci": "CDCI",
                  "http://hl7.org/fhir/sid/icd-10": "ICD10", "http://unitsofmeasure.org": "UCUM"}
 
 
@@ -127,6 +127,22 @@ def _bind_fact(fact: dict[str, Any]) -> dict[str, Any]:
         hit = hit or seed.DRUGS.get(key) or _fuzzy(key, seed.DRUGS)
         if hit:
             up.update(code_system=hit[0], code=hit[1], code_display=hit[2], code_status="bound")
+        if not up:
+            from ..extract import indian_codes             # Common Drug Codes for India: brand -> generic
+
+            dm = indian_codes.drug_lookup(keyraw)
+            if dm is not None and dm.generic_ids:
+                sure = len(dm.generic_ids) == 1 and not dm.fuzzy
+                up.update(code_system=indian_codes.CDCI, code=dm.generic_ids[0],
+                          code_display=dm.generic_names[0] if dm.generic_names else dm.matched,
+                          code_status="bound" if sure else "candidate")
+    elif ft == "investigation_order":
+        # a test the doctor ordered: the Indian lab list (CLCI) first, then the curated abbreviation / panel table
+        from ..extract import lab_resolve
+
+        rz = lab_resolve.resolve(keyraw) or (lab_resolve.resolve(fact.get("local_text")) if fact.get("local_text") else None)
+        if rz is not None and rz.loinc and rz.kind == "test":
+            up.update(code_system="http://loinc.org", code=rz.loinc, code_display=rz.long_name, code_status=rz.status)
     elif ft == "allergy":
         hit = seed.ALLERGENS.get(key) or _fuzzy(key, seed.ALLERGENS)
         if hit:

@@ -37,6 +37,11 @@ from sqlalchemy import text
 from .. import repo
 from ..db import session_scope
 from ..extract import fields as F
+from ..extract import indian_codes, lab_resolve
+from ..extract.indian_codes import norm as _norm_name
+from ..extract.medicine_lexicon import medicine_match
+from ..terminology.service import licensed_only
+from ..extract.test_names import UNCONFIRMED, UNRECOGNISED, is_grounded, is_known_test, looks_like_medicine
 
 SCHEMA_VERSION = "result.v1"
 NOTICE = ("Read by a machine. Values marked needs a check must be verified by a person. "
@@ -154,6 +159,13 @@ def _quality(pages: list[dict[str, Any]], doc: dict[str, Any]) -> dict[str, Any]
             "reasons": reasons, "reason_codes": codes, "warnings": warnings}
 
 
+def _capture_flagged(pages: list[dict[str, Any]]) -> bool:
+    """True if a page was read despite a capture problem that is not worth a retake (the page's edges
+    could not be found, so it was cropped to its writing or read whole): the result needs a check."""
+    return any("page_edges_not_found" in ((p.get("preproc") or {}).get("quality") or {}).get("warning_codes", [])
+               for p in pages)
+
+
 def _v(c: dict[str, Any]) -> dict[str, Any]:
     """A checked field as a value object."""
     return value(c["value"], c["status"], c["reason"])
@@ -193,10 +205,43 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         (buckets.get(name) if name != "other" else other).append(build(f))      # type: ignore[union-attr]
 
     context = {c["test"]: c["context"] for c in checks["context"]}
+    page_text = " ".join(str(b.get("text") or "") for b in inp.blocks)       # what the page readers saw
+    facts_by_id = {str(f.get("id")): f for f in inp.facts}
     for t in buckets["lab_tests"]:
         key = t["as_written"]
         t["context"] = context.get(key, [])
         t["preparation"] = [p["text"] for p in checks["preparation"] if _applies(p, key)]
+        fact = facts_by_id.get(str(t.get("fact_id")), {})
+        alt = (fact.get("value_code_display") or "").strip()                 # a reference name the model CHOSE, never what was written
+        alt = alt if alt and _norm_name(alt) != _norm_name(key) else ""
+        rz = lab_resolve.resolve(key) or (lab_resolve.resolve(alt) if alt else None)     # the lab-test gate (Indian list + table)
+        known = rz is not None or is_known_test(key) or (bool(alt) and is_known_test(alt))
+        drug = None if known else indian_codes.drug_lookup(key)                # Common Drug Codes for India
+        med = None if known else (drug.matched if drug else medicine_match(key))
+        if t.get("status") != "rejected" and (med or looks_like_medicine(key)):
+            # a drug line the reader filed under the tests (a crowded handwritten page): never shown as a test
+            t["status"] = "rejected"
+            t["reason"] = f"looks like a medicine ('{med}'), not a test" if med else "looks like a medicine, not a test"
+        elif t.get("status") != "rejected" and not known and not t.get("code"):
+            # no test name in it and no standard code: a misreading, a procedure or a diagnosis, not a test the
+            # screen can stand behind. Kept (nothing is lost) but marked, so it is not shown as a test.
+            t["status"] = "needs_check"
+            t["reason"] = UNRECOGNISED + (f": {t['reason']}" if t.get("reason") else "")
+        elif (t.get("status") != "rejected" and page_text
+              and not (is_grounded(key, page_text) or (alt and is_grounded(alt, page_text)))):
+            # a valid test name that nothing on the page supports: what a reader says about a page it cannot read
+            t["status"] = "needs_check"
+            t["reason"] = UNCONFIRMED + (f": {t['reason']}" if t.get("reason") else "")
+        if alt and rz is not None and t.get("status") != "rejected":
+            t["status"] = "needs_check"
+            t["reason"] = f"read as '{alt}' (chosen from the reference list by the model; check the page)" + (
+                f": {t['reason']}" if t.get("reason") else "")
+        if rz is not None and rz.kind == "test" and rz.loinc and not t.get("code") and t.get("status") != "rejected":
+            # the name is a test the Indian list knows: give it its standard code (only for a licensed code system)
+            up = licensed_only({"code_system": "http://loinc.org", "code": rz.loinc, "code_display": rz.long_name,
+                                "code_status": rz.status})
+            t.update(code=up.get("code"), code_system=up.get("code_system"), code_display=up.get("code_display"),
+                     code_status=up.get("code_status"))
 
     earlier: dict[str, list[dict[str, Any]]] = {}
     for c in inp.corrections:                      # the replaced reading stays referenced (OUT-S2 AC4)
@@ -217,7 +262,7 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         status = "error"
     elif doc.get("status") not in _FINISHED:
         status = "processing"
-    elif n_check or any(i["status"] == "rejected" for i in items):
+    elif n_check or any(i["status"] == "rejected" for i in items) or _capture_flagged(inp.pages):
         status = "needs_check"
     elif not items:
         status = "incomplete"          # finished, but nothing could be read

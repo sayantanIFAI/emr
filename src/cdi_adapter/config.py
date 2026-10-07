@@ -136,6 +136,9 @@ class Settings(BaseSettings):
     vllm_guided: bool = True                # token-level JSON-schema decoding (xgrammar).
                                             # adds grammar-mask cost per token; turn off to
                                             # rely on client-side repair + retry instead.
+    vllm_retry_on_length: bool = True         # an answer that hits the token limit is retried once (a repetition loop)
+    vllm_retry_repetition_penalty: float = 1.05
+    vllm_guided_api: str = "structured_outputs"   # structured_outputs (vLLM >= 0.12) | guided_json (older: newer ones ignore it)
     vllm_guided_backend: str = "xgrammar"
 
     # --- future: vLLM OpenAI endpoint for the DSLM / guided decoding ---
@@ -188,6 +191,7 @@ class Settings(BaseSettings):
     drift_abs_tolerance: float = 0.15
     qwen_line_mode: str = "crop"          # crop = independent read per line crop | off
     qwen_line_max_tokens: int = 48
+    qwen_line_concurrency: int = 1        # lines read at once; 1 for the serial hf gateway, ~12 with vLLM
     # an engine reading is "the same" as another when, after numeric-context
     # normalisation, every number matches exactly AND the text similarity is >= this
     engine_agree_similarity: float = 0.85
@@ -289,6 +293,12 @@ class Settings(BaseSettings):
     job_max_workers: int = 5              # documents ingested/classified/OCR'd concurrently;
                                          # _cpu.py sizes native thread pools to
                                          # (cpu_budget - 1) / this  (keep them in sync)
+    abha_enabled: bool = True             # ask the page for an ABHA / ABDM identity, check it, and match patients on it. Off
+                                          # (CDI_ABHA_ENABLED=false) the deployment never asks for, reads or validates one
+    medicine_lexicon_path: str = ""          # list of medicine names (scripts/build_medicine_lexicon.py); empty = not used
+    indian_codes_dir: str = ""              # CLCI + CDCI indexes (scripts/build_indian_codes.py); empty = not used
+    llm_resolve_enabled: bool = True       # the model may CHOOSE among reference names for a misread test (resolve_llm.py)
+    job_max_concurrent: int = 8           # uploads ("jobs") in progress at once; more wait in a queue
     fast_classify: bool = True           # try the scored heuristic classifier first; it only
                                          # short-circuits the VLM on an unambiguous, cleanly
                                          # OCR'd page - everything else still goes to the VLM

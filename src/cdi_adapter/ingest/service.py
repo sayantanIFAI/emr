@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from .. import repo, storage
@@ -25,6 +26,9 @@ class IngestResult:
     deduplicated: bool
     page_count: int
     status: str
+
+
+RETRY_STATUSES = ("quality_hold",)      # same bytes again -> processed again, not answered from the old hold
 
 
 def _pkg_version() -> str:
@@ -75,7 +79,17 @@ def ingest_bytes(
 
     with session_scope() as sess:
         existing = repo.get_document_by_sha(sess, sha256)
-        if existing:
+        # a document HELD for rescan is not a result worth returning again: the same bytes may read fine
+        # now (a fixed check, a changed setting), and a hold must never become permanent. It is processed
+        # again from its stored original; its pages are redone. Anything else is the usual dedupe.
+        retry = bool(existing) and existing["status"] in RETRY_STATUSES
+        if retry:
+            try:
+                with sess.begin_nested():
+                    sess.execute(text("DELETE FROM document_page WHERE document_id = :d"), {"d": str(existing["id"])})
+            except IntegrityError:
+                retry = False          # later stages already point at these pages: keep the old answer
+        if existing and not retry:
             log.info("ingest_dedup", sha256=sha256, document_id=str(existing["id"]))
             repo.write_audit(
                 sess, actor=source_channel, action="read", entity="source_document",
@@ -89,40 +103,50 @@ def ingest_bytes(
                 status=existing["status"],
             )
 
-        object_key = f"documents/{sha256[:2]}/{sha256}/original{_ext_for(mime, filename)}"
-        storage.put_bytes(object_key, raw, content_type=mime)
-        object_uri = storage.object_uri(object_key)
+        if retry:
+            document_id = existing["id"]
+            log.info("ingest_reprocess", sha256=sha256, document_id=str(document_id), was=existing["status"])
+            repo.set_document_status(sess, document_id, "received", page_count=0, error_detail=None)
+            repo.write_audit(
+                sess, actor=source_channel, action="update", entity="source_document",
+                entity_id=str(document_id), detail={"reprocess": True, "was": existing["status"]},
+                request_id=request_id,
+            )
+        else:
+            object_key = f"documents/{sha256[:2]}/{sha256}/original{_ext_for(mime, filename)}"
+            storage.put_bytes(object_key, raw, content_type=mime)
+            object_uri = storage.object_uri(object_key)
 
-        try:
-            document_id = repo.insert_source_document(
-                sess,
-                sha256=sha256,
-                mime_type=mime,
-                object_uri=object_uri,
-                byte_size=len(raw),
-                source_channel=source_channel,
-                original_filename=filename,
-                legacy_ref=legacy_ref,
-                legacy_patient_ref=legacy_patient_ref,
-                captured_at=captured_at,
+            try:
+                document_id = repo.insert_source_document(
+                    sess,
+                    sha256=sha256,
+                    mime_type=mime,
+                    object_uri=object_uri,
+                    byte_size=len(raw),
+                    source_channel=source_channel,
+                    original_filename=filename,
+                    legacy_ref=legacy_ref,
+                    legacy_patient_ref=legacy_patient_ref,
+                    captured_at=captured_at,
+                )
+            except IntegrityError:
+                # a concurrent upload of the identical bytes won the race - reuse its row
+                sess.rollback()
+                dup = repo.get_document_by_sha(sess, sha256)
+                if not dup:
+                    raise
+                log.info("ingest_dedup_race", sha256=sha256, document_id=str(dup["id"]))
+                return IngestResult(
+                    document_id=str(dup["id"]), sha256=sha256, deduplicated=True,
+                    page_count=dup["page_count"], status=dup["status"],
+                )
+            repo.write_audit(
+                sess, actor=source_channel, action="create", entity="source_document",
+                entity_id=str(document_id),
+                detail={"filename": filename, "mime": mime, "bytes": len(raw)},
+                request_id=request_id,
             )
-        except IntegrityError:
-            # a concurrent upload of the identical bytes won the race - reuse its row
-            sess.rollback()
-            dup = repo.get_document_by_sha(sess, sha256)
-            if not dup:
-                raise
-            log.info("ingest_dedup_race", sha256=sha256, document_id=str(dup["id"]))
-            return IngestResult(
-                document_id=str(dup["id"]), sha256=sha256, deduplicated=True,
-                page_count=dup["page_count"], status=dup["status"],
-            )
-        repo.write_audit(
-            sess, actor=source_channel, action="create", entity="source_document",
-            entity_id=str(document_id),
-            detail={"filename": filename, "mime": mime, "bytes": len(raw)},
-            request_id=request_id,
-        )
 
     # Heavy work (rendering) outside the first tx; then persist pages in a new tx.
     with session_scope() as sess:

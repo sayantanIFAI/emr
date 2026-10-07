@@ -46,7 +46,8 @@ _EXTRA = {
         "'x N days' / 'x 1 month' text. `instructions` = any 'Notes'/'Composition' "
         "text. Do NOT stop after the first few - include "
         "the last drug on the page. Put diagnoses in `diagnoses`, BP/weight in `vitals`, and "
-        "every test or scan the doctor ORDERS/advises ('Adv: CBC, KFT', 'X-ray LS spine') in "
+        "every test or scan the doctor ORDERS/advises (a line after 'Adv' or 'Investigations', or a test named in a "
+        "follow-up line) in "
         "`investigations` - one item per test, panels as written (never expand a panel)."
         "\nAlso fill, ONLY from what is written: patient `dob`, `phone`, `address` and `abha_id` "
         "exactly as written (null if not written; never work a date of birth out from the age, never "
@@ -57,7 +58,18 @@ _EXTRA = {
         "'first-morning urine'): copy the words in `text`, the number in `value`, and the tests it "
         "belongs to in `applies_to` ([\"all\"] when it covers the whole order); return [] when none is "
         "written and NEVER add a usual or standard preparation. `follow_up`: the written instruction "
-        "to come back or review, copied exactly."
+        "to come back or review, copied exactly. Printed form text (for example 'Please bring the "
+        "prescription on the next visit') is NOT a follow-up: ignore it."
+    ),
+    "opd_note": (
+        "\nThis is a CONSULTATION NOTE. Every test, scan or investigation the doctor ORDERS or advises "
+        "(often under 'Adv', 'Advice' or 'Investigations', or named in a follow-up line) goes in `investigations`, one item per test as written (never expand a panel); they are "
+        "orders, not results, and NOT `advice`. `investigation_preparation`: only preparation that is "
+        "WRITTEN for the tests (for example 'fasting 12 hrs'): copy the words in `text` and the tests it "
+        "belongs to in `applies_to` ([\"all\"] when it covers the whole order); [] when none is written; "
+        "never add a usual preparation. Other advice stays in `advice`. `follow_up` is only a WRITTEN "
+        "instruction to come back or review; printed form text (for example 'Please bring the prescription on "
+        "the next visit') is not one."
     ),
     "lab_report": (
         "\nThis is a LAB REPORT. Put every analyte row in `results` with its numeric "
@@ -78,6 +90,19 @@ _EXTRA = {
         "frequency. Put the hospital course narrative in `course_summary`."
     ),
 }
+
+
+# how an Indian prescription tells a medicine from a test (generic examples, none taken from a real page)
+_TELL_APART = (
+    "\nTELL MEDICINES FROM TESTS: a MEDICINE line has a drug name AND a dose, schedule or duration - a strength "
+    "such as '(10/5)' or '500 mg', a pattern such as '1-0-1', 'BD' or 'SOS', or a duration such as 'x 5d' or "
+    "'x 10 days' (the x or the cross sign is 'for'; d is days). A TEST line is only names or abbreviations, often "
+    "in a list written with '/' or ',', with no dose or duration, and often after "
+    "'Adv', 'Inv', 'Ix', 'Advised', 'F/U' or 'Review with'. Write ONLY what is on the page: never a test that is not written there. Medicine lines go in `medications`, test lines in "
+    "`investigations` (one item per test), and never the other way round."
+)
+_EXTRA["prescription"] += _TELL_APART
+_EXTRA["opd_note"] += _TELL_APART
 
 
 def max_tokens_for(doc_type: str) -> int:
@@ -133,8 +158,15 @@ def build_extraction_prompt(doc_type: str, ocr_blocks: list[dict[str, Any]]) -> 
             page_no, last = page_no + 1, b.get("page_id")
             lines.append(f"Page {page_no}:")
         lines.append(f"[b{i}] {b['text']}")
-    return (_BASE.format(doc_type=doc_type, ocr="\n".join(lines) or "(none)")
-            + _EXTRA.get(doc_type, ""))
+    from ..config import settings
+
+    extra = _EXTRA.get(doc_type, "")
+    if not settings.abha_enabled:
+        # no ABDM identification on this deployment: the model is not asked for it (it only ever made one up
+        # from a bill number or a company id) and is told to leave it empty
+        extra = extra.replace("`phone`, `address` and `abha_id`", "`phone` and `address`")
+        extra += "\nDo NOT read an ABHA / ABDM health id: leave `abha_id` null."
+    return (_BASE.format(doc_type=doc_type, ocr="\n".join(lines) or "(none)") + extra)
 
 
 def block_id_map(ocr_blocks: list[dict[str, Any]]) -> dict[str, str]:

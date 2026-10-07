@@ -1,0 +1,162 @@
+"""A medicine must never be shown as a lab test; a real test must never be taken for a medicine."""
+from __future__ import annotations
+
+import pytest
+
+from cdi_adapter.output.json_connector import _capture_flagged  # noqa: F401  (module imports cleanly)
+from cdi_adapter.extract.test_names import UNCONFIRMED, is_grounded, is_known_test, is_test_list, looks_like_medicine, split_tests
+
+MEDICINES = [
+    "In Candilock (lots)", "In Candilock (10/5)", "In Candizem (lots) 1t 3x10d", "Inj Cardiloc (10/5)",
+    "Tab. Montana fx 1 tab at bedtime", "Cap. Austflu (#5)", "Syp Cough Relief 5 ml TDS", "Tab Metformin 500 mg",
+    "Inj DNS - 20 ml 0.d x 5d", "Tab Paracetamol 650 mg 1-0-1", "T. Zincovit x 5 days", "Cap Omez BD",
+]
+TESTS = [
+    "CBC", "KFT", "LFT", "Blood: CBC, Urea, Creatinine, FBS, HBA1C, TSH, PT, Na/K+", "CXR-PA", "ECG", "Echo cardiology",
+    "COVID-19 RT-PCR", "Blood for fever profile", "X-ray LS spine", "Urine R/E", "HbA1c (fasting)", "Serum creatinine",
+    "Fasting blood sugar (fasting 8-10 hrs)", "USG abdomen", "Lipid profile", "2D echo", "T3 T4 TSH", "Vitamin B12",
+]
+
+
+@pytest.mark.parametrize("text", MEDICINES)
+def test_a_medicine_is_recognised_as_one(text):
+    assert looks_like_medicine(text), text
+
+
+@pytest.mark.parametrize("text", TESTS)
+def test_a_real_test_is_never_taken_for_a_medicine(text):
+    assert not looks_like_medicine(text), text
+    assert is_known_test(text), text
+
+
+def test_an_unknown_name_without_medicine_marks_is_left_alone():
+    assert not looks_like_medicine("IPOM. Ventral hernia.")             # not a known test, not a medicine: shown, flagged
+    assert not looks_like_medicine("") and not looks_like_medicine(None)
+
+
+def test_a_known_test_wins_over_a_medicine_mark():
+    assert not looks_like_medicine("TSH (0.5 mg/dl ref)")               # a number and a unit, but the name is a test
+
+
+# ---- the doctor's convention: a medicine has a dose / schedule / "x Nd"; a test is only names -----------------
+
+@pytest.mark.parametrize("text", ["Tab Xyz x 10d", "Inj Abc (10/5) x 5 days", "1 tab x 5d", "Syp Foo 5 ml x 7 d", "Cap Bar 1-0-1",
+                                  "Tab Xyz ×10d", "In Abc (lots) 1t 3x10d"])
+def test_a_dose_schedule_or_x_n_d_duration_marks_a_medicine(text):
+    assert looks_like_medicine(text), text
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("CBC/KFT/LFT", True), ("FBS, HbA1c, TSH", True), ("ECG", True), ("Blood: CBC, Urea, Creatinine, FBS", True),
+    ("Calcium + Vit D3", False), ("Iron tab", False), ("Tab Xyz 500 mg", False), ("Vitamin B12 injection", False),
+    ("CBC x 10d", False), ("Zincovit", False), ("", False), (None, False)])
+def test_a_list_of_only_test_abbreviations_is_a_test_list_and_nothing_else_is(text, expected):
+    assert is_test_list(text) is expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("CBC/KFT/LFT", ["CBC", "KFT", "LFT"]),
+    ("Blood: CBC, Urea, Creatinine, FBS", ["CBC", "Urea", "Creatinine", "FBS"]),
+    ("FBS, HbA1c and TSH", ["FBS", "HbA1c", "TSH"]),
+    ("Urine R/E", ["Urine R/E"]), ("X-ray LS spine", ["X-ray LS spine"]), ("COVID-19 RT-PCR", ["COVID-19 RT-PCR"]),
+    ("ECG", ["ECG"]), ("", [])])
+def test_a_list_of_tests_is_split_into_one_entry_per_test_and_a_single_test_is_not_cut(text, expected):
+    assert split_tests(text) == expected
+
+
+class _Rec:
+    """Stands in for the fact writer: records what would be stored."""
+
+    sess = None
+
+    def __init__(self):
+        self.facts = []
+
+    def add(self, *, fact_type, local_text, **kw):
+        self.facts.append((fact_type, local_text))
+        return len(self.facts)
+
+
+def test_a_test_list_filed_as_a_medicine_is_stored_as_tests_and_a_real_medicine_is_not(monkeypatch):
+    from cdi_adapter.extract import service
+
+    stored = []
+    monkeypatch.setattr(service.repo, "insert_medication_detail", lambda sess, fid, **kw: stored.append(kw["drug_text"]))
+    c = _Rec()
+    service._facts_prescription(c, {
+        "medications": [{"drug_text": "CBC/KFT/LFT", "evidence": ["b3"]},                       # tests, wrongly in medications
+                        {"drug_text": "Tab Xyz", "strength": "500 mg", "frequency_text": "1-0-1", "evidence": ["b4"]},
+                        {"drug_text": "Calcium + Vit D3", "evidence": ["b5"]}],                  # a medicine with no dose
+        "investigations": [{"text": "FBS, HbA1c", "evidence": ["b6"]}]})
+    tests = [t for k, t in c.facts if k == "investigation_order"]
+    assert tests == ["CBC", "KFT", "LFT", "FBS", "HbA1c"]
+    assert any("Xyz" in m for m in stored) and any("Calcium" in m for m in stored) and len(stored) == 2
+
+
+# ---- a name that is not a test is set aside, never listed as one --------------------------------------------
+
+NOT_TESTS = ["Cardiology", "Intravenous fluid therapy", "Candilock (lot)", "Candilock", "IPOM. Ventral hernia.", "Reaplerology"]
+REAL_TESTS = ["Dengue NS1", "Serum ferritin", "Vit D3", "Holter monitoring", "Pap smear", "2D echo", "Spirometry", "TFT", "ABG",
+              "Urine culture", "Fasting lipid profile", "Mantoux test", "Doppler leg"]
+
+
+@pytest.mark.parametrize("text", NOT_TESTS)
+def test_a_name_with_no_test_in_it_is_not_known_as_a_test(text):
+    assert not is_known_test(text), text
+
+
+@pytest.mark.parametrize("text", REAL_TESTS)
+def test_less_common_real_tests_are_still_recognised(text):
+    assert is_known_test(text), text
+
+
+def test_the_result_sets_unrecognised_entries_aside_and_keeps_real_tests(monkeypatch):
+    from cdi_adapter.output import json_connector as jc
+    from cdi_adapter.extract.test_names import UNRECOGNISED
+
+    facts = [{"fact_type": "investigation_order", "id": str(i), "local_text": t, "status": "needs_check",
+              "code": None, "confidence_overall": 0.5}
+             for i, t in enumerate(["CBC", "Cardiology", "In Candilock (lots)", "Candilock (lot)"])]
+    res = jc.build_result(jc.ResultInputs(document={"id": "d", "status": "validated", "original_filename": "x.jpg"},
+                                          facts=facts, blocks=[], pages=[], payload={}))
+    by = {t["as_written"]: t for t in res["lab_tests"]}
+    assert by["CBC"]["status"] != "rejected" and not (by["CBC"].get("reason") or "").startswith(UNRECOGNISED)
+    assert by["Cardiology"]["reason"].startswith(UNRECOGNISED)
+    assert by["Candilock (lot)"]["reason"].startswith(UNRECOGNISED)
+    assert by["In Candilock (lots)"]["status"] == "rejected"
+
+
+def test_a_vitamin_with_a_dose_is_a_medicine_but_the_same_name_alone_is_a_test():
+    assert looks_like_medicine("Vit D3 60000 IU")            # "iu" is not a test name: the dose decides
+    assert looks_like_medicine("Calcium 500 mg x 30d")
+    assert not looks_like_medicine("Vit D3") and is_known_test("Vit D3")
+
+
+# ---- a test nothing on the page supports is not listed as one ------------------------------------------------
+
+PAGE = "Dr A Sen  Patient Anil  Adv: CBC, FBS, HbA1c   ECG  Blood for fever profile  review after 2 weeks"
+
+
+@pytest.mark.parametrize("test", ["CBC", "FBS", "HbA1c", "ECG", "Blood for fever profile", "Blood for fever profle",
+                                  "K+", "CBC and FBS"])
+def test_a_test_whose_words_are_on_the_page_is_grounded(test):
+    assert is_grounded(test, PAGE), test
+
+
+@pytest.mark.parametrize("test", ["Liver function tests", "Thyroid function tests", "Chest X-ray", "Holter monitoring",
+                                  "Abdominal ultrasound", "Urinalysis", "Complete blood count"])
+def test_a_plausible_test_nothing_on_the_page_supports_is_not_grounded(test):
+    assert not is_grounded(test, PAGE), test
+
+
+def test_the_result_does_not_list_a_test_the_page_does_not_support(monkeypatch):
+    from cdi_adapter.output import json_connector as jc
+
+    facts = [{"fact_type": "investigation_order", "id": str(i), "local_text": t, "status": "needs_check", "code": None,
+              "confidence_overall": 0.5} for i, t in enumerate(["CBC", "Holter monitoring"])]
+    blocks = [{"id": "1", "text": "Adv: CBC, FBS"}]
+    res = jc.build_result(jc.ResultInputs(document={"id": "d", "status": "validated", "original_filename": "x.jpg"},
+                                          facts=facts, blocks=blocks, pages=[], payload={}))
+    by = {t["as_written"]: t for t in res["lab_tests"]}
+    assert not (by["CBC"].get("reason") or "").startswith(UNCONFIRMED)
+    assert by["Holter monitoring"]["reason"].startswith(UNCONFIRMED)

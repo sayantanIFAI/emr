@@ -203,6 +203,69 @@
         "string",
         "null"
       ]
+    },
+    "investigations": {
+      "type": "array",
+      "description": "tests / imaging ordered or advised on this prescription, each exactly as written. Orders, not results. Never a medicine, and never a test that is not written on the page.",
+      "items": {
+        "$ref": "cdi:common.defs#/$defs/coded"
+      }
+    },
+    "investigation_preparation": {
+      "type": "array",
+      "description": "preparation instructions for the ordered tests, ONLY if written on the page (for example 'fasting 12 hrs', 'morning sample', 'first-morning urine'). Never add a usual or standard preparation that is not written. An empty array when none is written.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "fasting",
+              "timing",
+              "diet",
+              "medicine_hold",
+              "sample_collection",
+              "bring_documents",
+              "other",
+              null
+            ]
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "the number in the words (12 for 'fasting 12 hrs'), else null"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "the original words, copied exactly"
+          },
+          "applies_to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "the test names (as written) it applies to, or [\"all\"] when it applies to the whole order; empty if unclear"
+          },
+          "evidence": {
+            "$ref": "cdi:common.defs#/$defs/evidence"
+          }
+        }
+      }
     }
   }
 }

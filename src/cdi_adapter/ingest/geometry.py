@@ -10,8 +10,9 @@ Rules (nothing is guessed):
 * a sideways page is turned only when which way is up can be decided; otherwise the page is left
   alone and held for a retake (``orientation_uncertain``);
 * a page seen at an angle is cut out and flattened only when four clear corners are found; a photo
-  with a background but no found edges is held (``page_edges_not_found``); a flat scan that fills the
-  frame is left alone;
+  with a background but no found edges is read as it is and flagged "needs check"
+  (``page_edges_not_found`` warning, never a hold: the picture is still readable); a flat scan, or a
+  page that fills the frame, is left alone;
 * upside-down (180 degrees) is corrected only on a clear signal, and only when enabled.
 """
 from __future__ import annotations
@@ -175,6 +176,145 @@ def find_page_quad(gray: np.ndarray) -> np.ndarray | None:
     if best is None:
         return None
     return _order(best / s if s < 1 else best)
+
+
+def _thin_ink(small: np.ndarray) -> np.ndarray:
+    """Thin dark strokes (handwriting, print, rules) as a boolean map. Big dark areas (a coloured
+    bedspread, a shadow) do not show up in it, which is what lets it tell text from background."""
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    return cv2.morphologyEx(small, cv2.MORPH_BLACKHAT, k) > 30
+
+
+def _cuts_through_text(ink: np.ndarray, quad: np.ndarray) -> bool:
+    """True if any side of ``quad`` slices through writing: ink continues just outside that side about
+    as densely as just inside it. A page edge has margin or background beyond it, never more text."""
+    h, w = ink.shape
+    band = max(6, int(0.025 * max(h, w)))
+    centre = quad.mean(axis=0)
+    for i in range(4):
+        a, b = quad[i], quad[(i + 1) % 4]
+        edge = b - a
+        length = float(np.hypot(*edge))
+        if length < 1:
+            return True
+        n = np.array([edge[1], -edge[0]]) / length
+        if float(np.dot(n, a - centre)) < 0:
+            n = -n                                     # points away from the page
+        dens = []
+        for sign in (1.0, -1.0):
+            poly = np.array([a, b, b + sign * n * band, a + sign * n * band], np.int32)
+            m = np.zeros((h, w), np.uint8)
+            cv2.fillPoly(m, [poly], 1)
+            full = int(cv2.countNonZero(m))
+            m[ink == 0] = 0
+            seen = int(cv2.countNonZero(m))
+            area = float(cv2.contourArea(poly.astype(np.float32)))
+            dens.append((seen / max(1.0, area), full / max(1.0, area)))
+        (d_out, vis_out), (d_in, _vis_in) = dens
+        if vis_out < 0.3:
+            continue                                   # beyond the picture's edge: nothing to judge
+        if d_out >= max(0.012, 0.5 * d_in):
+            return True
+    return False
+
+
+def find_page_quad_loose(gray: np.ndarray) -> np.ndarray | None:
+    """Second try for a page the strict search missed (a bright page on a busy, partly bright
+    background such as patterned bedding): thresholds from bright to dim, each region fitted with
+    four corners. The first (tightest) fit that covers a good part of the picture, carries writing
+    and does NOT cut through any of it is the page. Nothing is guessed: ``None`` when none fits."""
+    h, w = gray.shape[:2]
+    if min(h, w) < settings.perspective_min_side_px:
+        return None
+    s = 1000.0 / max(h, w)
+    small = cv2.resize(gray, None, fx=s, fy=s, interpolation=cv2.INTER_AREA) if s < 1 else gray
+    blur = cv2.GaussianBlur(small, (7, 7), 0)
+    ink = _thin_ink(small)
+    total = small.shape[0] * small.shape[1]
+    for t in range(230, 85, -10):
+        mask = cv2.threshold(blur, t, 255, cv2.THRESH_BINARY)[1]
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        cnts, _h = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            continue
+        c = max(cnts, key=cv2.contourArea)
+        area = cv2.contourArea(c)
+        if area < settings.perspective_min_area_frac * total:
+            continue
+        _bx, _by, bw, bh = cv2.boundingRect(c)
+        if bw >= 0.98 * small.shape[1] and bh >= 0.98 * small.shape[0]:
+            return None                # the region has swallowed the whole picture: lower thresholds only do worse
+        hull = cv2.convexHull(c)
+        if area / max(1.0, cv2.contourArea(hull)) < 0.85:
+            continue                   # not a solid page-shaped region
+        peri = cv2.arcLength(hull, True)
+        quad = None
+        for eps in (0.015, 0.02, 0.03, 0.04):
+            approx = cv2.approxPolyDP(hull, eps * peri, True)
+            if len(approx) == 4:
+                quad = approx.reshape(4, 2).astype(float)
+                break
+        if quad is None:
+            continue
+        inside = np.zeros(small.shape[:2], np.uint8)
+        cv2.fillConvexPoly(inside, quad.astype(np.int32), 255)
+        if float(ink[inside > 0].mean()) < 0.002:
+            continue                   # a bright shape with no writing on it is not a page
+        if _cuts_through_text(ink, quad):
+            continue                   # the page goes on past this edge: a brighter patch, not the page
+        return _order(quad / s if s < 1 else quad)
+    return None
+
+
+def find_content_box(gray: np.ndarray) -> tuple[int, int, int, int] | None:
+    """[x0, y0, x1, y1) of the writing on the page, plus a margin, when the page's exact corners cannot
+    be found: the picture is cropped to it so the background around the page is not read. Built from
+    thin strokes only (text, rules), joined into the largest connected block, so it never cuts
+    through writing. ``None`` when that would crop almost nothing, or finds no block of writing."""
+    h, w = gray.shape[:2]
+    s = 1000.0 / max(h, w)
+    small = cv2.resize(gray, None, fx=s, fy=s, interpolation=cv2.INTER_AREA) if s < 1 else gray
+    ink = _thin_ink(small).astype(np.uint8)
+    k = max(9, int(0.04 * max(small.shape)))
+    joined = cv2.dilate(ink, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    n, lab, stats, _c = cv2.connectedComponentsWithStats(joined, connectivity=8)
+    if n < 2:
+        return None
+    best = 1 + int(np.argmax([int(ink[lab == i].sum()) for i in range(1, n)]))
+    x, y, bw, bh = (int(v) for v in stats[best, :4])
+    pad = int(0.08 * max(small.shape))      # generous: coloured logos and faint print are not "thin ink"
+    x0, y0 = max(0, x - pad), max(0, y - pad)
+    x1, y1 = min(small.shape[1], x + bw + pad), min(small.shape[0], y + bh + pad)
+    frac = (x1 - x0) * (y1 - y0) / float(small.shape[0] * small.shape[1])
+    if frac < 0.15 or frac > 0.92:
+        return None
+    r = 1.0 / s if s < 1 else 1.0
+    return (int(x0 * r), int(y0 * r), min(w, int(np.ceil(x1 * r))), min(h, int(np.ceil(y1 * r))))
+
+
+def page_fills_frame(gray: np.ndarray) -> bool:
+    """True when the page itself covers (nearly) the whole picture, so there is no background to cut
+    away: one convex four-cornered bright region spanning the frame, with writing on it."""
+    h, w = gray.shape[:2]
+    s = 1000.0 / max(h, w)
+    small = cv2.resize(gray, None, fx=s, fy=s, interpolation=cv2.INTER_AREA) if s < 1 else gray
+    blur = cv2.GaussianBlur(small, (7, 7), 0)
+    mask = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    cnts, _h = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return False
+    c = max(cnts, key=cv2.contourArea)
+    if cv2.contourArea(c) < 0.85 * small.shape[0] * small.shape[1]:
+        return False
+    approx = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
+    if len(approx) != 4 or not cv2.isContourConvex(approx):
+        return False
+    inside = np.zeros(small.shape[:2], np.uint8)
+    cv2.fillConvexPoly(inside, approx.reshape(4, 2), 255)
+    return float(_thin_ink(small)[inside > 0].mean()) >= 0.002
 
 
 def quad_moves_enough(quad: np.ndarray, w: int, h: int) -> bool:

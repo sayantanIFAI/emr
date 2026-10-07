@@ -13,10 +13,14 @@ VENV=/workspace/vllm-venv
 LOG=/workspace/logs/vllm.log
 PORT="${CDI_VLLM_PORT:-8078}"
 MODEL="${CDI_VLM_MODEL_ID:-Qwen/Qwen2.5-VL-7B-Instruct}"
+QUANT="${CDI_VLLM_QUANT:-}"                   # "" (bf16) | fp8
+UTIL="${CDI_VLLM_GPU_UTIL:-0.80}"             # share of the GPU memory vLLM may take; the rest is for TrOCR
+MAXSEQS="${CDI_VLLM_MAX_SEQS:-16}"
 export HF_HOME=/workspace/hf-cache PYTHONUNBUFFERED=1 VLLM_LOGGING_LEVEL=INFO
 # Blackwell (sm_120): vLLM 0.28's FlashInfer sampler misfires a stale CUDA-version
 # check and aborts engine init - use the native sampler + FlashAttention.
 export VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_ATTENTION_BACKEND=FLASH_ATTN
+export PATH="$VENV/bin:$PATH"          # ninja / nvcc live in the venv; without this the engine cannot start
 mkdir -p /workspace/logs
 
 echo "########## 0. free the GPU (stop the hf gateway) ##########"
@@ -40,10 +44,10 @@ sleep 2
 setsid nohup "$VENV/bin/vllm" serve "$MODEL" \
   --host 127.0.0.1 --port "$PORT" \
   --served-model-name "$MODEL" \
-  --dtype bfloat16 \
-  --gpu-memory-utilization 0.90 \
+  --dtype bfloat16 ${QUANT:+--quantization "$QUANT"} \
+  --gpu-memory-utilization "$UTIL" \
   --max-model-len 16384 \
-  --max-num-seqs 8 \
+  --max-num-seqs "$MAXSEQS" \
   --limit-mm-per-prompt '{"image": 2}' \
   --mm-processor-kwargs '{"max_pixels": 2000000, "min_pixels": 3136}' \
   --enable-prefix-caching \

@@ -91,7 +91,8 @@ def test_lab_tests_carry_their_standard_name_context_and_preparation():
     hba, fbs = r["lab_tests"]
     assert hba["as_written"] == "HbA1c" and hba["code"] == "4548-4" and hba["code_status"] == "bound"
     assert hba["status"] == "accepted" and hba["preparation"] == []             # the note is for FBS only
-    assert fbs["code"] is None and fbs["code_status"] == "unmapped" and fbs["status"] == "needs_check"
+    # the term service left FBS unmapped; the lab gazetteer knows the abbreviation and gives it its LOINC code
+    assert fbs["code"] == "1558-6" and fbs["code_status"] == "bound" and fbs["status"] == "needs_check"
     assert fbs["preparation"] == ["fasting 12 hrs"]
     assert hba["context"] == [{"text": "T2DM", "kind": "diagnosis", "relation": "same_page", "quote": None}]
     assert r["lab_preparation"][0]["value"] == 12 and r["lab_preparation"][0]["applies_to"] == ["FBS"]

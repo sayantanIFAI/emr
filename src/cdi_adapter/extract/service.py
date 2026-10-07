@@ -12,6 +12,9 @@ from ..db import session_scope
 from ..logging import get_logger
 from ..ml.client import MLError, get_client
 from .prompt import block_id_map, build_extraction_prompt, load_schema, max_tokens_for
+from . import indian_codes, lab_resolve, resolve_llm
+from .medicine_lexicon import medicine_match
+from .test_names import is_known_test, is_test_list, looks_like_medicine, split_tests
 
 log = get_logger(__name__)
 
@@ -158,6 +161,21 @@ def _coded_text(x: Any) -> tuple[str, list[str] | None]:
     return "", None
 
 
+_PREFIX = re.compile(r"^\s*(?:inj|in|tab|t|cap|c|syp|sy|syr|susp|oint|cream|gel|drops?|rx)\b[\s.:\-]*", re.I)
+
+
+def _first_word(text: str) -> str:
+    m = re.search(r"[A-Za-z]{3,}", _PREFIX.sub("", text or "", count=1))
+    return m.group(0).casefold() if m else ""
+
+
+def _misfiled_medicine(text: str) -> bool:
+    """A medicine written among the tests: the Indian drug list / medicine marks say so, and no test list knows it."""
+    if is_known_test(text) or lab_resolve.resolve(text) is not None:
+        return False
+    return bool(indian_codes.drug_lookup(text) or medicine_match(text) or looks_like_medicine(text))
+
+
 def _facts_prescription(c: _Ctx, p: dict[str, Any]) -> None:
     for dx in p.get("diagnoses") or []:
         t, ev = _coded_text(dx)
@@ -171,11 +189,20 @@ def _facts_prescription(c: _Ctx, p: dict[str, Any]) -> None:
         t, ev = _coded_text(a)
         if t:
             c.add(fact_type="advice", local_text=t, value_text=t, evidence=ev)
+    resolved = p.get("_test_resolved") or {}                  # {as read: reference name the model chose}
+    on_page = {_first_word(m.get("drug_text") or m.get("text") or "") for m in p.get("medications") or []
+               if isinstance(m, dict)}
     for io in p.get("investigations") or []:
         t, ev = _coded_text(io)
-        if t:
-            c.add(fact_type="investigation_order", local_text=t, value_code_display=t,
-                  value_text=t, evidence=ev)
+        for one in split_tests(t) if t else []:          # one fact per test, however the doctor wrote the list
+            if _misfiled_medicine(one):
+                # a drug listed among the tests: it belongs with the medicines (once), never shown as a test
+                if _first_word(one) not in on_page:
+                    _add_medication(c, {"drug_text": one, "evidence": ev}, intent="order")
+                    on_page.add(_first_word(one))
+                continue
+            c.add(fact_type="investigation_order", local_text=one, value_code_display=resolved.get(one) or one,
+                  value_text=one, evidence=ev)
     _add_vitals(c, p.get("vitals") or [])
 
 
@@ -416,6 +443,14 @@ def _add_medication(c: _Ctx, m: Any, *, intent: str, status: str | None = None) 
         else:
             return
     raw_drug = m.get("drug_text") or m.get("text") or m.get("name") or ""
+    if is_test_list(raw_drug) and not any(m.get(k) for k in (
+            "strength", "dose", "frequency_text", "frequency", "duration_days", "timing", "dosage", "sig",
+            "schedule", "dose_pattern")):
+        # a list of test abbreviations with no dose or duration is an order for tests, not a medicine
+        for t in split_tests(raw_drug):
+            c.add(fact_type="investigation_order", local_text=t, value_code_display=t, value_text=t,
+                  evidence=m.get("evidence"))
+        return
     drug, name_str, name_unit = _parse_strength_from_name(raw_drug)
     s_val, s_unit, _ = _qty(m.get("strength"))
     d_val, d_unit, _ = _qty(m.get("dose"))
@@ -515,6 +550,15 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
             repo.finish_pipeline_run(sess, run_id, status="failed", error_detail=str(exc)[:400])
             repo.set_document_status(sess, document_id, "error", error_detail=f"extract: {exc}")
         raise
+
+    if not settings.abha_enabled and isinstance(payload, dict) and isinstance(payload.get("patient"), dict):
+        payload["patient"]["abha_id"] = None        # never used, whatever the model wrote: not for matching, not stored
+
+    if isinstance(payload, dict) and cls["doc_type"] in ("prescription", "opd_note", "referral"):
+        # the hybrid step: a test the gate cannot place but that is close to reference names is put to the model
+        # as a CHOICE among those names (never free text); what it picks is kept apart from what was written
+        names = [one for io in payload.get("investigations") or [] for one in split_tests(_coded_text(io)[0])]
+        payload["_test_resolved"] = resolve_llm.resolve_tests(client, image, names)
 
     blocks_by_id = {str(b["id"]): b for b in blocks}
     handler = _HANDLERS.get(schema_id)

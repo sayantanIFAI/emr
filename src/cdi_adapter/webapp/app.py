@@ -164,7 +164,7 @@ async def submit_job(
     plain sentence (``detail``); the same ``Idempotency-Key`` returns the same job."""
     try:
         upload.LIMITER.check()                 # before reading any bytes
-        abha_n = upload.normalize_abha(abha)
+        abha_n = upload.normalize_abha(abha) if settings.abha_enabled else None   # not asked for: ignored, not validated
         ref = upload.clean_patient_ref(patient_ref)
         if len(files) > settings.upload_max_files:        # before reading any bytes
             raise upload.UploadError(f"You can send up to {settings.upload_max_files} files at once.")
