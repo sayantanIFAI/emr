@@ -29,12 +29,24 @@ sleep 3
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader || true
 
 echo "########## 1. venv + vLLM ##########"
+# The newest vLLM wheels carry a CUDA 13 torch, which needs a newer NVIDIA driver than many pods have (a 570 driver
+# reports CUDA 12.8: "driver too old"). So: driver CUDA >= 13 -> the latest vLLM; older -> 0.11.0 (torch 2.8.0, CUDA 12.8).
+# Override with CDI_VLLM_PIN="vllm==x.y.z".
+DRV_CUDA="$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: *\([0-9]*\)\..*//p' | head -1)"
+if [ -n "${CDI_VLLM_PIN:-}" ]; then PIN="$CDI_VLLM_PIN"
+elif [ -n "$DRV_CUDA" ] && [ "$DRV_CUDA" -lt 13 ]; then PIN="vllm==0.11.0"
+else PIN="vllm"; fi
+echo "driver CUDA: ${DRV_CUDA:-unknown}  ->  installing: $PIN"
+if [ -x "$VENV/bin/vllm" ] && ! "$VENV/bin/python" -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+  echo "the vLLM venv's torch cannot use this GPU (driver too old for it): rebuilding the venv"
+  rm -rf "$VENV"
+fi
 if [ ! -x "$VENV/bin/vllm" ]; then
   export TMPDIR=/workspace/tmp PIP_CACHE_DIR=/workspace/tmp/pipcache
   mkdir -p "$TMPDIR"
   python3 -m venv "$VENV"          # NOT --system-site-packages: vLLM brings its own torch
   "$VENV/bin/pip" install -U pip wheel
-  "$VENV/bin/pip" install vllm     # pulls its own pinned torch + CUDA libs
+  "$VENV/bin/pip" install "$PIN"   # pulls its own pinned torch + CUDA libs
 fi
 "$VENV/bin/vllm" --version || { echo "vLLM install failed"; exit 1; }
 
