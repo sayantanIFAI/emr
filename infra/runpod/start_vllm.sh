@@ -32,7 +32,7 @@ echo "########## 1. venv + vLLM ##########"
 # The newest vLLM wheels carry a CUDA 13 torch, which needs a newer NVIDIA driver than many pods have (a 570 driver
 # reports CUDA 12.8: "driver too old"). So: driver CUDA >= 13 -> the latest vLLM; older -> 0.11.0 (torch 2.8.0, CUDA 12.8).
 # Override with CDI_VLLM_PIN="vllm==x.y.z".
-DRV_CUDA="$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: *\([0-9]*\)\..*//p' | head -1)"
+DRV_CUDA="$(nvidia-smi 2>/dev/null | grep -o 'CUDA Version: [0-9]*' | grep -o '[0-9]*$' | head -1)"
 if [ -n "${CDI_VLLM_PIN:-}" ]; then PIN="$CDI_VLLM_PIN"
 elif [ -n "$DRV_CUDA" ] && [ "$DRV_CUDA" -lt 13 ]; then PIN="vllm==0.11.0"
 else PIN="vllm"; fi
