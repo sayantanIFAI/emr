@@ -25,10 +25,12 @@
     {"name": "Dual", "pattern": "^dual license$"}
   ],
   "review": [
-    {"name": "LGPL", "pattern": "\\blgpl\\b|lesser general public"}
+    {"name": "LGPL", "pattern": "\\blgpl\\b|lesser general public"},
+    {"name": "NVIDIA proprietary", "pattern": "nvidia (proprietary|software license|cuda)|nvidia.*eula"}
   ],
   "notice_duty": ["MIT", "BSD", "Apache-2.0", "ISC", "PSF", "Zlib", "MPL-2.0", "Dual"],
   "decisions": {
+    "nvidia-*": {"status": "proposed", "reason": "NVIDIA CUDA runtime library pulled in by torch. Proprietary but redistributable under the NVIDIA EULA's redistributable list; on a hosted pod it is the host image's. Counsel to confirm for the installed version.", "by": "engineering", "date": "2026-10-07"},
     "psycopg": {"status": "proposed", "reason": "LGPL-3.0, used unmodified as a separate library (pip package, dynamic linking); the licence allows this without opening our code. Counsel to confirm.", "by": "engineering", "date": "2026-10-06"},
     "psycopg-binary": {"status": "proposed", "reason": "LGPL-3.0 binary wheel of psycopg, unmodified; same reading as psycopg. Counsel to confirm.", "by": "engineering", "date": "2026-10-06"}
   }

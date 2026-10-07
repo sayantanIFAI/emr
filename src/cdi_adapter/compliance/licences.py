@@ -70,9 +70,17 @@ def _norm(s: str) -> str:
 def classify(licence: str, classifiers: list[str], policy: dict[str, Any]) -> tuple[str, str | None, str]:
     """``(state, family, reason)``. A dual licence ("A OR B") is allowed if ANY branch is allowed; a
     compound ("A AND B") must have every part allowed. Banned wins over everything else."""
+    if licence and _norm(licence) not in ("unknown", ""):
+        first = _classify_text(_norm(licence), licence, policy)
+        if first[0] != "unknown":                       # a clearly stated licence beats generic classifier text
+            return first
     text = _norm(" ; ".join([licence, *classifiers]))
     if not text or text in ("unknown", "other/proprietary license"):
         return "unknown", None, "the package does not state a licence"
+    return _classify_text(text, licence or "; ".join(classifiers), policy)
+
+
+def _classify_text(text: str, shown: str, policy: dict[str, Any]) -> tuple[str, str | None, str]:
     for pat in policy["banned"]:
         if re.search(pat["pattern"], text, re.IGNORECASE):
             # "LGPL" must not be caught by a GPL pattern: patterns are written with word boundaries
@@ -97,14 +105,51 @@ def classify(licence: str, classifiers: list[str], policy: dict[str, Any]) -> tu
     if states and all(s == "allowed" for s, _ in states):
         return "allowed", states[0][1], ""
     if any(s == "unknown" for s, _ in states):
-        return "unknown", None, f"licence text not recognised: {licence or classifiers}"[:160]
+        return "unknown", None, f"licence text not recognised: {shown}"[:160]
     fam = next(f for s, f in states if s == "review")
     return "review", fam, "a licence with conditions: a recorded decision is required"
 
 
+def product_closure(root: str = "cdi-adapter") -> list[Any]:
+    """The distributions the PRODUCT needs: ``root`` and everything it requires (all its runtime extras, not ``dev``),
+    followed transitively. A machine also carries operating-system Python packages (apt, PyGObject ...) that are not
+    ours and are not shipped; the SBOM and the gate are about what we ship."""
+    from packaging.requirements import Requirement
+
+    def norm_name(n: str) -> str:
+        return re.sub(r"[-_.]+", "-", n).lower()
+
+    try:
+        top = metadata.distribution(root)
+    except metadata.PackageNotFoundError:
+        return list(metadata.distributions())
+    extras = [e for e in (top.metadata.get_all("Provides-Extra") or []) if e != "dev"]
+    out: dict[str, Any] = {}
+    stack = [(top, [""] + extras)]
+    while stack:
+        dist, wanted = stack.pop()
+        key = norm_name(dist.metadata["Name"] or "")
+        if key in out:
+            continue
+        out[key] = dist
+        for raw in dist.requires or []:
+            try:
+                req = Requirement(raw)
+            except Exception:  # noqa: BLE001
+                continue
+            if req.marker is not None and not any(req.marker.evaluate({"extra": e}) for e in wanted):
+                continue
+            try:
+                dep = metadata.distribution(req.name)
+            except metadata.PackageNotFoundError:
+                continue                                   # not installed here: nothing to audit
+            stack.append((dep, [""] + sorted(req.extras)))
+    return list(out.values())
+
+
 def audit(policy: dict[str, Any] | None = None, distributions: Any = None) -> Report:
     policy = policy or load_policy()
-    dists = distributions if distributions is not None else metadata.distributions()
+    dists = distributions if distributions is not None else product_closure()
     seen: dict[str, Component] = {}
     for d in dists:
         md = d.metadata
@@ -114,7 +159,8 @@ def audit(policy: dict[str, Any] | None = None, distributions: Any = None) -> Re
         key = name.lower().replace("_", "-")
         lic, cls = _licence_text(md)
         state, fam, why = classify(lic, cls, policy)
-        dec = policy.get("decisions", {}).get(key)
+        decisions = policy.get("decisions", {})
+        dec = decisions.get(key) or next((v for k, v in decisions.items() if k.endswith("*") and key.startswith(k[:-1])), None)
         decision = None
         if state in ("review", "unknown"):
             decision = dec["status"] if dec else "none"
