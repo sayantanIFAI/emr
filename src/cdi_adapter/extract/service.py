@@ -595,7 +595,7 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
         names = [one for io in payload.get("investigations") or [] for one in split_tests(_coded_text(io)[0])]
         fu = payload.get("follow_up")
         fu_text = fu if isinstance(fu, str) else (fu.get("text") if isinstance(fu, dict) else None)
-        extra = resolve_llm.followup_tests(client, image, fu_text, names)
+        extra = resolve_llm.followup_tests(client, image, fu_text, names, blocks)
         if extra:                          # tests written with the follow-up line, found by the focused second look
             payload.setdefault("investigations", []).extend({"text": t, "evidence": [], "source": "second_look"} for t in extra)
             names += extra

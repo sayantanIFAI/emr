@@ -99,7 +99,7 @@ FOLLOWUP_SCHEMA: dict[str, Any] = {
 
 def followup_prompt(follow_up: str) -> str:
     return chr(10).join([
-        "A doctor's prescription is shown. It has this follow-up instruction: " + repr(follow_up[:160]) + ".",
+        "Part of a doctor's prescription is shown (an enlarged piece of the page). It has this follow-up instruction: " + repr(follow_up[:160]) + ".",
         "Often the doctor writes the lab tests to be done before that visit right next to it, in brackets or braces "
         "(for example: review after 2 weeks with {HbA1c / FBS / TSH}). List every lab test or investigation that is "
         "WRITTEN next to or after that follow-up instruction, one string per test, exactly as written. If none is written "
@@ -107,7 +107,44 @@ def followup_prompt(follow_up: str) -> str:
         'Answer ONLY as JSON: {"tests": ["...", "..."]}'])
 
 
-def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list[str]) -> list[str]:
+def followup_region(image: bytes, blocks: list[dict[str, Any]] | None, follow_up: str) -> bytes:
+    """The part of the page where the follow-up line is, enlarged: from just left of the line to the right edge and from
+    a little above it to well below it (the tests are written beside it or on the line under it). The line is found by
+    the best text match among the OCR blocks; with no match the lower 40% of the page is used. Small handwriting that
+    the model misses on the whole page is often readable at twice the size."""
+    import io
+
+    import cv2
+    import numpy as np
+
+    arr = cv2.imdecode(np.frombuffer(image, np.uint8), cv2.IMREAD_COLOR)
+    if arr is None:
+        return image
+    h, w = arr.shape[:2]
+    best, score = None, 0.0
+    n_fu = norm(follow_up)
+    for b in blocks or []:
+        t = norm(b.get("text"))
+        if len(t) < 4 or not b.get("bbox"):
+            continue
+        r = difflib.SequenceMatcher(None, n_fu, t).ratio()
+        if r > score:
+            best, score = b, r
+    if best is not None and score >= 0.4:
+        x0, y0, _x1, y1 = (int(v) for v in best["bbox"])
+        box = (max(0, x0 - 20), max(0, y0 - 40), w, min(h, y1 + max(110, int(0.1 * h))))
+    else:
+        box = (0, int(0.6 * h), w, h)
+    crop = arr[box[1]:box[3], box[0]:box[2]]
+    if crop.shape[1] < 1600:
+        f = 1600 / crop.shape[1]
+        crop = cv2.resize(crop, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC)
+    ok, png = cv2.imencode(".png", crop)
+    return png.tobytes() if ok else image
+
+
+def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list[str],
+                   blocks: list[dict[str, Any]] | None = None) -> list[str]:
     """Tests written with the follow-up line that the full-page answer missed. Only plain strings with a letter, at most 12,
     none already listed; everything that comes back still goes through the normal checks and is never auto-accepted."""
     from .test_names import split_tests
@@ -115,7 +152,8 @@ def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list
     if not settings.followup_second_look or not follow_up or not str(follow_up).strip():
         return []
     try:
-        resp, _ = client.vlm_json_ex(image, followup_prompt(str(follow_up)), FOLLOWUP_SCHEMA, max_tokens=120, retries=1)
+        crop = followup_region(image, blocks, str(follow_up))              # the lower part of the page, enlarged
+        resp, _ = client.vlm_json_ex(crop, followup_prompt(str(follow_up)), FOLLOWUP_SCHEMA, max_tokens=120, retries=1)
     except Exception as exc:  # noqa: BLE001 - an extra look must never cost the document
         log.warning("followup_second_look_failed", error=str(exc)[:200])
         return []

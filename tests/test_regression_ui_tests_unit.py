@@ -114,3 +114,18 @@ def test_medicines_and_advice_in_the_second_look_answer_are_not_taken_as_tests(m
 def test_the_tables_hide_values_that_are_not_on_the_page():
     assert 'if(none) return "";' in ADMIN_PAGE                                  # an absent value has no cell
     assert "const shown=rows.filter(r=>r[1]!==" in ADMIN_PAGE and "Nothing readable on the page." in ADMIN_PAGE
+
+
+def test_the_follow_up_region_is_the_enlarged_lower_part_around_the_matching_line():
+    import cv2
+    import numpy as np
+
+    img = np.full((1000, 700, 3), 255, np.uint8)
+    cv2.putText(img, "To review after 2 wks", (60, 800), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    ok, png = cv2.imencode(".png", img)
+    blocks = [{"text": "Dr Someone", "bbox": [50, 100, 300, 130]}, {"text": "To review after 2 wks", "bbox": [55, 780, 330, 810]}]
+    out = cv2.imdecode(np.frombuffer(R.followup_region(png.tobytes(), blocks, "To review after 2 wks"), np.uint8), cv2.IMREAD_COLOR)
+    assert out.shape[1] >= 1600                                                    # enlarged
+    assert out.shape[0] < img.shape[0] * (out.shape[1] / img.shape[1]) * 0.5       # only the part around the line
+    nomatch = cv2.imdecode(np.frombuffer(R.followup_region(png.tobytes(), [], "x review"), np.uint8), cv2.IMREAD_COLOR)
+    assert nomatch.shape[1] >= 1600 and nomatch.shape[0] > 0                       # no match: the lower 40%
