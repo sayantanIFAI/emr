@@ -82,6 +82,12 @@ def is_test_list(text: str | None) -> bool:
 _LIST_NO = re.compile(r"^\s*(?:\(\s*\d{1,2}\s*\)|\d{1,2}\s*[.)]|\[\s*\d{1,2}\s*\])\s*")
 
 
+# a result written after the test ("S. Lipase-916", "HbA1c - 7.8", "Fructosamine L-216"): not part of the test's name
+_RESULT_TAIL = re.compile(r"(?<=[A-Za-z]{3})\s*[-–:=]\s*\d{3,}(?:\.\d+)?\s*$|(?<=[A-Za-z0-9]{3})\s*[-–:=]\s*\d+\.\d+\s*$"
+                          r"|(?<=[A-Za-z]{4})\s+[LlHh]\s*[-–>]\s*\d{2,}(?:\.\d+)?\s*$")
+_BRACKETS = re.compile(r"[{}\[\]]")
+
+
 def split_tests(text: str | None) -> list[str]:
     """One entry per test: ``"CBC/KFT/LFT"`` -> CBC, KFT, LFT; ``"Blood: CBC, Urea, FBS"`` -> CBC, Urea, FBS. A name that
     contains a space or a one-letter part (``"Urine R/E"``, ``"X-ray LS spine"``) is never cut."""
@@ -89,16 +95,24 @@ def split_tests(text: str | None) -> list[str]:
     if not t:
         return []
     out: list[str] = []
-    for part in re.split(r"\s*[,;+]\s*(?=[A-Za-z0-9(\[])|\s+and\s+", t):
+    for part in re.split(r"\s*[,;+]\s*(?=[A-Za-z0-9(\[{])|\s+and\s+", t):
         part = _LIST_NO.sub("", part).strip(" .")             # "(1) CBC" / "2. LFT" / "3) TSH" -> the test only
+        part = _BRACKETS.sub("", part).strip(" .")             # "{HbA1c" / "TSH}" / "[HbA1c / FBS]": the braces are the doctor's
+        part = _RESULT_TAIL.sub("", part).strip(" .")
         if not part:
+            continue
+        spaced = [b.strip() for b in re.split(r"\s+/\s+", part)]               # "HbA1c / FBS / PPBS": a list, whatever the names
+        if len(spaced) > 1 and all(len(b) >= 2 for b in spaced):
+            out += [_RESULT_TAIL.sub("", b).strip(" .") for b in spaced]
             continue
         bits = part.split("/")
         if len(bits) > 1 and " " not in part and all(len(b) >= 2 for b in bits):
             out += [b for b in bits]
         else:
             out.append(part)
-    return out or [t]
+    seen: set[str] = set()
+    uniq = [x for x in out if x and not (x.casefold() in seen or seen.add(x.casefold()))]
+    return uniq or [t]
 
 
 UNRECOGNISED = "not a recognised test name"      # stable prefix of the reason (UP-S3 / the result screen keys on it)

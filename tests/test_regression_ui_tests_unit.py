@@ -71,7 +71,7 @@ def test_medicines_among_the_advice_are_dropped_and_tests_among_it_move_to_the_t
     X._facts_prescription(c, {"advice": [{"text": "T. JARDANCE (25) OD"}, {"text": "INJ XULTOPHY 30U SC"},
                                          {"text": "S. Lipase-916"}, {"text": "Low salt diet"}], "investigations": []})
     kinds = [(a["fact_type"], a["local_text"]) for a in c.added]
-    assert ("advice", "Low salt diet") in kinds and ("investigation_order", "S. Lipase-916") in kinds
+    assert ("advice", "Low salt diet") in kinds and ("investigation_order", "S. Lipase") in kinds
     assert not any("JARDANCE" in t or "XULTOPHY" in t for _k, t in kinds)
 
 
@@ -156,3 +156,14 @@ def test_every_view_is_asked_and_the_answers_are_pooled():
     ok, png = cv2.imencode(".png", np.full((800, 600, 3), 255, np.uint8))
     got = R.followup_tests(Seq(), png.tobytes(), None, known=[])
     assert sorted(got) == ["HbA1c", "LFT", "PPBS", "TSH"]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("{HbA1c", ["HbA1c"]), ("TSH}", ["TSH"]), ("[HbA1c / FBS / PPBS / TSH]", ["HbA1c", "FBS", "PPBS", "TSH"]),
+    ("S Lipase-916", ["S Lipase"]), ("[Fructosamine L-216]", ["Fructosamine"]), ("HbA1c - 7.8", ["HbA1c"]),
+    ("Vitamin B-12", ["Vitamin B-12"]), ("A/G ratio", ["A/G ratio"]), ("CBC/KFT/LFT", ["CBC", "KFT", "LFT"]),
+    ("HbA1c, HbA1c", ["HbA1c"]),
+])
+def test_test_names_lose_braces_and_results_and_lists_are_split(text, expected):
+    from cdi_adapter.extract.test_names import split_tests
+    assert split_tests(text) == expected
