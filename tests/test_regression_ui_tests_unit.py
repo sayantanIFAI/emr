@@ -87,7 +87,7 @@ def test_the_second_look_finds_the_tests_written_next_to_the_follow_up():
     cl = _Client({"tests": ["HbA1c", "FBS", "PPBS", "S. Lipase", "TSH", "LFT"]})
     got = R.followup_tests(cl, b"img", "To review after 2 wks", known=["TSH"])
     assert got == ["HbA1c", "FBS", "PPBS", "S. Lipase", "LFT"]                 # TSH was already listed
-    assert "review after 2 wks" in cl.prompts[0] and "Do not add a test that is not written" in cl.prompts[0]
+    assert any("review after 2 wks" in p for p in cl.prompts) and all("Do not add a test that is not written" in p for p in cl.prompts)
 
 
 @pytest.mark.parametrize("answer", [{"tests": []}, {"tests": "HbA1c"}, {"tests": [None, 5, ""]}, {}, None])
@@ -95,14 +95,15 @@ def test_nothing_usable_in_the_answer_adds_nothing(answer):
     assert R.followup_tests(_Client(answer), b"img", "review after 2 wks", known=[]) == []
 
 
-def test_no_follow_up_means_no_extra_call_and_a_failed_call_costs_nothing(monkeypatch):
+def test_tests_are_looked_for_even_when_no_follow_up_was_found_and_a_failed_call_costs_nothing(monkeypatch):
     cl = _Client({"tests": ["HbA1c"]})
-    assert R.followup_tests(cl, b"img", None, known=[]) == [] and R.followup_tests(cl, b"img", "  ", known=[]) == [] and cl.prompts == []
+    assert R.followup_tests(cl, b"img", None, known=[]) == ["HbA1c"] and cl.prompts      # written anywhere, not only by the follow-up
     class Boom:
         def vlm_json_ex(self, *a, **k): raise RuntimeError("down")
     assert R.followup_tests(Boom(), b"img", "review after 2 wks", known=[]) == []
     monkeypatch.setattr(settings, "followup_second_look", False)
-    assert R.followup_tests(cl, b"img", "review after 2 wks", known=[]) == [] and cl.prompts == []
+    cl2 = _Client({"tests": ["HbA1c"]})
+    assert R.followup_tests(cl2, b"img", "review after 2 wks", known=[]) == [] and cl2.prompts == []
 
 
 def test_medicines_and_advice_in_the_second_look_answer_are_not_taken_as_tests(monkeypatch):
@@ -129,3 +130,29 @@ def test_the_follow_up_region_is_the_enlarged_lower_part_around_the_matching_lin
     assert out.shape[0] < img.shape[0] * (out.shape[1] / img.shape[1]) * 0.5       # only the part around the line
     nomatch = cv2.imdecode(np.frombuffer(R.followup_region(png.tobytes(), [], "x review"), np.uint8), cv2.IMREAD_COLOR)
     assert nomatch.shape[1] >= 1600 and nomatch.shape[0] > 0                       # no match: the lower 40%
+
+
+def test_the_page_is_looked_at_in_the_lower_left_and_right_views_too():
+    import cv2
+    import numpy as np
+
+    img = np.full((1000, 700, 3), 255, np.uint8)
+    ok, png = cv2.imencode(".png", img)
+    views = R.page_views(png.tobytes())
+    assert len(views) == 4                                                       # the page, the lower part, the left, the right
+    sizes = [cv2.imdecode(np.frombuffer(v, np.uint8), cv2.IMREAD_COLOR).shape for v in views]
+    assert sizes[0] == (1000, 700, 3) and all(s[1] >= 1400 for s in sizes[1:])  # the pieces are enlarged
+
+
+def test_every_view_is_asked_and_the_answers_are_pooled():
+    import cv2
+    import numpy as np
+
+    class Seq:
+        def __init__(self): self.n = 0
+        def vlm_json_ex(self, image, prompt, schema, **kw):
+            self.n += 1
+            return {"tests": [["HbA1c"], ["PPBS"], ["LFT", "HbA1c"], ["TSH"]][(self.n - 1) % 4]}, "m"
+    ok, png = cv2.imencode(".png", np.full((800, 600, 3), 255, np.uint8))
+    got = R.followup_tests(Seq(), png.tobytes(), None, known=[])
+    assert sorted(got) == ["HbA1c", "LFT", "PPBS", "TSH"]

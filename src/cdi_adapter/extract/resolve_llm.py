@@ -143,23 +143,73 @@ def followup_region(image: bytes, blocks: list[dict[str, Any]] | None, follow_up
     return png.tobytes() if ok else image
 
 
+def anywhere_prompt() -> str:
+    return chr(10).join([
+        "Part of a doctor's handwritten prescription is shown (it may be an enlarged piece of the page).",
+        "List every LAB TEST, blood / urine test, scan or other investigation that the doctor has WRITTEN BY HAND for the "
+        "patient to get done: in a list, in a margin, on its own line, or in brackets or braces beside a follow-up / review "
+        "line (for example: review after 2 weeks {HbA1c / FBS / PPBS / TSH}). One string per test, exactly as written. "
+        "Do NOT list medicines (tablets, capsules, injections, syrups), diagnoses, diet or other advice, and do NOT list "
+        "anything that is PRINTED (a clinic's printed list of services, header or footer). If no test is written in this "
+        "piece, return an empty list. Do not add a test that is not written.",
+        'Answer ONLY as JSON: {"tests": ["...", "..."]}'])
+
+
+def page_views(image: bytes) -> list[bytes]:
+    """The page, and the places a doctor writes the tests, each enlarged: the lower part, the left side and the right side."""
+    import cv2
+    import numpy as np
+
+    arr = cv2.imdecode(np.frombuffer(image, np.uint8), cv2.IMREAD_COLOR)
+    if arr is None:
+        return [image]
+    h, w = arr.shape[:2]
+    boxes = [(0, int(0.55 * h), w, h), (0, int(0.15 * h), int(0.5 * w), h), (int(0.5 * w), int(0.15 * h), w, h)]
+    out = [image]
+    for x0, y0, x1, y1 in boxes:
+        crop = arr[y0:y1, x0:x1]
+        f = max(1.0, 1400 / max(crop.shape[1], 1))
+        if f > 1.0:
+            crop = cv2.resize(crop, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC)
+        ok, png = cv2.imencode(".png", crop)
+        if ok:
+            out.append(png.tobytes())
+    return out
+
+
 def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list[str],
                    blocks: list[dict[str, Any]] | None = None) -> list[str]:
-    """Tests written with the follow-up line that the full-page answer missed. Only plain strings with a letter, at most 12,
+    """Tests the full-page answer missed. Lab tests are the point of the product and the doctor writes them anywhere (beside
+    the follow-up line, down the left or right side, at the bottom), so the page is looked at again in several enlarged
+    views at once (plus the follow-up line's own region when there is one). Only plain strings with a letter, at most 12,
     none already listed; everything that comes back still goes through the normal checks and is never auto-accepted."""
+    from concurrent.futures import ThreadPoolExecutor
+
     from .test_names import split_tests
 
-    if not settings.followup_second_look or not follow_up or not str(follow_up).strip():
+    if not settings.followup_second_look:
         return []
-    try:
-        crop = followup_region(image, blocks, str(follow_up))              # the lower part of the page, enlarged
-        resp, _ = client.vlm_json_ex(crop, followup_prompt(str(follow_up)), FOLLOWUP_SCHEMA, max_tokens=120, retries=1)
-    except Exception as exc:  # noqa: BLE001 - an extra look must never cost the document
-        log.warning("followup_second_look_failed", error=str(exc)[:200])
-        return []
-    got = (resp or {}).get("tests")
-    if not isinstance(got, list):
-        return []
+    jobs: list[tuple[bytes, str]] = [(v, anywhere_prompt()) for v in page_views(image)]
+    if follow_up and str(follow_up).strip():
+        try:
+            jobs.append((followup_region(image, blocks, str(follow_up)), followup_prompt(str(follow_up))))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("followup_region_failed", error=str(exc)[:200])
+
+    def ask(job: tuple[bytes, str]) -> Any:
+        try:
+            resp, _ = client.vlm_json_ex(job[0], job[1], FOLLOWUP_SCHEMA, max_tokens=120, retries=1)
+            return (resp or {}).get("tests")
+        except Exception as exc:  # noqa: BLE001 - an extra look must never cost the document
+            log.warning("followup_second_look_failed", error=str(exc)[:200])
+            return None
+
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        answers = list(pool.map(ask, jobs))
+    got: list[Any] = []
+    for a in answers:
+        if isinstance(a, list):
+            got.extend(a)
     have = {norm(k) for k in known}
     out: list[str] = []
     for item in got:
@@ -170,7 +220,7 @@ def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list
                     and not medicine_resolve.advice_like(one) and not (medicine_resolve.known(one) and not is_known_test(one)):
                 have.add(norm(one))
                 out.append(one)
-    log.info("followup_second_look", found=len(out))
+    log.info("followup_second_look", views=len(jobs), found=len(out))
     return out[:12]
 
 
