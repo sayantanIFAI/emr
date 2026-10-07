@@ -42,7 +42,7 @@ def test_the_upload_section_is_hidden_until_the_token_and_the_mobile_number_are_
 
 # ---- 2. prescriptions already uploaded for this number: say so, with an option to proceed
 def test_an_existing_upload_for_the_number_is_announced_and_waits_for_proceed():
-    assert 'id="existing"' in ADMIN_PAGE and 'id="proceed"' in ADMIN_PAGE and "api/patients/existing" in ADMIN_PAGE
+    assert 'id="existing"' in ADMIN_PAGE and 'id="proceed"' in ADMIN_PAGE and "api/intake/existing" in ADMIN_PAGE
     assert "(!dup||ACK===d)" in ADMIN_PAGE                                                   # the upload waits for Proceed
 
 
@@ -61,7 +61,7 @@ def test_every_group_prescription_and_section_is_collapsible():
 
 # ---- 5. autocomplete on the mobile number, no dropdown of patients
 def test_patients_are_found_by_typing_not_by_a_dropdown():
-    assert 'id="psearch"' in ADMIN_PAGE and 'role="combobox"' in ADMIN_PAGE and "api/patients/search" in ADMIN_PAGE
+    assert 'id="psearch"' in ADMIN_PAGE and 'role="combobox"' in ADMIN_PAGE and "api/intake/search" in ADMIN_PAGE
     assert "<select" not in ADMIN_PAGE                                                        # no dropdown of thousands
 
 

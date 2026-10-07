@@ -552,6 +552,20 @@ _HANDLERS = {
 
 
 # --------------------------------------------------------------------------- #
+def _unescape(x: Any) -> Any:
+    """The model sometimes writes an ampersand as ``&amp;`` (and a quote as ``&quot;``): prescriptions never contain HTML,
+    so every string in the answer is turned back into the plain characters."""
+    import html
+
+    if isinstance(x, str):
+        return html.unescape(x) if "&" in x else x
+    if isinstance(x, list):
+        return [_unescape(i) for i in x]
+    if isinstance(x, dict):
+        return {k: _unescape(v) for k, v in x.items()}
+    return x
+
+
 def _read_each_page(client: Any, pages: list[dict[str, Any]], blocks: list[dict[str, Any]], doc_type: str,
                     schema: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     """Read every page with its own image and its own OCR lines (the [bN] numbers stay the document's), at the same time,
@@ -639,6 +653,8 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
             repo.set_document_status(sess, document_id, "error", error_detail=f"extract: {exc}")
         raise
 
+    if isinstance(payload, dict):
+        payload = _unescape(payload)
     if not settings.abha_enabled and isinstance(payload, dict) and isinstance(payload.get("patient"), dict):
         payload["patient"]["abha_id"] = None        # never used, whatever the model wrote: not for matching, not stored
 

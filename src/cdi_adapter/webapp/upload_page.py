@@ -221,7 +221,7 @@ async function checkExisting(){
   if(EXIST_FOR===d) { gate(); return; }
   const my=++PHONE_SEQ; EXIST=null; EXIST_FOR="";
   let j={count:0,prescriptions:[]};
-  try{ const r=await fetch("api/patients/existing?phone="+encodeURIComponent(d)); if(r.ok) j=await r.json(); }catch(e){}   // a failed look-up never blocks the desk
+  try{ const r=await fetch("api/intake/existing?phone="+encodeURIComponent(d)); if(r.ok) j=await r.json(); }catch(e){}   // a failed look-up never blocks the desk
   if(my!==PHONE_SEQ) return;
   EXIST=j; EXIST_FOR=d; gate();
 }
@@ -255,7 +255,7 @@ function suggest(input,list,fetcher,label,onPick){
 }
 async function searchPatients(q){
   q=String(q||"").trim(); if(q.length<2) return [];
-  const r=await fetch("api/patients/search?q="+encodeURIComponent(/[A-Za-z]/.test(q)?q:phoneDigits(q)||q)); return r.ok?(await r.json()).patients:[];
+  const r=await fetch("api/intake/search?q="+encodeURIComponent(/[A-Za-z]/.test(q)?q:phoneDigits(q)||q)); return r.ok?(await r.json()).patients:[];
 }
 function patientLabel(p){ return '<b>'+esc(fmtPhone(p.phone))+'</b> · '+esc(p.name||"name not read")+' <span class="none">'+plural(p.prescriptions,"prescription")+'</span>'; }
 suggest($("#phone"),$("#phone-sugg"),async q=>{ const d=phoneDigits(q).replace(/\D/g,""); return d.length<2?[]:searchPatients(d); },patientLabel,
@@ -432,7 +432,7 @@ function addDoc(phone,name,doc){
 }
 async function showPatient(p){                         // chosen from the search: load that patient's prescriptions
   let list=[];
-  try{ const r=await fetch("api/patients/prescriptions?phone="+encodeURIComponent(p.phone)+"&name="+encodeURIComponent(p.name||"")); if(r.ok) list=(await r.json()).prescriptions; }catch(e){}
+  try{ const r=await fetch("api/intake/prescriptions?phone="+encodeURIComponent(p.phone)+"&name="+encodeURIComponent(p.name||"")); if(r.ok) list=(await r.json()).prescriptions; }catch(e){}
   for(const d of list) addDoc(p.phone,p.name,d);
   OPEN.add("g:"+gkey(p.phone,p.name)); renderGroups();
   const el=document.querySelector('details.grp[data-k="'+CSS.escape(gkey(p.phone,p.name))+'"]'); if(el) el.scrollIntoView({block:"nearest"});

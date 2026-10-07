@@ -156,3 +156,10 @@ def test_fhir_outbox_is_not_filled_unless_enabled(monkeypatch):
 
     monkeypatch.setattr(settings, "fhir_enabled", False)
     normalized.enqueue_fhir(Boom(), patient_id="p", document_id="d", reason="validated")
+
+
+def test_the_upload_screens_patient_look_ups_are_open_while_the_reviewer_surface_stays_closed():
+    from cdi_adapter.webapp import surface
+    for p in ("/api/intake/search", "/api/intake/prescriptions", "/api/intake/existing", "/api/mappings/lab"):
+        assert not surface.is_closed(p), p
+    assert surface.is_closed("/api/patients/123/fhir") and surface.is_closed("/api/patients/search")

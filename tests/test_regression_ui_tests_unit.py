@@ -189,3 +189,8 @@ def test_a_test_found_twice_is_listed_once():
                                                                                       {"text": "hba1c"}, {"text": "Lipase"}]})
     got = [a["local_text"] for a in c.added if a["fact_type"] == "investigation_order"]
     assert len(got) == 2 and "HbA1c" in got
+
+
+def test_html_entities_the_model_wrote_are_turned_back_into_plain_text():
+    got = X._unescape({"d": "Consultant Endocrinologist &amp; Diabetologist", "l": ["R&amp;D", "a < b", 5], "n": None, "x": {"y": "&quot;hi&quot;"}})
+    assert got == {"d": "Consultant Endocrinologist & Diabetologist", "l": ["R&D", "a < b", 5], "n": None, "x": {"y": '"hi"'}}

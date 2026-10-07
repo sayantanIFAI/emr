@@ -151,20 +151,20 @@ def registry_save(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return {"ok": True, "patient": row}
 
 
-@app.get("/api/patients/search")
+@app.get("/api/intake/search")
 def patients_search(q: str = "") -> dict[str, Any]:
     """Autocomplete: patients (mobile + name) whose mobile number starts with what was typed, or whose name contains it."""
     from . import patients
     return {"patients": patients.search(q)}
 
 
-@app.get("/api/patients/prescriptions")
+@app.get("/api/intake/prescriptions")
 def patients_prescriptions(phone: str, name: str | None = None) -> dict[str, Any]:
     from . import patients
     return {"prescriptions": patients.prescriptions(phone, name)}
 
 
-@app.get("/api/patients/existing")
+@app.get("/api/intake/existing")
 def patients_existing(phone: str) -> dict[str, Any]:
     """Prescriptions already uploaded for this mobile number (the upload screen warns before another is added)."""
     from . import patients
