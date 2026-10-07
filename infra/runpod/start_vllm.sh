@@ -19,7 +19,14 @@ MAXSEQS="${CDI_VLLM_MAX_SEQS:-16}"
 export HF_HOME=/workspace/hf-cache PYTHONUNBUFFERED=1 VLLM_LOGGING_LEVEL=INFO
 # Blackwell (sm_120): vLLM 0.28's FlashInfer sampler misfires a stale CUDA-version
 # check and aborts engine init - use the native sampler + FlashAttention.
-export VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_ATTENTION_BACKEND=FLASH_ATTN
+CC_MAJOR="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | cut -d. -f1)"
+if [ "${CC_MAJOR:-0}" -ge 12 ]; then
+  export VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_ATTENTION_BACKEND=FLASH_ATTN
+else
+  # other GPUs (an L4 is 8.9): vLLM chooses its own backend. Forcing FLASH_ATTN breaks Qwen2.5-VL's vision layers there
+  # ("flash attention build does not support headdim not being a multiple of 32").
+  unset VLLM_ATTENTION_BACKEND
+fi
 export PATH="$VENV/bin:$PATH"          # ninja / nvcc live in the venv; without this the engine cannot start
 mkdir -p /workspace/logs
 
