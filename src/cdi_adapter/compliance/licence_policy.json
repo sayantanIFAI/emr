@@ -13,7 +13,7 @@
   ],
   "allowed": [
     {"name": "MIT", "pattern": "\\bmit\\b|mit license|mit-cmu|\\bhpnd\\b"},
-    {"name": "BSD", "pattern": "\\bbsd\\b|3-clause|2-clause|new bsd|simplified bsd"},
+    {"name": "BSD", "pattern": "\\bbsd\\b|3-clause|2-clause|new bsd|simplified bsd|redistribution and use in source and binary forms|numpy developers"},
     {"name": "Apache-2.0", "pattern": "apache"},
     {"name": "ISC", "pattern": "\\bisc\\b"},
     {"name": "PSF", "pattern": "\\bpsf\\b|python software foundation|cnri-python|\\bpython-2\\.0"},

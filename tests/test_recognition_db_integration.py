@@ -17,6 +17,14 @@ pytestmark = pytest.mark.skipif(not os.environ.get("CDI_DATABASE_URL"),
                                 reason="CDI_DATABASE_URL not set")
 
 
+@pytest.fixture(autouse=True)
+def _two_readers(monkeypatch):
+    """These tests are about the two-reader set-up; TrOCR is off by default in production."""
+    from cdi_adapter.config import settings
+
+    monkeypatch.setattr(settings, "trocr_enabled", True)
+
+
 @pytest.fixture()
 def sess_scope():
     from cdi_adapter.db import session_scope
