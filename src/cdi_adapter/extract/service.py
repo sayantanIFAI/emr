@@ -211,6 +211,7 @@ def _facts_prescription(c: _Ctx, p: dict[str, Any]) -> None:
             continue
         _add_medication(c, m, intent="order",
                         status=m.get("status") if isinstance(m, dict) else None)
+    seen_tests: set[str] = set()                                # a test is listed once, however many views / lines found it
     for a in p.get("advice") or []:
         t, ev = _coded_text(a)
         if not t:
@@ -220,6 +221,9 @@ def _facts_prescription(c: _Ctx, p: dict[str, Any]) -> None:
         if lab_resolve.resolve(t) is not None or is_known_test(t):
             # a test written among the advice ("S. Lipase", "S. Fructosamine"): it belongs with the tests
             for one in split_tests(t):
+                if _test_key(one) in seen_tests:
+                    continue
+                seen_tests.add(_test_key(one))
                 c.add(fact_type="investigation_order", local_text=one, value_code_display=one, value_text=one, evidence=ev)
             continue
         c.add(fact_type="advice", local_text=t, value_text=t, evidence=ev)
@@ -235,9 +239,18 @@ def _facts_prescription(c: _Ctx, p: dict[str, Any]) -> None:
                     _add_medication(c, {"drug_text": one, "evidence": ev}, intent="order")
                     on_page.add(_first_word(one))
                 continue
+            if _test_key(one) in seen_tests:
+                continue
+            seen_tests.add(_test_key(one))
             c.add(fact_type="investigation_order", local_text=one, value_code_display=resolved.get(one) or one,
                   value_text=one, evidence=ev)
     _add_vitals(c, p.get("vitals") or [])
+
+
+def _test_key(name: str) -> str:
+    """Two spellings of the same written test ("S.Lipase", "S. Lipase", "Lipase") share a key."""
+    k = re.sub(r"^\s*(?:s|serum)[\s.]+", "", (name or "").casefold())
+    return re.sub(r"[^a-z0-9]", "", k)
 
 
 _facts_opd_note = _facts_prescription

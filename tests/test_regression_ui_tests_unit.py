@@ -181,3 +181,11 @@ def test_a_misread_close_to_a_reference_test_stays_so_the_choice_step_can_pick_i
     monkeypatch.setattr(R.lab_resolve, "suggest", lambda t, k=5, floor=0.6: ["Free T4"] if "ft4" in (t or "").lower() else [])
     cl = _Client({"tests": ["Fl4 ft4", "Sedox tin"]})
     assert R.followup_tests(cl, b"img", None, known=[]) == ["Fl4 ft4"]
+
+
+def test_a_test_found_twice_is_listed_once():
+    c = _Ctx()
+    X._facts_prescription(c, {"advice": [{"text": "S.Lipase"}], "investigations": [{"text": "S. Lipase"}, {"text": "HbA1c"},
+                                                                                      {"text": "hba1c"}, {"text": "Lipase"}]})
+    got = [a["local_text"] for a in c.added if a["fact_type"] == "investigation_order"]
+    assert len(got) == 2 and "HbA1c" in got
