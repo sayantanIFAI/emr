@@ -59,6 +59,15 @@ _EXTRA = {
         "written and NEVER add a usual or standard preparation. `follow_up`: the written instruction "
         "to come back or review, copied exactly."
     ),
+    "opd_note": (
+        "\nThis is a CONSULTATION NOTE. Every test, scan or investigation the doctor ORDERS or advises "
+        "(often under 'Adv', 'Advice' or 'Investigations': 'CBC, Urea, Creatinine', 'ECG', 'CXR-PA', "
+        "'Echo') goes in `investigations`, one item per test as written (never expand a panel); they are "
+        "orders, not results, and NOT `advice`. `investigation_preparation`: only preparation that is "
+        "WRITTEN for the tests (for example 'fasting 12 hrs'): copy the words in `text` and the tests it "
+        "belongs to in `applies_to` ([\"all\"] when it covers the whole order); [] when none is written; "
+        "never add a usual preparation. Other advice stays in `advice`."
+    ),
     "lab_report": (
         "\nThis is a LAB REPORT. Put every analyte row in `results` with its numeric "
         "`value`, `unit`, reference range and flag. `value` is an object "

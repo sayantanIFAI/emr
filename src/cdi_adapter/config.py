@@ -136,6 +136,9 @@ class Settings(BaseSettings):
     vllm_guided: bool = True                # token-level JSON-schema decoding (xgrammar).
                                             # adds grammar-mask cost per token; turn off to
                                             # rely on client-side repair + retry instead.
+    vllm_retry_on_length: bool = True         # an answer that hits the token limit is retried once (a repetition loop)
+    vllm_retry_repetition_penalty: float = 1.05
+    vllm_guided_api: str = "structured_outputs"   # structured_outputs (vLLM >= 0.12) | guided_json (older: newer ones ignore it)
     vllm_guided_backend: str = "xgrammar"
 
     # --- future: vLLM OpenAI endpoint for the DSLM / guided decoding ---

@@ -92,6 +92,16 @@ def _chat_messages(content: list[dict[str, Any]], *, structured: bool = False) -
     return [{"role": "system", "content": system}, {"role": "user", "content": content}]
 
 
+def with_schema_instruction(prompt: str, json_schema: dict[str, Any] | None) -> str:
+    """The prompt plus the JSON Schema it must answer in. The transformers server always did this; the vLLM
+    server relied on constrained decoding alone, and since the schemas allow extra keys the model then made up
+    its own layout (``structured_data: [...]``) and nothing mapped to the prescription fields."""
+    if json_schema is None:
+        return prompt
+    return (f"{prompt}\n\nReturn ONLY a single JSON object conforming to this JSON Schema:\n"
+            f"{json.dumps(json_schema)}")
+
+
 class Backend:
     name = "base"
 
@@ -219,10 +229,7 @@ class HFQwenVLBackend(Backend):
 
         img = Image.open(io.BytesIO(base64.b64decode(image_b64))).convert("RGB")
         if json_schema is not None:
-            prompt = (
-                f"{prompt}\n\nReturn ONLY a single JSON object conforming to this JSON Schema:\n"
-                f"{json.dumps(json_schema)}"
-            )
+            prompt = with_schema_instruction(prompt, json_schema)
         messages = _chat_messages([
             {"type": "image", "image": img},
             {"type": "text", "text": prompt},
@@ -256,7 +263,7 @@ class VLLMBackend(Backend):
 
     vLLM holds the model with a paged KV cache and does continuous batching, so
     many ``/vlm/generate`` calls in flight share the GPU. ``json_schema`` is sent
-    as ``guided_json`` (XGrammar) → the output is schema-valid by construction,
+    as ``structured_outputs`` (XGrammar; ``guided_json`` for old vLLM) → the output is schema-valid by construction,
     which removes the repair / retry / ``_partial`` path on the client side.
     """
 
@@ -282,12 +289,19 @@ class VLLMBackend(Backend):
         return {"backend": self.name, "model": self._model, "device": "cuda",
                 "loaded": loaded, "served": served, "guided_backend": settings.vllm_guided_backend}
 
+    def _post(self, body: dict[str, Any]) -> dict[str, Any]:
+        r = self._c.post(f"{self._base}/chat/completions", json=body)
+        if r.status_code >= 400:
+            log.error("vllm_http_error", status=r.status_code, body=r.text[:400])
+        r.raise_for_status()
+        return r.json()
+
     def generate(self, image_b64, prompt, *, max_tokens=512, json_schema=None):  # noqa: ANN001
         body: dict[str, Any] = {
             "model": self._model,
             "messages": _chat_messages([
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
-                {"type": "text", "text": prompt},
+                {"type": "text", "text": with_schema_instruction(prompt, json_schema)},
             ]),
             "max_tokens": max_tokens,
             "temperature": 0.0,
@@ -298,16 +312,29 @@ class VLLMBackend(Backend):
             # (optional arrays, anyOf) strict mode makes the model terminate
             # list-heavy sections early. `guided_json` keeps output valid without
             # that pressure; the prompt still asks for completeness.
-            body["guided_json"] = bundle_schema(json_schema)
-            if settings.vllm_guided_backend:
-                body["guided_decoding_backend"] = settings.vllm_guided_backend
+            schema = bundle_schema(json_schema)
+            if settings.vllm_guided_api == "guided_json":
+                # vLLM before 0.12 only (it takes these fields; later versions IGNORE them and do not
+                # constrain the output, with only a warning in their log)
+                body["guided_json"] = schema
+                if settings.vllm_guided_backend:
+                    body["guided_decoding_backend"] = settings.vllm_guided_backend
+            else:
+                so: dict[str, Any] = {"json": schema}
+                body["structured_outputs"] = so
 
         t0 = time.time()
-        r = self._c.post(f"{self._base}/chat/completions", json=body)
-        if r.status_code >= 400:
-            log.error("vllm_http_error", status=r.status_code, body=r.text[:400])
-        r.raise_for_status()
-        data = r.json()
+        data = self._post(body)
+        if (data["choices"][0].get("finish_reason") == "length" and settings.vllm_retry_on_length
+                and json_schema is not None):
+            # The answer ran into the token limit. For a form this size that is almost always a loop (the same
+            # entry written again and again), not a long page, and greedy decoding can fall into one. Once more
+            # with a repetition penalty; kept only if it finishes on its own.
+            log.warning("vllm_hit_token_limit_retrying", max_tokens=max_tokens)
+            again = self._post({**body, "repetition_penalty": settings.vllm_retry_repetition_penalty,
+                                "temperature": 0.2})
+            if again["choices"][0].get("finish_reason") != "length":
+                data = again
         text = (data["choices"][0]["message"]["content"] or "").strip()
         usage = data.get("usage", {}) or {}
         return {
