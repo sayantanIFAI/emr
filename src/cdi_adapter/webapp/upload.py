@@ -72,6 +72,40 @@ def clean_patient_ref(value: str | None) -> str | None:
     return text
 
 
+_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_/]{0,19}$")
+
+
+def clean_token(value: str | None, *, required: bool = True) -> str | None:
+    """The token number from the front desk: letters, numbers and - _ / only, up to 20 characters."""
+    text = (value or "").strip()
+    if not text:
+        if required:
+            raise UploadError("Please enter the token number.")
+        return None
+    if not _TOKEN.match(text):
+        raise UploadError("The token number can use letters, numbers and - _ / only, up to 20 characters.")
+    return text
+
+
+def clean_phone(value: str | None, *, required: bool = True) -> str | None:
+    """A 10-digit Indian mobile number (a leading +91, 91 or 0 is accepted and dropped); returned as the 10 digits."""
+    text = (value or "").strip()
+    if not text:
+        if required:
+            raise UploadError("Please enter the 10-digit mobile number.")
+        return None
+    digits = re.sub(r"[ \-().]", "", text)
+    if digits.startswith("+91"):
+        digits = digits[3:]
+    elif len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+    elif len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]
+    if not (digits.isascii() and digits.isdigit() and len(digits) == 10 and digits[0] in "6789"):
+        raise UploadError("The mobile number must be 10 digits and start with 6, 7, 8 or 9.")
+    return digits
+
+
 def display_name(name: str | None) -> str:
     """A file name safe to echo in a message or a log: no path, no control characters."""
     base = os.path.basename((name or "").replace("\\", "/")) or "document"

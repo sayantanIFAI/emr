@@ -71,6 +71,9 @@ class DocProg:
     # part of the public job view
     parts: list[tuple[str, bytes]] | None = None
     job_id: str | None = None       # the Send this document belongs to (saved with the document)
+    token_no: str | None = None     # the token and mobile number typed with the upload (saved with the document)
+    phone: str | None = None
+    patient_name: str | None = None  # the name read from the page, once it is read
 
     def stage(self, name: str, state: str) -> None:
         self.stages[name] = state
@@ -89,6 +92,8 @@ class Job:
     error: str | None = None
     mismatch: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
+    token_no: str | None = None
+    phone: str | None = None
 
     def public(self) -> dict[str, Any]:
         pat = self.patient or (self.result or {}).get("patient")
@@ -100,6 +105,9 @@ class Job:
         return {
             "job_id": self.id,
             "state": self.state,
+            "token_no": self.token_no,
+            "phone": self.phone,
+            "patient_name": next((d.patient_name for d in self.docs if d.patient_name), None),
             "patient_id": self.patient_id if show_patient else None,
             "existing_patient": self.existing,
             "patient": pat if show_patient else None,
@@ -125,7 +133,8 @@ class Job:
 def create_job(abha: str | None, files: list[tuple[str, bytes]],
                patient_ref: str | None = None, *,
                parts: list[list[tuple[str, bytes]] | None] | None = None,
-               idempotency_key: str | None = None) -> str:
+               idempotency_key: str | None = None,
+               token_no: str | None = None, phone: str | None = None) -> str:
     jid = uuid.uuid4().hex[:12]
     if idempotency_key:
         now = time.time()
@@ -141,7 +150,7 @@ def create_job(abha: str | None, files: list[tuple[str, bytes]],
                 _idem[idempotency_key] = (now, bound)
             return bound
     try:
-        return _create_job(jid, abha, files, patient_ref, parts)
+        return _create_job(jid, abha, files, patient_ref, parts, token_no, phone)
     except Exception:
         if idempotency_key:
             with _lock:
@@ -157,9 +166,10 @@ def create_job(abha: str | None, files: list[tuple[str, bytes]],
 
 def _create_job(jid: str, abha: str | None, files: list[tuple[str, bytes]],
                 patient_ref: str | None,
-                parts: list[list[tuple[str, bytes]] | None] | None) -> str:
-    job = Job(id=jid, abha=(abha or "").strip() or None)
-    job.docs = [DocProg(filename=fn, parts=(parts[i] if parts else None), job_id=jid)
+                parts: list[list[tuple[str, bytes]] | None] | None,
+                token_no: str | None = None, phone: str | None = None) -> str:
+    job = Job(id=jid, abha=(abha or "").strip() or None, token_no=token_no, phone=phone)
+    job.docs = [DocProg(filename=fn, parts=(parts[i] if parts else None), job_id=jid, token_no=token_no, phone=phone)
                 for i, (fn, _) in enumerate(files)]
 
     ref = (patient_ref or "").strip()
@@ -200,19 +210,20 @@ def _job_from_db(jid: str) -> Job | None:
     try:
         with session_scope() as sess:
             rows = sess.execute(text(
-                "SELECT id, original_filename, status, error_detail FROM source_document "
+                "SELECT id, original_filename, status, error_detail, token_no, phone, patient_name FROM source_document "
                 "WHERE upload_job_id = :j ORDER BY ingested_at, id"), {"j": jid}).mappings().all()
     except Exception as exc:  # noqa: BLE001 - e.g. a database without migration 0008
         log.warning("job_lookup_failed", job=jid, error=str(exc)[:150])
         return None
     if not rows:
         return None
-    job = Job(id=jid, abha=None)
+    job = Job(id=jid, abha=None, token_no=rows[0]["token_no"], phone=rows[0]["phone"])
     for r in rows:
         done, failed = r["status"] in _DONE, r["status"] in _FAILED
         d = DocProg(filename=r["original_filename"] or "document", document_id=str(r["id"]),
                     status="done" if done else "error" if failed else "running",
-                    error=(r["error_detail"] if failed else None), job_id=jid)
+                    error=(r["error_detail"] if failed else None), job_id=jid,
+                    token_no=r["token_no"], phone=r["phone"], patient_name=r["patient_name"])
         for s in STAGES:
             d.stage(s, "done" if done else "pending")
         job.docs.append(d)
@@ -257,13 +268,14 @@ def _durable_key(key: str, jid: str) -> str:
         return jid
 
 
-def _tag_document(document_id: str, job_id: str | None) -> None:
+def _tag_document(document_id: str, job_id: str | None, token_no: str | None = None, phone: str | None = None) -> None:
     if not job_id:
         return
     try:
         with session_scope() as sess:
-            sess.execute(text("UPDATE source_document SET upload_job_id = :j WHERE id = :d"),
-                         {"j": job_id, "d": document_id})
+            sess.execute(text("UPDATE source_document SET upload_job_id = :j, token_no = coalesce(:t, token_no), "
+                              "phone = coalesce(:p, phone) WHERE id = :d"),
+                         {"j": job_id, "d": document_id, "t": token_no, "p": phone})
     except Exception as exc:  # noqa: BLE001
         log.warning("job_tag_failed", document_id=document_id, error=str(exc)[:150])
 
@@ -276,7 +288,7 @@ def _stage1(prog: DocProg, fn: str, raw: bytes, abha: str | None) -> None:
         prog.stage("ingest", "running")
         res = ingest_bytes(raw, filename=fn, source_channel="webapp", legacy_patient_ref=abha)
         prog.document_id = res.document_id
-        _tag_document(res.document_id, prog.job_id)
+        _tag_document(res.document_id, prog.job_id, prog.token_no, prog.phone)
         if prog.parts and not res.deduplicated:
             # one prescription built from several pictures: keep each original untouched
             from .upload import store_parts
@@ -371,6 +383,14 @@ def _stage2(job: "Job", prog: DocProg,
                            "birth_date": i.get("birth_date"), "age_years": i.get("age_years"),
                            "abha_number": job.abha, "provisional": True}
         prog.stage("extract", "done")
+        if ex.identity and (ex.identity.get("name") or "").strip():
+            prog.patient_name = str(ex.identity["name"]).strip()[:120]      # the screen groups by name + mobile number
+            try:
+                with session_scope() as s:
+                    s.execute(text("UPDATE source_document SET patient_name = :n WHERE id = :d"),
+                              {"n": prog.patient_name, "d": prog.document_id})
+            except Exception as exc:  # noqa: BLE001
+                log.warning("patient_name_not_saved", document_id=prog.document_id, error=str(exc)[:150])
 
         prog.stage("terminology", "running")
         bind_document(prog.document_id)

@@ -327,6 +327,7 @@ class Settings(BaseSettings):
     # medicines are not what this product is judged on (lab tests are): the model's choice among reference medicine names
     # costs a call per page, so it is off by default
     llm_resolve_medicines: bool = False
+    upload_require_intake: bool = True     # the token and mobile number must be sent with an upload from the screen
     lab_mapping_db: bool = True            # the lab-name mapping table is read from the database (False: the built-in seed only)
     llm_resolve_enabled: bool = True       # the model may CHOOSE among reference names for a misread test (resolve_llm.py)
     job_max_concurrent: int = 8           # uploads ("jobs") in progress at once; more wait in a queue

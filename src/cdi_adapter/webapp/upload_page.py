@@ -1,8 +1,14 @@
-"""The admin upload screen: one admin signs in, adds photos / scans / PDFs, and reads the result JSON.
+"""The admin upload screen: the front desk enters the token and mobile number, adds the pages of one paper, and reads the result.
 
-No patient look-up, no reviewer or FHIR links: those screens are closed unless the owner switches
-them on (webapp/surface.py). The page's script is the upload screen's own (limits from
-``GET api/upload/limits``, the same Send retried gives the same job, nothing is resized in the browser).
+No reviewer or FHIR links: those screens are closed unless the owner switches them on (webapp/surface.py). The page's script
+is the upload screen's own (limits from ``GET api/upload/limits``, the same Send retried gives the same job, nothing is
+resized in the browser).
+
+* The upload section appears only when both the token and a valid mobile number are filled. If prescriptions are already
+  uploaded for that mobile number the screen says so and waits for "Proceed".
+* Results are shown by PATIENT (name + mobile number), never by batch. Every group and every section is collapsible.
+* With thousands of prescriptions there is no list to pick from: type part of a mobile number (or a name) and choose.
+* The lab-name mapping table (many written names -> one standard test) is shown, and can be added to, at the bottom.
 """
 from .page import _UPLOAD_CSS
 from .theme import BRAND_CSS, HEADER_HTML, UPLOAD_ICON
@@ -22,30 +28,76 @@ _HTML = r"""<!doctype html>
 #camdlg::backdrop{background:rgba(15,23,42,.6)}
 #camdlg video{width:100%;max-height:70vh;border-radius:12px;background:#000;display:block}
 .camrow{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center}
-.jobbox{border:1px solid var(--line,#e2e8f0);border-radius:12px;padding:12px 14px;margin-top:12px}
-.jobbox h3{margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.fld{display:flex;flex-direction:column;gap:4px;min-width:200px;flex:1}
+.fld label{font-weight:600;font-size:13px;color:var(--muted,#5b6b8c)}
+.fld input[type=text]{width:100%;min-height:44px;font-size:16px}
+.row2{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start}
+.suggest{position:relative}
+.suggest ul{position:absolute;left:0;right:0;top:100%;z-index:30;background:#fff;border:1px solid var(--line-strong,#cfd9ec);border-radius:10px;
+  box-shadow:0 8px 24px rgba(16,42,90,.14);list-style:none;margin:4px 0 0;padding:4px;max-height:300px;overflow:auto}
+.suggest li{padding:9px 10px;border-radius:8px;cursor:pointer;overflow-wrap:anywhere}
+.suggest li[aria-selected=true],.suggest li:hover{background:var(--blue-50,#eef4ff)}
+.notice-warn{background:var(--warn-bg,#fdf5e6);border:1px solid var(--warn-line,#f0dcae);border-radius:12px;padding:12px 14px;margin-top:12px}
+.notice-warn ul{margin:6px 0 10px;padding-left:20px}
+.fielderr{color:var(--err,#d64545);font-size:13px;min-height:18px;margin-top:6px}
+.ptsum{font-weight:600;margin:0 0 10px}
+details.cf-det{border:1px solid var(--line,#e4eaf4);border-radius:12px;margin-top:10px;background:var(--surface,#fff)}
+details.cf-det>summary{cursor:pointer;padding:10px 14px;list-style:none;display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-height:44px}
+details.cf-det>summary::-webkit-details-marker{display:none}
+details.cf-det>summary::before{content:"▸";color:var(--muted,#5b6b8c);transition:transform .15s}
+details.cf-det[open]>summary::before{transform:rotate(90deg)}
+details.cf-det>summary:focus-visible{outline:none;box-shadow:var(--ring,0 0 0 3px rgba(29,78,216,.3));border-radius:12px}
+details.cf-det>.det-body{padding:2px 14px 14px}
+details.sec{margin-top:8px}
+details.sec>summary{font-weight:650;font-size:15px;min-height:40px}
 .jobbox .jerr{color:var(--danger,#b42318);font-size:14px;margin:4px 0}
-.sumtbl{margin:18px 0 0}
-.sumtbl h3{font-size:15px;margin:0 0 6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .sumtbl table{width:100%;border-collapse:collapse;font-size:14px}
 .sumtbl th,.sumtbl td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line,#e4eaf4);vertical-align:top}
 .sumtbl tbody th{width:30%;color:var(--muted,#5b6b8c);font-weight:600}
 .sumtbl thead th{color:var(--muted,#5b6b8c);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.3px}
-.sumtbl .none{color:var(--faint,#93a1bd)}
+.sumtbl .none,.none{color:var(--faint,#93a1bd)}
 .sumtbl .note{margin:6px 0 0;font-size:13px;color:var(--muted,#5b6b8c)}
 .sumtbl .tbox{overflow-x:auto}
-.sumjson{margin:22px 0 6px;font-size:15px}
+.sumjson{margin:10px 0 6px;font-size:15px}
+.maptbl{width:100%;border-collapse:collapse;font-size:14px}
+.maptbl th,.maptbl td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line,#e4eaf4);vertical-align:top}
+.maptbl .off td{opacity:.5}
+.mapadd{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.mapadd input[type=text]{min-height:40px;flex:1;min-width:150px}
+@media (max-width:600px){.cf-main{padding:16px 16px 48px}}
 </style>
 </head>
 <body>
 %%HEADER%%
 <div class="cf-pagetitle">
   <h1>Prescription reader</h1>
-  <p class="cf-sub">Upload photos, scans or PDFs of prescriptions. Each one is read and the result is shown below as JSON. Values marked <b>needs a check</b> are doubtful: nothing is guessed.</p>
+  <p class="cf-sub">Enter the token and mobile number, add the pages of the prescription, and read the result. Values marked <b>needs a check</b> are doubtful: nothing is guessed.</p>
 </div>
 <main class="cf-main">
-  <div class="card" id="form-card">
-    <h2>Upload</h2>
+  <div class="card" id="patient-card">
+    <h2>1 · Token and mobile number</h2>
+    <p class="hint">Both are needed before you can upload. The result is kept under this patient (name and mobile number).</p>
+    <div class="row2">
+      <div class="fld"><label for="token">Token number</label>
+        <input type="text" id="token" maxlength="20" autocomplete="off" inputmode="text" placeholder="for example T-17" aria-describedby="pt-err"/></div>
+      <div class="fld suggest"><label for="phone">Mobile number</label>
+        <input type="text" id="phone" maxlength="18" autocomplete="off" inputmode="numeric" placeholder="10 digits"
+          role="combobox" aria-expanded="false" aria-controls="phone-sugg" aria-autocomplete="list" aria-describedby="pt-err"/>
+        <ul id="phone-sugg" role="listbox" aria-label="Patients with this mobile number" hidden></ul></div>
+    </div>
+    <div class="fielderr" id="pt-err" role="alert"></div>
+    <div class="notice-warn" id="existing" hidden aria-live="polite">
+      <div id="existing-msg"></div>
+      <ul id="existing-list"></ul>
+      <button class="btn btn-primary btn-sm" type="button" id="proceed">Proceed</button>
+      <span class="muted"> Proceed only if this is a new prescription, or more pages of the same token.</span>
+    </div>
+  </div>
+
+  <div class="card" id="form-card" hidden>
+    <h2>2 · Upload</h2>
+    <p class="ptsum" id="pt-sum"></p>
+    <p class="hint">Add <b>every page</b> of this paper: the front, the back, continuation sheets, and notes below a ruled line. If a newer visit is written on the back or lower down, its lab tests and doctor booking are the ones used; the earlier visits are listed too.</p>
     <div class="dropzone" id="dz" tabindex="0" role="button" aria-label="Choose or drop photos, scans or PDFs">
       %%ICON%%
       <div class="dz-title">Drop photos, scans or PDFs here, or click to choose</div>
@@ -79,17 +131,35 @@ _HTML = r"""<!doctype html>
     <div id="jobs"></div>
   </div>
 
-  <div class="card" id="result-card" hidden>
-    <h2>Result</h2>
-    <p class="hint" id="resnotice"></p>
-    <div class="res-top">
-      <select id="resdoc" aria-label="Document" hidden></select>
-      <span id="respill"></span>
-      <a class="btn btn-ghost btn-sm" id="resdl" href="#" download>Download JSON</a>
+  <div class="card" id="patients-card">
+    <h2>Patients and prescriptions</h2>
+    <p class="hint">Type part of a mobile number (or a name) to find a patient. Results are grouped by patient, not by upload.</p>
+    <div class="fld suggest" style="max-width:520px">
+      <label for="psearch">Find a patient</label>
+      <input type="text" id="psearch" autocomplete="off" placeholder="mobile number or name" role="combobox" aria-expanded="false"
+        aria-controls="psearch-sugg" aria-autocomplete="list"/>
+      <ul id="psearch-sugg" role="listbox" aria-label="Matching patients" hidden></ul>
     </div>
-    <div id="summary" aria-live="polite"></div>
-    <h3 class="sumjson">Result (JSON)</h3>
-    <pre class="resjson" id="resjson" tabindex="0" aria-label="Result JSON"></pre>
+    <div id="groups" aria-live="polite"></div>
+  </div>
+
+  <div class="card" id="map-card">
+    <details class="cf-det" id="map-det" style="margin-top:0">
+      <summary><b>Lab test mapping table</b> <span class="muted" id="map-count"></span></summary>
+      <div class="det-body">
+        <p class="hint" style="margin-top:0">Many written names go to ONE standard test (for example creatinine, creatine, sr creatinine, RFT → Creatinine). Every name the reader maps is looked up here first. Add a row, or switch one off.</p>
+        <div class="mapadd">
+          <input type="text" id="m-alias" placeholder="written name (for example s creat)" aria-label="Written name"/>
+          <input type="text" id="m-canon" placeholder="standard test (for example Creatinine)" aria-label="Standard test"/>
+          <input type="text" id="m-loinc" placeholder="code (optional)" aria-label="Code" style="max-width:150px"/>
+          <input type="text" id="m-note" placeholder="note (optional)" aria-label="Note"/>
+          <button class="btn btn-primary btn-sm" type="button" id="m-add">Add</button>
+        </div>
+        <div class="fielderr" id="m-err" role="alert"></div>
+        <div class="fld" style="max-width:360px"><label for="mapfilter">Filter</label><input type="text" id="mapfilter" placeholder="type to filter" autocomplete="off"/></div>
+        <div class="tbox" style="overflow-x:auto;margin-top:8px"><table class="maptbl" id="maptbl"></table></div>
+      </div>
+    </details>
   </div>
   <p class="muted" style="text-align:center"><a href="/status">System status</a></p>
 </main>
@@ -110,15 +180,96 @@ const $=s=>document.querySelector(s);
 const STAGES=["ingest","classify","ocr","extract","terminology","validate"];
 const STAGE_LABEL={ingest:"Ingest",classify:"Classify",ocr:"OCR",extract:"Extract",terminology:"Terminology",validate:"Validate"};
 const TICK='<svg class="tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
-let TIMER=null,JOBS=[],BATCH=0;
+let TIMER=null,JOBS=[];
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+// ---- token and mobile number: the upload appears only when both are filled --------------------------------
+function phoneDigits(v){ let d=String(v||"").replace(/[\s\-().]/g,""); if(d.startsWith("+91")) d=d.slice(3); else if(d.length===12&&d.startsWith("91")) d=d.slice(2); else if(d.length===11&&d.startsWith("0")) d=d.slice(1); return d; }
+function phoneOk(d){ return /^[6-9][0-9]{9}$/.test(d); }
+function tokenOk(t){ return /^[A-Za-z0-9][A-Za-z0-9\-_\/]{0,19}$/.test(t); }
+function fmtPhone(p){ return p&&p.length===10?p.slice(0,5)+" "+p.slice(5):(p||""); }
+function fmtDate(iso){ if(!iso) return ""; const d=new Date(iso); return isNaN(d)?"":d.toLocaleDateString([], {day:"2-digit",month:"short",year:"numeric"}); }
+function plural(n,u){ return n+" "+u+(n===1?"":"s"); }
+let ACK="",EXIST=null,EXIST_FOR="";                  // EXIST: what is already uploaded for EXIST_FOR (the typed number)
+let SEND_KEY=null,SENDING=false;
+
+function gate(){
+  const t=$("#token").value.trim(), raw=$("#phone").value.trim(), d=phoneDigits(raw);
+  const tOk=tokenOk(t), pOk=phoneOk(d);
+  let err="";
+  if(t&&!tOk) err="The token can use letters, numbers and - _ / only, up to 20 characters.";
+  else if(raw&&(d.length>=10)&&!pOk) err="The mobile number must be 10 digits and start with 6, 7, 8 or 9.";
+  $("#pt-err").textContent=err;
+  const have=pOk&&EXIST_FOR===d&&EXIST;                // the look-up for this number has come back
+  const dup=have&&EXIST.count>0;
+  $("#existing").hidden=!dup;
+  if(dup){
+    $("#existing-msg").innerHTML='<b>'+plural(EXIST.count,"prescription")+' already uploaded</b> for '+esc(fmtPhone(d))+'. Uploading now will make this #'+(EXIST.count+1)+'.';
+    $("#existing-list").innerHTML=EXIST.prescriptions.slice(0,5).map(p=>'<li>Token '+esc(p.token_no||"—")+' · '+esc(p.patient_name||"name not read")+' · '+esc(fmtDate(p.uploaded))+' · '+esc(p.filename||"")+'</li>').join("")
+      +(EXIST.count>5?'<li class="none">and '+(EXIST.count-5)+' more</li>':"");
+  }
+  const open=tOk&&pOk&&have&&(!dup||ACK===d);
+  $("#form-card").hidden=!open;
+  $("#pt-sum").textContent=open?("Token "+t+" · mobile "+fmtPhone(d)):"";
+  if(!open) say("");
+  render();
+}
+let PHONE_SEQ=0;
+async function checkExisting(){
+  const d=phoneDigits($("#phone").value);
+  if(!phoneOk(d)){ EXIST=null; EXIST_FOR=""; gate(); return; }
+  if(EXIST_FOR===d) { gate(); return; }
+  const my=++PHONE_SEQ; EXIST=null; EXIST_FOR="";
+  let j={count:0,prescriptions:[]};
+  try{ const r=await fetch("api/patients/existing?phone="+encodeURIComponent(d)); if(r.ok) j=await r.json(); }catch(e){}   // a failed look-up never blocks the desk
+  if(my!==PHONE_SEQ) return;
+  EXIST=j; EXIST_FOR=d; gate();
+}
+$("#token").addEventListener("input",()=>{ SEND_KEY=null; gate(); });
+$("#phone").addEventListener("input",()=>{ SEND_KEY=null; ACK=""; gate(); checkExisting(); });
+$("#proceed").onclick=()=>{ ACK=phoneDigits($("#phone").value); gate(); };
+
+// ---- autocomplete (a list of thousands is never shown: type, then choose) ---------------------------------
+function suggest(input,list,fetcher,label,onPick){
+  let items=[],idx=-1,timer=null,seq=0;
+  function close(){ list.hidden=true; idx=-1; input.setAttribute("aria-expanded","false"); input.removeAttribute("aria-activedescendant"); }
+  function draw(){
+    list.innerHTML=items.map((it,i)=>'<li role="option" id="'+list.id+'-'+i+'" data-i="'+i+'" aria-selected="'+(i===idx)+'">'+label(it)+'</li>').join("");
+    list.hidden=!items.length; input.setAttribute("aria-expanded",String(!!items.length));
+    if(idx>=0) input.setAttribute("aria-activedescendant",list.id+"-"+idx);
+  }
+  function pick(i){ const it=items[i]; close(); if(it) onPick(it); }
+  input.addEventListener("input",()=>{
+    clearTimeout(timer);
+    timer=setTimeout(async()=>{ const my=++seq; let r=[]; try{ r=await fetcher(input.value); }catch(e){} if(my!==seq) return; items=r||[]; idx=-1; draw(); },200);
+  });
+  input.addEventListener("keydown",e=>{
+    if(list.hidden) return;
+    if(e.key==="ArrowDown"){ e.preventDefault(); idx=Math.min(items.length-1,idx+1); draw(); }
+    else if(e.key==="ArrowUp"){ e.preventDefault(); idx=Math.max(0,idx-1); draw(); }
+    else if(e.key==="Enter"&&idx>=0){ e.preventDefault(); pick(idx); }
+    else if(e.key==="Escape"){ close(); }
+  });
+  list.addEventListener("mousedown",e=>{ const li=e.target.closest("li"); if(li){ e.preventDefault(); pick(+li.dataset.i); } });
+  input.addEventListener("blur",()=>setTimeout(close,150));
+}
+async function searchPatients(q){
+  q=String(q||"").trim(); if(q.length<2) return [];
+  const r=await fetch("api/patients/search?q="+encodeURIComponent(/[A-Za-z]/.test(q)?q:phoneDigits(q)||q)); return r.ok?(await r.json()).patients:[];
+}
+function patientLabel(p){ return '<b>'+esc(fmtPhone(p.phone))+'</b> · '+esc(p.name||"name not read")+' <span class="none">'+plural(p.prescriptions,"prescription")+'</span>'; }
+suggest($("#phone"),$("#phone-sugg"),async q=>{ const d=phoneDigits(q).replace(/\D/g,""); return d.length<2?[]:searchPatients(d); },patientLabel,
+  p=>{ $("#phone").value=p.phone; ACK=""; checkExisting(); });
+suggest($("#psearch"),$("#psearch-sugg"),searchPatients,patientLabel,async p=>{ $("#psearch").value=""; await showPatient(p); });
+
+// ---- the pages to send ---------------------------------------------------------------------------------
 const dz=$("#dz"),fileInput=$("#files"),camInput=$("#camera");
 // What the server will accept (settings, GET api/upload/limits). The server checks everything
 // again: this only lets the screen say it sooner. Defaults are used only if that call fails.
 let LIMITS={max_files:10,max_file_mb:50,max_total_mb:150,min_short_side_px:600};
 const OK_TYPES=["application/pdf","image/png","image/jpeg","image/tiff"];
 const OK_EXT=/\.(pdf|png|jpe?g|tiff?)$/i;
-let PAGES=[],NEXT_ID=1,SEND_KEY=null,SENDING=false;
+let PAGES=[],NEXT_ID=1;
 
 function limitText(){ return "JPG, PNG, TIFF or PDF · up to "+LIMITS.max_files+" files · each up to "+LIMITS.max_file_mb+" MB"; }
 $("#dzsub").textContent=limitText();
@@ -243,10 +394,13 @@ async function plainError(r){
 }
 $("#go").onclick=async()=>{
   if(SENDING) return;                               // pressed twice while the files are still going up: nothing
+  const token=$("#token").value.trim(), phone=phoneDigits($("#phone").value);
+  if(!tokenOk(token)||!phoneOk(phone)){ say("Please enter the token number and a 10-digit mobile number first."); return; }
   if(!PAGES.length){ say("Please add at least one photo, PDF or scan."); return; }
   say(""); SENDING=true; render();
   const sent=PAGES.slice();
   const fd=new FormData();
+  fd.append("token_no",token); fd.append("phone",phone);
   fd.append("grouping",sent.length>1&&document.querySelector('input[name=grp]:checked').value==="one_document"?"one_document":"separate");
   for(const p of sent) fd.append("files",p.file,p.file.name);
   SEND_KEY=SEND_KEY||newKey();                       // the same Send retried = the same job
@@ -256,28 +410,78 @@ $("#go").onclick=async()=>{
   catch(e){ say("We could not reach the server. Please check the connection and try again."); $("#hint").textContent=""; SENDING=false; render(); return; }
   if(!r.ok){ say(await plainError(r)); $("#hint").textContent=""; if(r.status<500) SEND_KEY=null; SENDING=false; render(); return; }
   const id=(await r.json()).job_id;
-  // accepted: it is read in the background. The form is free again straight away for the next prescription.
-  JOBS.unshift({id,label:"Batch "+(++BATCH),names:sent.map(p=>p.file.name),j:null,finished:false,err:""});
+  // accepted: it is read in the background. The desk is free straight away for the next patient: the token and
+  // mobile number are cleared so the next paper is never filed under this one by mistake.
+  JOBS.unshift({id,token,phone,names:sent.map(p=>p.file.name),j:null,finished:false,err:""});
   for(const p of sent) if(p.url) URL.revokeObjectURL(p.url);
-  PAGES=[]; SEND_KEY=null; SENDING=false; $("#hint").textContent=""; render();
+  PAGES=[]; SEND_KEY=null; SENDING=false; $("#hint").textContent="";
+  $("#token").value=""; $("#phone").value=""; ACK=""; EXIST=null; EXIST_FOR=""; gate();
   $("#emr-card").hidden=false; renderJobs(); poll();
 };
 
-let RESULTS=[];                         // {label, r}: newest first, across every batch
-async function loadResult(job){         // the connector's JSON, shown as-is (UP-S3 placeholder)
+// ---- the result, shown under the patient (name + mobile number), every part collapsible --------------------
+const GROUPS=new Map(), OPEN=new Set();               // GROUPS: "phone|name" -> {phone,name,docs:Map(document_id -> doc)}
+let SEQ=0;
+function gkey(phone,name){ return phone+"|"+(name||""); }
+function addDoc(phone,name,doc){
+  const k=gkey(phone,name); let g=GROUPS.get(k);
+  if(!g){ g={key:k,phone,name:name||null,docs:new Map()}; GROUPS.set(k,g); }
+  const old=g.docs.get(doc.document_id)||{};
+  g.docs.set(doc.document_id,{...old,...doc,seq:old.seq||++SEQ});
+  return g;
+}
+async function showPatient(p){                         // chosen from the search: load that patient's prescriptions
+  let list=[];
+  try{ const r=await fetch("api/patients/prescriptions?phone="+encodeURIComponent(p.phone)+"&name="+encodeURIComponent(p.name||"")); if(r.ok) list=(await r.json()).prescriptions; }catch(e){}
+  for(const d of list) addDoc(p.phone,p.name,d);
+  OPEN.add("g:"+gkey(p.phone,p.name)); renderGroups();
+  const el=document.querySelector('details.grp[data-k="'+CSS.escape(gkey(p.phone,p.name))+'"]'); if(el) el.scrollIntoView({block:"nearest"});
+}
+async function loadResultsOf(job){                     // the finished job's JSON: put each document under its patient
   let j;
   try{ const r=await fetch("api/jobs/"+job.id+"/result.json"); if(!r.ok) throw 0; j=await r.json(); }
-  catch(e){ $("#resnotice").textContent="The result of "+job.label+" could not be loaded. Please try again in a moment."; $("#result-card").hidden=false; return; }
-  const got=(j.results||[]).map((r,i)=>({label:job.label+" · "+(r.filename||("Document "+(i+1))),r}));
-  RESULTS=got.concat(RESULTS);
-  const sel=$("#resdoc");
-  sel.innerHTML=RESULTS.map((x,i)=>'<option value="'+i+'">'+esc(x.label)+'</option>').join("");
-  sel.hidden=RESULTS.length<2; sel.onchange=()=>showResult(+sel.value);
-  $("#result-card").hidden=false; sel.value="0"; showResult(0);
+  catch(e){ job.err="The result could not be loaded. Please try again in a moment."; return; }
+  for(const r of (j.results||[])){
+    const it=r.intake||{}, name=it.patient_name||((r.patient||{}).name||{}).value||null, phone=it.phone||job.phone;
+    addDoc(phone,name,{document_id:r.document_id,token_no:it.token_no||job.token,filename:r.filename,status:r.status,result:r,uploaded:new Date().toISOString()});
+    OPEN.add("g:"+gkey(phone,name)); OPEN.add("d:"+r.document_id);
+  }
+  renderGroups();
 }
+async function loadDoc(id){
+  for(const g of GROUPS.values()){ const d=g.docs.get(id); if(d&&!d.result&&!d.loading){
+    d.loading=true;
+    try{ const r=await fetch("api/documents/"+id+"/result.json"); if(r.ok) d.result=await r.json(); else d.err="This result could not be loaded."; }catch(e){ d.err="This result could not be loaded."; }
+    d.loading=false; renderGroups(); } }
+}
+function renderGroups(){
+  const list=[...GROUPS.values()].sort((a,b)=>Math.max(0,...[...b.docs.values()].map(d=>d.seq))-Math.max(0,...[...a.docs.values()].map(d=>d.seq)));
+  $("#groups").innerHTML=list.length?list.map(g=>{
+    const docs=[...g.docs.values()].sort((a,b)=>b.seq-a.seq);
+    return '<details class="cf-det grp" data-k="'+esc(g.key)+'"'+(OPEN.has("g:"+g.key)?" open":"")+'><summary><b>'+esc(g.name||"Name not read")+'</b> · '
+      +esc(fmtPhone(g.phone))+' <span class="pill">'+plural(docs.length,"prescription")+'</span></summary><div class="det-body">'
+      +docs.map(docHtml).join("")+'</div></details>';
+  }).join(""):'<p class="muted" style="margin-top:12px">Nothing here yet. Upload a prescription, or find a patient above.</p>';
+}
+function docHtml(d){
+  const r=d.result, st=r?(r.status==="complete"?'<span class="pill ok">all values accepted</span>':r.status==="needs_check"?'<span class="pill warn">needs a check</span>':'<span class="pill">'+esc(r.status||"")+'</span>'):"";
+  const body=r?summaryHtml(r)+jsonBlock(r):(d.err?'<p class="jerr">'+esc(d.err)+'</p>':'<p class="muted">Loading…</p>');
+  return '<details class="cf-det doc" data-d="'+esc(d.document_id)+'"'+(OPEN.has("d:"+d.document_id)?" open":"")+'><summary>Token <b>'+esc(d.token_no||"—")+'</b> · '
+    +esc(fmtDate(d.uploaded))+' · '+esc(d.filename||"")+' '+st+'</summary><div class="det-body">'+body+'</div></details>';
+}
+function jsonBlock(r){
+  const dl=r.document_id?'<a class="btn btn-ghost btn-sm" href="api/documents/'+esc(r.document_id)+'/result.json?download=true" download>Download JSON</a>':"";
+  return '<details class="cf-det sec"><summary>Result (JSON)</summary><div class="det-body">'+dl+'<pre class="resjson" tabindex="0" aria-label="Result JSON">'+esc(JSON.stringify(r,null,2))+'</pre></div></details>';
+}
+$("#groups").addEventListener("toggle",e=>{                  // keep what is open open when the list is drawn again
+  const el=e.target; if(!(el instanceof HTMLDetailsElement)) return;
+  const key=el.classList.contains("grp")?"g:"+el.dataset.k:el.classList.contains("doc")?"d:"+el.dataset.d:null;
+  if(!key) return;
+  if(el.open){ OPEN.add(key); if(el.classList.contains("doc")) loadDoc(el.dataset.d); } else OPEN.delete(key);
+},true);
 
-// ---- the four tables shown above the JSON: patient, doctor, doctor booking, lab tests ----------------
-// Only what the result JSON says: a value that is not on the page is shown as such, never filled in.
+// ---- the tables shown for one prescription: patient, organisation, doctor, doctor booking, lab tests, visits ----
+// Only what the result JSON says: a value that is not on the page is not shown, never filled in.
 function vget(v){ return (v&&typeof v==="object"&&"value" in v)?v:{value:null,status:"absent",reason:null}; }
 function vcell(v){
   v=vget(v); const none=v.value===null||v.value===undefined||v.value==="";
@@ -286,15 +490,15 @@ function vcell(v){
   if(!none&&v.status==="needs_check") t+=' <span class="pill warn" title="'+esc(v.reason||"")+'">needs a check</span>';
   return t;
 }
+function section(id,title,inner){ return '<details class="cf-det sec sumtbl" data-tbl="'+id+'" open><summary>'+title+'</summary><div class="det-body">'+inner+'</div></details>'; }
 function rowsTable(id,title,rows,note){
   // a value that is not on the page is not shown at all (the cell is "")
   const shown=rows.filter(r=>r[1]!=="");
-  return '<section class="sumtbl" id="'+id+'"><h3>'+title+'</h3><div class="tbox"><table><tbody>'
+  return section(id,title,'<div class="tbox"><table><tbody>'
     +(shown.length?shown.map(r=>'<tr><th scope="row">'+esc(r[0])+'</th><td>'+r[1]+'</td></tr>').join("")
       :'<tr><td class="none">Nothing readable on the page.</td></tr>')
-    +'</tbody></table></div>'+(shown.length&&note?'<p class="note">'+note+'</p>':'')+'</section>';
+    +'</tbody></table></div>'+(shown.length&&note?'<p class="note">'+note+'</p>':''));
 }
-function plural(n,u){ return n+" "+u+(n===1?"":"s"); }
 function bookingOf(r){
   const f=r.follow_up||{}, text=f.text||f.value||"";
   const doc=vget((r.doctor||{}).name).value;
@@ -314,22 +518,26 @@ function bookingOf(r){
   return {needed,cls,when,text,doc,tests,bring,status:f.status};
 }
 function summaryHtml(r){
-  r=r||{}; const P=r.patient||{}, D=r.doctor||{}, C=D.clinic||{};
+  r=r||{}; const P=r.patient||{}, D=r.doctor||{}, O=r.organization||D.clinic||{}, V=r.visits||[];
   const patient=rowsTable("tbl-patient","Patient details",[
     ["Name",vcell(P.name)],["Age",vcell(P.age_text)],["Date of birth",vcell(P.dob)],["Sex",vcell(P.sex)],
-    ["Patient ID (MRN)",vcell(P.mrn)],["Phone",vcell(P.phone)],["Address",vcell(P.address)]]);
+    ["Patient ID (MRN)",vcell(P.mrn)],["Phone",vcell(P.phone)],["Address",vcell(P.address)],
+    ["Token number",r.intake&&r.intake.token_no?esc(r.intake.token_no):""],["Mobile number (typed at upload)",r.intake&&r.intake.phone?esc(fmtPhone(r.intake.phone)):""]]);
+  const org=rowsTable("tbl-organization","Organisation (hospital / clinic)",[
+    ["Name",vcell(O.name)],["Address",vcell(O.address)],["Phone",vcell(O.phone)]],
+    "Read from the letterhead or stamp. A government hospital may print only its name and no doctor.");
   const doctor=rowsTable("tbl-doctor","Doctor details",[
     ["Name",vcell(D.name)],["Registration no.",vcell(D.reg_no)],["Department",vcell(D.department)],
     ["Designation",vcell(D.designation)],["Qualification",vcell(D.qualification)],
-    ["Clinic",vcell(C.name)],["Clinic phone",vcell(C.phone)],["Clinic address",vcell(C.address)],
     ["Stamp on the page",vcell(D.stamp_present)],["Signature on the page",vcell(D.signature_present)]],
     "Stamp and signature are a visual guess by the model and are not verified.");   // shown only when a stamp / signature row is
-  const b=bookingOf(r);
+  const b=bookingOf(r), lat=V.find(v=>v.is_latest);
   const booking=rowsTable("tbl-booking","Doctor booking",[
     ["Booking needed",'<span class="pill '+b.cls+'">'+esc(b.needed)+'</span>'+(b.status==="needs_check"&&b.text?' <span class="pill warn">needs a check</span>':"")],
     ["With",b.doc?esc(b.doc):'<span class="none">doctor not read</span>'],
     ["When",b.when?esc(b.when):'<span class="none">—</span>'],
     ["As written",b.text?esc(b.text):'<span class="none">—</span>'],
+    ["From the visit",lat&&V.length>1?esc(lat.where+(lat.date_text?" · dated "+lat.date_text:"")+" (the latest of "+V.length+" dated visits)"):""],
     ["Bring to the visit",b.bring&&b.tests.length?esc("Results of: "+b.tests.join(", ")):b.bring?"Reports (as written)":'<span class="none">nothing written</span>']],
     b.needed==="Yes"?"The date is not guessed: it is counted from the day of the visit written on the prescription.":"");
   const allLabs=r.lab_tests||[];
@@ -342,39 +550,36 @@ function summaryHtml(r){
   const prep=r.lab_preparation||[];
   const labRows=labs.map((t,i)=>{
     const ctx=(t.context||[]).map(c=>esc(c.text)+' <span class="none">('+esc(c.kind)+')</span>').join("<br>");
-    const code=t.code?esc(t.code_display||t.code)+' <span class="none">'+esc(t.code_system||"")+" "+esc(t.code)+'</span>':'<span class="none">not matched to a standard test</span>';
+    const std=t.standard_name?esc(t.standard_name)+' <span class="none">('+esc(t.standard_source||"")+')</span>'
+      +(t.code?'<br><span class="none">'+esc(t.code_system||"")+" "+esc(t.code)+'</span>':"")
+      :t.code?esc(t.code_display||t.code)+' <span class="none">'+esc(t.code_system||"")+" "+esc(t.code)+'</span>':'<span class="none">not matched to a standard test</span>';
     const pr=(t.preparation||[]).length?t.preparation.map(esc).join("<br>"):'<span class="none">none written</span>';
     const st=t.status==="accepted"?'<span class="pill ok">read</span>':t.status==="rejected"?'<span class="pill err">rejected</span>'
       :'<span class="pill warn" title="'+esc(t.reason||"")+'">needs a check</span>';
-    return '<tr><td>'+(i+1)+'</td><td>'+esc(t.as_written||t.text||"")+'</td><td>'+code+'</td><td>'+pr+'</td><td>'+(ctx||'<span class="none">—</span>')+'</td><td>'+st+'</td></tr>';
+    return '<tr><td>'+(i+1)+'</td><td>'+esc(t.as_written||t.text||"")+'</td><td>'+std+'</td><td>'+pr+'</td><td>'+(ctx||'<span class="none">—</span>')+'</td><td>'+st+'</td></tr>';
   }).join("");
   const droppedNote=dropped.length?'<p class="note">Left out because they look like medicines, not tests: '+dropped.map(t=>esc(t.as_written||t.text||"")).join("; ")+'.</p>':"";
   const unrecNote=unrec.length?'<p class="note">Read from the page but not recognised as a test name, so not listed above (please check the page): '+unrec.map(t=>esc(t.as_written||t.text||"")).join("; ")+'.</p>':"";
   const unconfNote=unconf.length?'<p class="note">The reader suggested these, but nothing on the page supports them, so they are not listed as tests (check the page): '+unconf.map(t=>esc(t.as_written||t.text||"")).join("; ")+'.</p>':"";
   const prepOnly=!labs.length&&prep.length?'<p class="note">Preparation written on the page: '+prep.map(p=>esc(p.text)).join("; ")+'</p>':"";
-  const lab='<section class="sumtbl" id="tbl-labs"><h3>Lab tests <span class="pill">'+labs.length+'</span></h3>'
-    +(labs.length?'<div class="tbox"><table><thead><tr><th>#</th><th>Test (as written)</th><th>Standard name</th><th>Preparation</th><th>Why (linked to)</th><th>Check</th></tr></thead><tbody>'+labRows+'</tbody></table></div>'
-      :'<p class="none" style="margin:4px 0">No lab test is written on this page.</p>')+prepOnly+unrecNote+unconfNote+droppedNote+'</section>';
-  return patient+doctor+booking+lab;
+  const lab=section("tbl-labs",'Lab tests <span class="pill">'+labs.length+'</span>',
+    (labs.length?'<div class="tbox"><table><thead><tr><th>#</th><th>Test (as written)</th><th>Standard name</th><th>Preparation</th><th>Why (linked to)</th><th>Check</th></tr></thead><tbody>'+labRows+'</tbody></table></div>'
+      :'<p class="none" style="margin:4px 0">No lab test is written on this page.</p>')+prepOnly+unrecNote+unconfNote+droppedNote);
+  const visRows=V.map(v=>'<tr><td>'+esc(v.where)+'</td><td>'+(v.date_text?esc(v.date_text):'<span class="none">no date read</span>')+'</td><td>'
+    +(v.lab_tests.length?esc(v.lab_tests.join(", ")):'<span class="none">none</span>')+'</td><td>'+(v.follow_up?esc(v.follow_up):'<span class="none">—</span>')
+    +'</td><td>'+(v.is_latest?'<span class="pill ok">latest — used above</span>':'<span class="pill">earlier</span>')+'</td></tr>').join("");
+  const visits=V.length>1||(V.length===1&&V[0].date)?section("tbl-visits",'Dated visits found on the pages <span class="pill">'+V.length+'</span>',
+    '<div class="tbox"><table><thead><tr><th>Where</th><th>Date (as written)</th><th>Lab tests</th><th>Follow-up</th><th></th></tr></thead><tbody>'+visRows+'</tbody></table></div>'
+    +'<p class="note">The lab tests and the doctor booking above are those of the latest dated visit. An entry with no readable date is never ranked above one with a date.</p>'):"";
+  return patient+org+doctor+booking+lab+visits;
 }
 
-function showResult(i){
-  const r=(RESULTS[i]||{}).r||{};
-  $("#summary").innerHTML=summaryHtml(r);
-  $("#resjson").textContent=JSON.stringify(r,null,2);
-  $("#resnotice").textContent=r.notice||"";
-  const n=r.needs_check_count||0;
-  $("#respill").innerHTML=r.status==="needs_check"||n?'<span class="pill warn">'+(n?n+(n===1?" value needs":" values need")+' a check':'needs a check')+'</span>'
-    :r.status==="complete"?'<span class="pill ok">all values accepted</span>':'<span class="pill">'+esc(r.status||"")+'</span>';
-  const dl=$("#resdl");
-  if(r.document_id){ dl.href="api/documents/"+r.document_id+"/result.json?download=true"; dl.hidden=false; } else dl.hidden=true;
-}
-
+// ---- progress, per patient (not per batch) --------------------------------------------------------------
 function poll(){
   clearTimeout(TIMER);
   const active=JOBS.filter(x=>!x.finished);
   if(!active.length){ if(!SENDING) $("#hint").textContent=""; return; }
-  if(!SENDING) $("#hint").textContent=active.length+(active.length===1?" batch":" batches")+" being read…";
+  if(!SENDING) $("#hint").textContent=active.length+(active.length===1?" prescription":" prescriptions")+" being read…";
   TIMER=setTimeout(async()=>{
     await Promise.all(active.map(refreshJob));
     renderJobs(); poll();
@@ -384,13 +589,12 @@ async function refreshJob(job){
   let j;
   try{ const r=await fetch("api/jobs/"+job.id); if(!r.ok) return; j=await r.json(); }catch(e){ return; }   // a blip: try again next time
   job.j=j;
-  if(j.state==="done"||j.state==="review"){ job.finished=true; await loadResult(job); }
+  if(j.state==="done"||j.state==="review"){ job.finished=true; await loadResultsOf(job); }
   else if(j.state==="error"||j.state==="mismatch"){
     job.finished=true;
     job.err=j.error||j.documents.filter(d=>d.error).map(d=>d.filename+": "+d.error.replace(/^rescan: /,"")).join(" ")||"Processing stopped. Please try again.";
   }
 }
-
 function jobGrid(j){
   let h='<tr><th class="doc">Document</th>'+STAGES.map(s=>'<th>'+STAGE_LABEL[s]+'</th>').join("")+'<th>Done</th></tr>';
   h+=j.documents.map(d=>{
@@ -407,17 +611,54 @@ function jobGrid(j){
   }).join("");
   return h;
 }
+const JOB_CLOSED=new Set();
 function renderJobs(){
   $("#jobs").innerHTML=JOBS.map(job=>{
     const j=job.j, running=!job.finished;
+    const who=(j&&j.patient_name)||null;
     const state=job.err?'<span class="pill warn">stopped</span>':running?(j&&j.state==="running"?'<span class="pill">reading…</span>':'<span class="pill">waiting…</span>'):'<span class="pill ok">done</span>';
-    return '<div class="jobbox"><h3>'+esc(job.label)+' '+state+'<span class="muted" style="font-weight:400">'+esc(job.names.join(", "))+'</span></h3>'
+    return '<details class="cf-det jobbox" data-j="'+esc(job.id)+'"'+(JOB_CLOSED.has(job.id)?"":" open")+'><summary><b>'+esc(who||"Reading the name…")+'</b> · '+esc(fmtPhone(job.phone))
+      +' · token '+esc(job.token)+' '+state+'</summary><div class="det-body">'
       +(job.err?'<div class="jerr" role="alert">'+esc(job.err)+'</div>':'')
-      +(j?'<div style="overflow-x:auto"><table class="emr-grid">'+jobGrid(j)+'</table></div>':'<div class="muted">sent — waiting to start…</div>')+'</div>';
+      +(j?'<div style="overflow-x:auto"><table class="emr-grid">'+jobGrid(j)+'</table></div>':'<div class="muted">sent — waiting to start…</div>')
+      +'<div class="muted" style="margin-top:6px">'+esc(job.names.join(", "))+'</div></div></details>';
   }).join("");
 }
+$("#jobs").addEventListener("toggle",e=>{ const el=e.target; if(el instanceof HTMLDetailsElement&&el.dataset.j){ if(el.open) JOB_CLOSED.delete(el.dataset.j); else JOB_CLOSED.add(el.dataset.j); } },true);
 
-function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// ---- the lab test mapping table -------------------------------------------------------------------------
+let MAPROWS=null;
+async function loadMap(){
+  try{ const r=await fetch("api/mappings/lab"); if(!r.ok) throw 0; MAPROWS=(await r.json()).rows; }
+  catch(e){ $("#maptbl").innerHTML='<tr><td class="none">The mapping table could not be loaded.</td></tr>'; return; }
+  drawMap();
+}
+function drawMap(){
+  if(!MAPROWS) return;
+  const f=$("#mapfilter").value.trim().toLowerCase();
+  const rows=MAPROWS.filter(r=>!f||r.alias.toLowerCase().includes(f)||r.canonical.toLowerCase().includes(f));
+  const canon=new Set(MAPROWS.filter(r=>r.enabled).map(r=>r.canonical));
+  $("#map-count").textContent="· "+MAPROWS.filter(r=>r.enabled).length+" written names → "+canon.size+" standard tests";
+  $("#maptbl").innerHTML='<thead><tr><th>Written as</th><th></th><th>Standard test</th><th>Code</th><th>Source</th><th>Note</th><th>On</th></tr></thead><tbody>'
+    +(rows.length?rows.map(r=>'<tr class="'+(r.enabled?"":"off")+'"><td>'+esc(r.alias)+'</td><td class="none">→</td><td><b>'+esc(r.canonical)+'</b></td><td>'+esc(r.loinc||"")+'</td><td>'+esc(r.source)+'</td><td>'+esc(r.note||"")
+      +'</td><td><input type="checkbox" data-k="'+esc(r.alias_key)+'" aria-label="Use '+esc(r.alias)+'"'+(r.enabled?" checked":"")+'/></td></tr>').join("")
+      :'<tr><td colspan="7" class="none">No row matches.</td></tr>')+'</tbody>';
+}
+$("#map-det").addEventListener("toggle",()=>{ if($("#map-det").open&&!MAPROWS) loadMap(); });
+$("#mapfilter").addEventListener("input",drawMap);
+$("#maptbl").addEventListener("change",async e=>{
+  const c=e.target.closest("input[type=checkbox][data-k]"); if(!c) return;
+  try{ const r=await fetch("api/mappings/lab/"+encodeURIComponent(c.dataset.k)+"/enabled",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:c.checked})}); if(!r.ok) throw 0; }
+  catch(err){ c.checked=!c.checked; $("#m-err").textContent="That change could not be saved."; return; }
+  $("#m-err").textContent=""; loadMap();
+});
+$("#m-add").onclick=async()=>{
+  const body={alias:$("#m-alias").value,canonical:$("#m-canon").value,loinc:$("#m-loinc").value,note:$("#m-note").value};
+  let r; try{ r=await fetch("api/mappings/lab",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); }catch(e){ $("#m-err").textContent="We could not reach the server."; return; }
+  if(!r.ok){ $("#m-err").textContent=await plainError(r); return; }
+  $("#m-err").textContent=""; for(const id of ["#m-alias","#m-canon","#m-loinc","#m-note"]) $(id).value=""; loadMap();
+};
+gate(); renderGroups();
 </script>
 </body>
 </html>

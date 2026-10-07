@@ -43,9 +43,9 @@ def client(monkeypatch):
     """The real app with job creation replaced, so nothing touches a database."""
     calls: list[dict] = []
 
-    def fake_create_job(abha, files, patient_ref=None, *, parts=None, idempotency_key=None):
+    def fake_create_job(abha, files, patient_ref=None, *, parts=None, idempotency_key=None, token_no=None, phone=None):
         calls.append({"abha": abha, "files": files, "patient_ref": patient_ref, "parts": parts,
-                      "key": idempotency_key})
+                      "key": idempotency_key, "token_no": token_no, "phone": phone})
         return "job123"
 
     monkeypatch.setattr(webapp, "create_job", fake_create_job)
@@ -54,8 +54,11 @@ def client(monkeypatch):
     return c
 
 
+INTAKE = {"token_no": "T-17", "phone": "9830011234"}
+
+
 def _post(client, files, **data):
-    return client.post("/api/jobs", files=[("files", f) for f in files], data=data)
+    return client.post("/api/jobs", files=[("files", f) for f in files], data={**INTAKE, **data})
 
 
 # ------------------------------------------------------------------ limits endpoint
@@ -135,7 +138,7 @@ def test_the_read_is_bounded_by_the_file_limit(monkeypatch):
     import asyncio
 
     monkeypatch.setattr(webapp, "create_job", lambda *a, **k: "j")
-    asyncio.run(webapp.submit_job(abha=None, patient_ref=None, grouping="separate",
+    asyncio.run(webapp.submit_job(abha=None, patient_ref=None, token_no="T1", phone="9830011234", grouping="separate",
                                   files=[Spy()], idempotency_key=None))
     assert asked == [settings.upload_max_file_bytes + 1]
 
@@ -297,9 +300,9 @@ def test_old_keys_expire(monkeypatch):
 def test_the_key_header_is_passed_through_and_a_malformed_one_is_refused(client):
     assert _post(client, [("a.png", _png())]).status_code == 202
     assert client.calls[-1]["key"] is None
-    r = client.post("/api/jobs", files=[("files", ("a.png", _png()))], headers={"Idempotency-Key": "send-123_x"})
+    r = client.post("/api/jobs", files=[("files", ("a.png", _png()))], data=INTAKE, headers={"Idempotency-Key": "send-123_x"})
     assert r.status_code == 202 and client.calls[-1]["key"] == "send-123_x"
-    bad = client.post("/api/jobs", files=[("files", ("a.png", _png()))], headers={"Idempotency-Key": "x" * 80})
+    bad = client.post("/api/jobs", files=[("files", ("a.png", _png()))], data=INTAKE, headers={"Idempotency-Key": "x" * 80})
     assert bad.status_code == 422 and "reload the page" in bad.json()["detail"]
 
 
@@ -336,3 +339,31 @@ def test_the_public_job_view_never_carries_the_originals():
     job = jobs.Job(id="j", abha=None)
     job.docs = [jobs.DocProg(filename="one (2 pages).pdf", parts=[("a.png", b"secret-bytes")])]
     assert "secret-bytes" not in repr(job.public()) and "parts" not in job.public()["documents"][0]
+
+
+# ---- token number and mobile number (the front desk enters both before anything is uploaded)
+@pytest.mark.parametrize("raw,expected", [("9830011234", "9830011234"), ("+91 98300 11234", "9830011234"),
+                                          ("919830011234", "9830011234"), ("09830011234", "9830011234"), ("98300-11234", "9830011234")])
+def test_a_mobile_number_is_kept_as_its_ten_digits(raw, expected):
+    assert upload.clean_phone(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["", "12345", "5830011234", "98300112345", "98300x1234", "+1 9830011234"])
+def test_a_bad_mobile_number_is_refused_in_plain_words(raw):
+    with pytest.raises(upload.UploadError):
+        upload.clean_phone(raw)
+
+
+@pytest.mark.parametrize("raw", ["", " ", "T 17", "../x", "x" * 21, "ü1"])
+def test_a_bad_token_is_refused(raw):
+    with pytest.raises(upload.UploadError):
+        upload.clean_token(raw)
+
+
+def test_the_upload_is_refused_without_the_token_or_the_mobile_number_and_both_are_passed_on(client):
+    r = client.post("/api/jobs", files=[("files", ("a.png", _png()))], data={"phone": "9830011234"})
+    assert r.status_code == 422 and "token" in r.json()["detail"].lower() and not client.calls
+    r = client.post("/api/jobs", files=[("files", ("a.png", _png()))], data={"token_no": "T-1"})
+    assert r.status_code == 422 and "mobile" in r.json()["detail"].lower() and not client.calls
+    ok = _post(client, [("a.png", _png())])
+    assert ok.status_code == 202 and client.calls[-1]["token_no"] == "T-17" and client.calls[-1]["phone"] == "9830011234"

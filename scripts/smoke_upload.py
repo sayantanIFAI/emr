@@ -47,7 +47,7 @@ def main() -> int:
     c = httpx.Client(base_url=base, auth=(user, pw), timeout=60)
     print("healthz:", c.get("/healthz").json())
     r = c.post("/api/jobs", files=[("files", ("smoke_rx.png", make_image(), "image/png"))],
-               data={"grouping": "separate"})
+               data={"grouping": "separate", "token_no": "SMOKE-1", "phone": "9000000001"})
     print("submit:", r.status_code, r.text[:200])
     r.raise_for_status()
     job = r.json()["job_id"]

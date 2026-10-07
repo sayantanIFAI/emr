@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import contextlib
 import json
 import uuid
@@ -40,6 +42,12 @@ async def _lifespan(_app: FastAPI):
 
     startup_checks()               # the same checks however the app is started (python -m ... or uvicorn ...:app)
     start_in_background()          # pick up uploads a restart interrupted (OUT-S3)
+    try:
+        from ..extract import lab_mapping
+
+        lab_mapping.ensure_seed()  # the mapping table's built-in rows (only the ones not there yet)
+    except Exception as exc:  # noqa: BLE001 - a database without migration 0010 still serves (the seed answers)
+        logging.getLogger(__name__).warning("lab_mapping_seed_failed: %s", str(exc)[:150])
     yield
 
 
@@ -143,6 +151,60 @@ def registry_save(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return {"ok": True, "patient": row}
 
 
+@app.get("/api/patients/search")
+def patients_search(q: str = "") -> dict[str, Any]:
+    """Autocomplete: patients (mobile + name) whose mobile number starts with what was typed, or whose name contains it."""
+    from . import patients
+    return {"patients": patients.search(q)}
+
+
+@app.get("/api/patients/prescriptions")
+def patients_prescriptions(phone: str, name: str | None = None) -> dict[str, Any]:
+    from . import patients
+    return {"prescriptions": patients.prescriptions(phone, name)}
+
+
+@app.get("/api/patients/existing")
+def patients_existing(phone: str) -> dict[str, Any]:
+    """Prescriptions already uploaded for this mobile number (the upload screen warns before another is added)."""
+    from . import patients
+    try:
+        digits = upload.clean_phone(phone)
+    except upload.UploadError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    return patients.existing(digits or "")
+
+
+@app.get("/api/mappings/lab")
+def lab_mappings() -> dict[str, Any]:
+    """The whole lab-name mapping table (many written names -> one standard test)."""
+    from ..extract import lab_mapping
+    with session_scope() as sess:
+        return {"rows": lab_mapping.table(sess)}
+
+
+@app.post("/api/mappings/lab")
+def lab_mapping_save(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    from ..extract import lab_mapping
+    try:
+        with session_scope() as sess:
+            row = lab_mapping.upsert(sess, str(body.get("alias") or ""), str(body.get("canonical") or ""),
+                                     body.get("loinc"), body.get("note"))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"ok": True, "row": row}
+
+
+@app.post("/api/mappings/lab/{alias_key}/enabled")
+def lab_mapping_enabled(alias_key: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    from ..extract import lab_mapping
+    with session_scope() as sess:
+        ok = lab_mapping.set_enabled(sess, alias_key[:80], bool(body.get("enabled")))
+    if not ok:
+        raise HTTPException(404, "unknown mapping row")
+    return {"ok": True}
+
+
 @app.get("/api/upload/limits")
 def upload_limits() -> dict[str, Any]:
     """What the upload screen may tell the person before Send (all from settings)."""
@@ -153,6 +215,8 @@ def upload_limits() -> dict[str, Any]:
 async def submit_job(
     abha: str | None = Form(default=None),
     patient_ref: str | None = Form(default=None),
+    token_no: str | None = Form(default=None),
+    phone: str | None = Form(default=None),
     grouping: str = Form(default="separate"),
     files: list[UploadFile] = File(...),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -168,6 +232,9 @@ async def submit_job(
         upload.LIMITER.check()                 # before reading any bytes
         abha_n = upload.normalize_abha(abha) if settings.abha_enabled else None   # not asked for: ignored, not validated
         ref = upload.clean_patient_ref(patient_ref)
+        need = settings.upload_require_intake              # the front desk enters the token and the mobile number first
+        token = upload.clean_token(token_no, required=need)
+        mobile = upload.clean_phone(phone, required=need)
         if len(files) > settings.upload_max_files:        # before reading any bytes
             raise upload.UploadError(f"You can send up to {settings.upload_max_files} files at once.")
         cap = settings.upload_max_file_bytes
@@ -181,7 +248,7 @@ async def submit_job(
     if key and not (len(key) <= 64 and key.replace("-", "").replace("_", "").isalnum()):
         raise HTTPException(422, "Invalid request, please reload the page and try again.")
     jid = create_job(abha_n, [(i.name, i.data) for i in items], patient_ref=ref,
-                     parts=[i.parts for i in items], idempotency_key=key or None)
+                     parts=[i.parts for i in items], idempotency_key=key or None, token_no=token, phone=mobile)
     return {"job_id": jid, "documents": len(items)}
 
 

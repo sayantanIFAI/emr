@@ -29,7 +29,7 @@ def run(base: str, auth: tuple[str, str], key: list[dict], img_dir: Path, out: P
         while todo and len(pending) < concurrency:
             k = todo.pop(0)
             r = c.post("/api/jobs", files=[("files", (k["image"], (img_dir / k["image"]).read_bytes(), "image/png"))],
-                       data={"grouping": "separate"}, headers={"Idempotency-Key": f"live-{k['id']}"})
+                       data={"grouping": "separate", "token_no": f"EVAL-{k['id']}"[:20], "phone": "9000000002"}, headers={"Idempotency-Key": f"live-{k['id']}"})
             r.raise_for_status()
             pending[k["id"]] = (r.json()["job_id"], time.time())
         for kid, (jid, t0) in list(pending.items()):
