@@ -19,6 +19,7 @@ def lexicon(monkeypatch):
     monkeypatch.setattr(MR, "medicine_match", lambda text, lx=None: (lex.match(MR.first_word(text)) if text else None))
     monkeypatch.setattr(MR.indian_codes, "drug_lookup", lambda t, path=None: None)
     monkeypatch.setattr(MR.indian_codes, "drugs", lambda path=None: None)
+    monkeypatch.setattr(settings, "llm_resolve_medicines", True)     # off by default (lab tests are what matter)
     return lex
 
 
@@ -83,6 +84,12 @@ def test_a_call_that_fails_costs_nothing(lexicon):
     class Boom:
         def vlm_json_ex(self, *a, **k): raise RuntimeError("gateway down")
     assert R.resolve_medicines(Boom(), b"img", ["Cap. Soupraz"]) == {}
+
+
+def test_the_medicine_call_is_off_by_default_and_costs_nothing(lexicon, monkeypatch):
+    monkeypatch.setattr(settings, "llm_resolve_medicines", False)
+    cl = _Client({"choices": [1]})
+    assert R.resolve_medicines(cl, b"img", ["Cap. Soupraz"]) == {} and cl.calls == []
 
 
 def test_switched_off_means_no_call(lexicon, monkeypatch):

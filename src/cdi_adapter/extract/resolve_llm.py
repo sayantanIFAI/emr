@@ -190,7 +190,7 @@ def prompt_for_medicines(items: list[tuple[str, list[str]]]) -> str:
 def resolve_medicines(client: Any, image: bytes, names: list[str]) -> dict[str, str]:
     """{medicine as read: reference name the model chose}. Same limits as for tests: only an offered candidate that is
     textually close to the reading, never free text; empty when nothing is pending or the call fails."""
-    if not settings.llm_resolve_enabled:
+    if not settings.llm_resolve_enabled or not settings.llm_resolve_medicines:
         return {}
     items = medicine_resolve.pending(names)
     if not items:

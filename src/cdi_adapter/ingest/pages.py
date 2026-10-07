@@ -165,6 +165,14 @@ def _straighten(arr: np.ndarray, meta: dict[str, Any]) -> tuple[np.ndarray, dict
                        (arr.shape[1], arr.shape[0]))
             meta["steps"].append("perspective")
             gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+        elif quad is None and is_photo and not G.page_fills_frame(gray) and (cut := G.page_cutout(arr)) is not None:
+            # no clean corners (the page runs off the frame, a fold, a shadow): cut the page out by its colour, paint
+            # the floor / bedspread / hand white and crop to the page, so nothing but the prescription goes on
+            arr, (x0, y0, x1, y1), info = cut
+            m = G.affine3(np.array([[1, 0, -x0], [0, 1, -y0]], float))
+            G.add_step(t, {"op": "crop_to_page", "box": [x0, y0, x1, y1], **info}, m, (x1 - x0, y1 - y0))
+            meta["steps"] += ["crop_to_page", "mask_background"]
+            gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
         elif quad is None and is_photo and not G.page_fills_frame(gray):
             # the picture is still readable, so it is never refused: crop to the writing so the background is
             # not read, and flag it (the document is marked "needs check" in the result). A page that fills
@@ -184,7 +192,7 @@ def _straighten(arr: np.ndarray, meta: dict[str, Any]) -> tuple[np.ndarray, dict
                   "check the result, or retake it on a plain background")
 
     # a photo's background fools the axis test: judge orientation on a flat scan or a page cut out of a photo
-    if settings.orient_enabled and (not is_photo or "perspective" in meta["steps"]):
+    if settings.orient_enabled and (not is_photo or "perspective" in meta["steps"] or "crop_to_page" in meta["steps"]):
         ratio = _orientation_ratio(gray)
         if ratio is not None and ratio > settings.quality_sideways_ratio:          # lines run vertically
             k, info = G.decide_sideways(gray)

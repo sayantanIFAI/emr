@@ -317,6 +317,39 @@ def page_fills_frame(gray: np.ndarray) -> bool:
     return float(_thin_ink(small)[inside > 0].mean()) >= 0.002
 
 
+def page_cutout(arr: np.ndarray) -> tuple[np.ndarray, tuple[int, int, int, int], dict[str, Any]] | None:
+    """The page cut out of a photo by its COLOUR (the paper's own colour, bright, the largest connected area), for the
+    pictures where four clean corners cannot be found (a page that runs off the frame, a fold, a shadow). Everything
+    outside the page (floor, bedspread, table, a hand) is painted white and the picture is cropped to the page, so no
+    later step ever sees the background. Only background pixels change; the page's own pixels are untouched.
+    Returns ``(cropped, [x0, y0, x1, y1] in the input, info)``, or ``None`` when the page cannot be told apart from what
+    is around it (then the caller falls back to cropping to the writing)."""
+    from ..recognition import nontext
+
+    h, w = arr.shape[:2]
+    lab = cv2.cvtColor(arr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    mask = nontext.paper_mask(lab, nontext.paper_colour(arr))
+    frac = float(mask.mean())
+    if frac >= 0.97:                                            # nothing to cut away (or the page was not found)
+        return None
+    # the mask comes from a heavy blur, so its edge sits a few px out in the floor. Tighten the thin ring along the edge to
+    # pixels that are themselves paper-bright (closed over pen strokes, so writing near the edge stays); the core is kept as is.
+    paper_l = float(nontext.paper_colour(arr)[0])
+    sharp = cv2.GaussianBlur(lab[..., 0], (0, 0), 1.2)
+    bright = cv2.morphologyEx((sharp >= 0.72 * paper_l).astype(np.uint8), cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    core = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31)))
+    grow = (mask & (bright | core)).astype(np.uint8)
+    ys, xs = np.nonzero(grow)
+    if ys.size == 0:
+        return None
+    pad = 3
+    x0, y0 = max(0, int(xs.min()) - pad), max(0, int(ys.min()) - pad)
+    x1, y1 = min(w, int(xs.max()) + 1 + pad), min(h, int(ys.max()) + 1 + pad)
+    out = arr.copy()
+    out[grow == 0] = 255
+    return np.ascontiguousarray(out[y0:y1, x0:x1]), (x0, y0, x1, y1), {"paper_fraction": round(frac, 3)}
+
+
 def quad_moves_enough(quad: np.ndarray, w: int, h: int) -> bool:
     """True if the corners are clearly away from the picture's corners (not already a full-frame page)."""
     frame = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], float)

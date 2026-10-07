@@ -46,7 +46,9 @@ def paper_mask(lab: np.ndarray, paper: np.ndarray) -> np.ndarray:
     lb = cv2.GaussianBlur(lab[..., 0], (0, 0), 9)
     ab = cv2.GaussianBlur(lab[..., 1:], (0, 0), 9)
     chroma = np.linalg.norm(ab - paper[1:], axis=2)
-    m = ((lb >= 0.70 * paper[0]) & (chroma < 22)).astype(np.uint8)
+    # paper is bright AND its own colour (a bluish phone-light white, say). Floors and stone are grey, fabric is coloured:
+    # both are a different colour from the paper even where they are as bright (MEASURED on 5 real photos).
+    m = ((lb >= 0.55 * paper[0]) & (chroma < 12)).astype(np.uint8)
     m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((31, 31), np.uint8))
     m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((15, 15), np.uint8))
     n, lbl, st, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
