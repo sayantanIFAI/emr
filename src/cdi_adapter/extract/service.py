@@ -169,8 +169,10 @@ def _first_word(text: str) -> str:
     return m.group(0).casefold() if m else ""
 
 
+# route / form are NOT here: the model fills them for anything it lists ("oral", "other"), so they say nothing about
+# whether the entry is a medicine
 _DOSE_KEYS = ("strength", "dose", "frequency_text", "frequency", "duration_days", "timing", "dosage", "sig", "schedule",
-              "dose_pattern", "route", "form")
+              "dose_pattern")
 
 
 def _advice_listed_as_medicine(m: Any) -> bool:

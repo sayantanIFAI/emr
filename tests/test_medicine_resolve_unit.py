@@ -38,6 +38,7 @@ def test_the_advice_filter_uses_the_dose_fields_of_the_entry(lexicon):
     assert X._advice_listed_as_medicine({"drug_text": "steam inhalation"}) is True
     assert X._advice_listed_as_medicine({"drug_text": "steam inhalation", "frequency_text": "tds"}) is False
     assert X._advice_listed_as_medicine({"drug_text": "Tab Montelukast", "strength": {"value": 10}}) is False
+    assert X._advice_listed_as_medicine({"drug_text": "steam inhalation", "route": "oral", "form": "other"}) is True   # filler fields say nothing
     assert X._advice_listed_as_medicine("plenty of fluids") is True and X._advice_listed_as_medicine(None) is False
 
 
