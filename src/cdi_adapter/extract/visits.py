@@ -81,7 +81,7 @@ def merge(payloads: list[dict[str, Any]]) -> dict[str, Any]:
     pages = [p for p in payloads if isinstance(p, dict)]
     if not pages:
         return {}
-    entries = entries_of(pages)
+    entries = entries_of(payloads)                         # numbered by position, so a page that could not be read keeps its number
     li = pick_latest(entries)
     latest = entries[li]
     merged = copy.deepcopy(pages[0])

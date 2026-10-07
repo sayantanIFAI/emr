@@ -52,3 +52,8 @@ def test_identity_and_the_organisation_are_taken_from_whichever_page_says_them()
 def test_dates_in_the_three_written_forms_are_compared_as_dates_not_text():
     m = V.merge([_page("9/12/2025", ["A"]), _page("02-Jan-2026", ["B"]), _page("2025-12-30", ["C"])])
     assert [i["text"] for i in m["investigations"]] == ["B"]
+
+
+def test_a_page_that_could_not_be_read_keeps_its_number():
+    m = V.merge([_page("01/01/2026", ["A"]), None, _page("05/02/2026", ["B"])])
+    assert m["_latest_page"] == 3 and [v["page"] for v in m["visits"]] == [3, 1]

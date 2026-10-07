@@ -552,6 +552,35 @@ _HANDLERS = {
 
 
 # --------------------------------------------------------------------------- #
+def _read_each_page(client: Any, pages: list[dict[str, Any]], blocks: list[dict[str, Any]], doc_type: str,
+                    schema: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """Read every page with its own image and its own OCR lines (the [bN] numbers stay the document's), at the same time,
+    then merge. A later page that cannot be read is left out (logged); the first page failing fails the document."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from . import visits as V
+
+    def one(pg: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+        img = storage.get_bytes(storage.key_from_uri(pg["image_uri"]))
+        pr = build_extraction_prompt(doc_type, blocks, only_page=pg["id"])
+        return client.vlm_json_ex(img, pr, schema, max_tokens=max_tokens_for(doc_type), retries=settings.extract_retries)
+
+    def safe(pair: tuple[int, dict[str, Any]]) -> tuple[dict[str, Any], str | None] | None:
+        i, pg = pair
+        try:
+            return one(pg)
+        except Exception as exc:  # noqa: BLE001
+            if i == 0:
+                raise
+            log.warning("page_read_failed", page=i + 1, error=str(exc)[:200])
+            return None
+
+    with ThreadPoolExecutor(max_workers=min(4, len(pages))) as pool:
+        got = list(pool.map(safe, list(enumerate(pages))))
+    done = [g for g in got if g is not None]
+    return V.merge([g[0] if g else None for g in got]), done[0][1]
+
+
 def extract_document(document_id: str, *, patient_id: str | None = None,
                      encounter_id: str | None = None,
                      abha_hint: str | None = None) -> ExtractResult:
@@ -588,11 +617,22 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
     blkmap = block_id_map(blocks)
     image = storage.get_bytes(storage.key_from_uri(pages[0]["image_uri"]))
 
+    from . import visits as V
+    from .prompt import slim_active
+
+    slim = slim_active(cls["doc_type"])
     try:
         # served_model = the model the gateway reports it used (the OOM fallback is recorded as such)
-        payload, served_model = client.vlm_json_ex(
-            image, prompt, schema, max_tokens=max_tokens_for(cls["doc_type"]),
-            retries=settings.extract_retries)
+        if slim and settings.extract_per_page and len(pages) > 1:
+            # a paper of several pages (front, back, a continuation sheet): each page is read on its own and the
+            # latest dated visit's tests and booking are picked (extract/visits.py)
+            payload, served_model = _read_each_page(client, pages, blocks, cls["doc_type"], schema)
+        else:
+            payload, served_model = client.vlm_json_ex(
+                image, prompt, schema, max_tokens=max_tokens_for(cls["doc_type"]),
+                retries=settings.extract_retries)
+            if slim and isinstance(payload, dict):
+                payload = V.merge([payload])           # older dated entries below a ruled line: the latest one is used
     except MLError as exc:
         with session_scope() as sess:
             repo.finish_pipeline_run(sess, run_id, status="failed", error_detail=str(exc)[:400])
@@ -602,13 +642,22 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
     if not settings.abha_enabled and isinstance(payload, dict) and isinstance(payload.get("patient"), dict):
         payload["patient"]["abha_id"] = None        # never used, whatever the model wrote: not for matching, not stored
 
+    focus_blocks = blocks
+    latest_no = int(payload.get("_latest_page") or 1) if isinstance(payload, dict) else 1
+    if len(pages) > 1 and 1 <= latest_no <= len(pages) and latest_no != 1:
+        # the second look and the choose-from-list step read the page the latest visit is on
+        image = storage.get_bytes(storage.key_from_uri(pages[latest_no - 1]["image_uri"]))
+    if len(pages) > 1 and 1 <= latest_no <= len(pages):
+        pid_latest = str(pages[latest_no - 1]["id"])
+        focus_blocks = [b for b in blocks if str(b.get("page_id")) == pid_latest] or blocks
+
     if isinstance(payload, dict) and cls["doc_type"] in ("prescription", "opd_note", "referral"):
         # the hybrid step: a test the gate cannot place but that is close to reference names is put to the model
         # as a CHOICE among those names (never free text); what it picks is kept apart from what was written
         names = [one for io in payload.get("investigations") or [] for one in split_tests(_coded_text(io)[0])]
         fu = payload.get("follow_up")
         fu_text = fu if isinstance(fu, str) else (fu.get("text") if isinstance(fu, dict) else None)
-        extra = resolve_llm.followup_tests(client, image, fu_text, names, blocks)    # looks even when no follow-up was found
+        extra = resolve_llm.followup_tests(client, image, fu_text, names, focus_blocks)    # looks even when no follow-up was found
         if extra:                          # tests written with the follow-up line, found by the focused second look
             payload.setdefault("investigations", []).extend({"text": t, "evidence": [], "source": "second_look"} for t in extra)
             names += extra
