@@ -78,7 +78,7 @@ PYEOF
 chmod 600 "$CONF/s3.json" 2>/dev/null || true
 
 # ---- 3. start ---------------------------------------------------------------------------------
-if ! curl -sf "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
+start_server() {
   # Background the command itself (see start_mlserve.sh): a backgrounded `cd && ...` list keeps
   # this script's stdout open for the server's lifetime and hangs a caller reading our output.
   $(command -v setsid || true) nohup "$BIN" server \
@@ -88,7 +88,10 @@ if ! curl -sf "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
     -s3.port.iceberg=0 -s3.port.lance=0 -s3.iam=false -s3.autoCreateBucket=false \
     -s3.allowedOrigins="$ORIGINS" \
     > "$LOG" 2>&1 < /dev/null &
-fi
+}
+healthy() { curl -sf "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; }
+alive() { pgrep -f "[b]in/weed server" >/dev/null 2>&1; }
+healthy || start_server
 for _ in $(seq 1 60); do
   curl -sf "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1 && break
   sleep 1
@@ -101,7 +104,12 @@ curl -sf "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1 \
 # success (a listing right after start can come back empty, so it is not used to decide).
 created=""
 for _ in $(seq 1 30); do
-  out="$(echo "s3.bucket.create -name ${BUCKET}" | "$BIN" shell -master=127.0.0.1:9333 2>&1 || true)"
+  if ! alive; then
+    echo "object store process is gone - starting it again" >&2
+    start_server
+    for _w in $(seq 1 30); do healthy && break; sleep 1; done
+  fi
+  out="$(echo "s3.bucket.create -name ${BUCKET}" | timeout 25 "$BIN" shell -master=127.0.0.1:9333 2>&1 || true)"
   case "$out" in *"created bucket"*|*"already exists"*) created=1; break ;; esac
   sleep 1
 done
