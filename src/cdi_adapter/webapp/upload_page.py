@@ -460,9 +460,10 @@ async function loadDoc(id){
     d.loading=false; renderGroups(); } }
 }
 function renderGroups(){
-  const list=[...GROUPS.values()].sort((a,b)=>Math.max(0,...[...b.docs.values()].map(d=>d.seq))-Math.max(0,...[...a.docs.values()].map(d=>d.seq)));
+  const newest=g=>[...g.docs.values()].reduce((m,d)=>(d.uploaded||"")>m?(d.uploaded||""):m,"");
+  const list=[...GROUPS.values()].sort((a,b)=>newest(b).localeCompare(newest(a)));
   $("#groups").innerHTML=list.length?list.map(g=>{
-    const docs=[...g.docs.values()].sort((a,b)=>b.seq-a.seq);
+    const docs=[...g.docs.values()].sort((a,b)=>(b.uploaded||"").localeCompare(a.uploaded||"")||b.seq-a.seq);      // newest first
     return '<details class="cf-det grp" data-k="'+esc(g.key)+'"'+(OPEN.has("g:"+g.key)?" open":"")+'><summary><b>'+esc(g.name||"Name not read")+'</b> · '
       +esc(fmtPhone(g.phone))+' <span class="pill">'+plural(docs.length,"prescription")+'</span></summary><div class="det-body">'
       +docs.map(docHtml).join("")+'</div></details>';

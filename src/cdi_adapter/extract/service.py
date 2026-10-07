@@ -676,6 +676,7 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
         extra = resolve_llm.followup_tests(client, image, fu_text, names, focus_blocks)    # looks even when no follow-up was found
         if extra:                          # tests written with the follow-up line, found by the focused second look
             payload.setdefault("investigations", []).extend({"text": t, "evidence": [], "source": "second_look"} for t in extra)
+            payload["_second_look"] = list(extra)          # kept so the result can say where these tests came from
             names += extra
         payload["_test_resolved"] = resolve_llm.resolve_tests(client, image, names)
         # the same for medicines: a name close to reference medicine names is a CHOICE among them, never free text

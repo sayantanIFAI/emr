@@ -82,3 +82,7 @@ def test_the_dated_visits_are_listed_and_the_latest_is_marked():
 
 def test_a_name_read_slightly_differently_joins_the_same_patient_on_the_same_number():
     assert "function sameName" in ADMIN_PAGE and "find(h=>h.phone===phone&&sameName(h.name,name))" in ADMIN_PAGE
+
+
+def test_prescriptions_and_patients_are_listed_newest_first():
+    assert 'localeCompare(a.uploaded||"")' in ADMIN_PAGE and "newest(b).localeCompare(newest(a))" in ADMIN_PAGE

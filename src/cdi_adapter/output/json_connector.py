@@ -41,7 +41,7 @@ from ..extract import indian_codes, lab_resolve
 from ..extract.indian_codes import norm as _norm_name
 from ..extract.medicine_lexicon import medicine_match
 from ..terminology.service import licensed_only
-from ..extract.test_names import UNCONFIRMED, UNRECOGNISED, is_grounded, is_known_test, looks_like_medicine
+from ..extract.test_names import SECOND_LOOK, UNCONFIRMED, UNRECOGNISED, is_grounded, is_known_test, looks_like_medicine
 
 SCHEMA_VERSION = "result.v1"
 NOTICE = ("Read by a machine. Values marked needs a check must be verified by a person. "
@@ -234,6 +234,7 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
     context = {c["test"]: c["context"] for c in checks["context"]}
     page_text = " ".join(str(b.get("text") or "") for b in inp.blocks)       # what the page readers saw
     facts_by_id = {str(f.get("id")): f for f in inp.facts}
+    second_look = {_norm_name(x) for x in payload.get("_second_look") or [] if isinstance(x, str)}
     for t in buckets["lab_tests"]:
         key = t["as_written"]
         t["context"] = context.get(key, [])
@@ -258,7 +259,12 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
               and not (is_grounded(key, page_text) or (alt and is_grounded(alt, page_text)))):
             # a valid test name that nothing on the page supports: what a reader says about a page it cannot read
             t["status"] = "needs_check"
-            t["reason"] = UNCONFIRMED + (f": {t['reason']}" if t.get("reason") else "")
+            if _norm_name(key) in second_look:
+                # found by looking again at an ENLARGED part of the page image (handwriting the text reader cannot read): a test
+                # the lab list knows, shown in the list but never accepted
+                t["reason"] = SECOND_LOOK + (f": {t['reason']}" if t.get("reason") else "")
+            else:
+                t["reason"] = UNCONFIRMED + (f": {t['reason']}" if t.get("reason") else "")
         if alt and rz is not None and t.get("status") != "rejected":
             t["status"] = "needs_check"
             t["reason"] = f"read as '{alt}' (chosen from the reference list by the model; check the page)" + (

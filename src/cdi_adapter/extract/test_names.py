@@ -122,6 +122,7 @@ _STRONG_RE = re.compile(r"(?<![a-z0-9])(?:" + "|".join(re.escape(w) for w in sor
 
 
 UNCONFIRMED = "not confirmed on the page"        # stable prefix of the reason
+SECOND_LOOK = "found by a second look at the page, please check it"   # a test read from an enlarged piece of the image
 
 _GENERIC = frozenset("test tests for and of the with blood serum urine function profile scan study screen routine "
                      "panel examination exam general count".split())

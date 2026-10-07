@@ -269,3 +269,14 @@ def test_the_job_view_lists_every_document_and_does_not_drop_a_failed_one(client
     assert body["results"][1] == {"filename": "b.png", "document_id": None, "status": "error",
                                   "reason": "rescan: too blurred"}
     assert client.get("/api/jobs/nope/result.json").status_code == 404
+
+
+def test_a_test_found_by_the_second_look_is_listed_not_hidden_as_unconfirmed():
+    from cdi_adapter.extract.test_names import SECOND_LOOK, UNCONFIRMED
+    other = [{"text": "unrelated printed words only", "page_id": "p1"}]                   # nothing on the text-read page names a test
+    seen = _fact("investigation_order", "TSH", state="in_review", code_status="unmapped", conf=0.4)
+    r1 = jc.build_result(_inputs([seen], payload={**PAYLOAD}, blocks=other))
+    assert r1["lab_tests"][0]["reason"].startswith(UNCONFIRMED)                         # unchanged for an ordinary test
+    r2 = jc.build_result(_inputs([seen], payload={**PAYLOAD, "_second_look": ["TSH"]}, blocks=other))
+    t = r2["lab_tests"][0]
+    assert t["status"] == "needs_check" and t["reason"].startswith(SECOND_LOOK) and not t["reason"].startswith(UNCONFIRMED)
