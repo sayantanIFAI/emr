@@ -213,8 +213,16 @@ def _facts_prescription(c: _Ctx, p: dict[str, Any]) -> None:
                         status=m.get("status") if isinstance(m, dict) else None)
     for a in p.get("advice") or []:
         t, ev = _coded_text(a)
-        if t:
-            c.add(fact_type="advice", local_text=t, value_text=t, evidence=ev)
+        if not t:
+            continue
+        if _misfiled_medicine(t):
+            continue                       # a medicine in the advice list: medicines are not extracted in this profile
+        if lab_resolve.resolve(t) is not None or is_known_test(t):
+            # a test written among the advice ("S. Lipase", "S. Fructosamine"): it belongs with the tests
+            for one in split_tests(t):
+                c.add(fact_type="investigation_order", local_text=one, value_code_display=one, value_text=one, evidence=ev)
+            continue
+        c.add(fact_type="advice", local_text=t, value_text=t, evidence=ev)
     resolved = p.get("_test_resolved") or {}                  # {as read: reference name the model chose}
     on_page = {_first_word(m.get("drug_text") or m.get("text") or "") for m in p.get("medications") or []
                if isinstance(m, dict)}
@@ -585,6 +593,12 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
         # the hybrid step: a test the gate cannot place but that is close to reference names is put to the model
         # as a CHOICE among those names (never free text); what it picks is kept apart from what was written
         names = [one for io in payload.get("investigations") or [] for one in split_tests(_coded_text(io)[0])]
+        fu = payload.get("follow_up")
+        fu_text = fu if isinstance(fu, str) else (fu.get("text") if isinstance(fu, dict) else None)
+        extra = resolve_llm.followup_tests(client, image, fu_text, names)
+        if extra:                          # tests written with the follow-up line, found by the focused second look
+            payload.setdefault("investigations", []).extend({"text": t, "evidence": [], "source": "second_look"} for t in extra)
+            names += extra
         payload["_test_resolved"] = resolve_llm.resolve_tests(client, image, names)
         # the same for medicines: a name close to reference medicine names is a CHOICE among them, never free text
         meds = [(_coded_text(m)[0] if not isinstance(m, dict) else (m.get("drug_text") or m.get("text") or m.get("name") or ""))

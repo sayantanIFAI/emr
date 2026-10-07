@@ -90,6 +90,52 @@ def resolve_tests(client: Any, image: bytes, tests: list[str]) -> dict[str, str]
     return out
 
 
+FOLLOWUP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"tests": {"type": "array", "items": {"type": "string"}}},
+    "required": ["tests"],
+}
+
+
+def followup_prompt(follow_up: str) -> str:
+    return chr(10).join([
+        "A doctor's prescription is shown. It has this follow-up instruction: " + repr(follow_up[:160]) + ".",
+        "Often the doctor writes the lab tests to be done before that visit right next to it, in brackets or braces "
+        "(for example: review after 2 weeks with {HbA1c / FBS / TSH}). List every lab test or investigation that is "
+        "WRITTEN next to or after that follow-up instruction, one string per test, exactly as written. If none is written "
+        "there, return an empty list. Do not list medicines. Do not add a test that is not written.",
+        'Answer ONLY as JSON: {"tests": ["...", "..."]}'])
+
+
+def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list[str]) -> list[str]:
+    """Tests written with the follow-up line that the full-page answer missed. Only plain strings with a letter, at most 12,
+    none already listed; everything that comes back still goes through the normal checks and is never auto-accepted."""
+    from .test_names import split_tests
+
+    if not settings.followup_second_look or not follow_up or not str(follow_up).strip():
+        return []
+    try:
+        resp, _ = client.vlm_json_ex(image, followup_prompt(str(follow_up)), FOLLOWUP_SCHEMA, max_tokens=120, retries=1)
+    except Exception as exc:  # noqa: BLE001 - an extra look must never cost the document
+        log.warning("followup_second_look_failed", error=str(exc)[:200])
+        return []
+    got = (resp or {}).get("tests")
+    if not isinstance(got, list):
+        return []
+    have = {norm(k) for k in known}
+    out: list[str] = []
+    for item in got:
+        if not isinstance(item, str):
+            continue
+        for one in split_tests(item):
+            if 2 <= len(one) <= 40 and any(ch.isalpha() for ch in one) and norm(one) not in have \
+                    and not medicine_resolve.advice_like(one) and not (medicine_resolve.known(one) and not is_known_test(one)):
+                have.add(norm(one))
+                out.append(one)
+    log.info("followup_second_look", found=len(out))
+    return out[:12]
+
+
 def prompt_for_medicines(items: list[tuple[str, list[str]]]) -> str:
     lines = []
     for i, (written, cands) in enumerate(items, start=1):

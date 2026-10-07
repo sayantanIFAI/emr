@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import math
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -194,6 +195,21 @@ class TrOCREngine:
         return out
 
 
+_RUN = re.compile(r"(.)\1{5,}")
+_SPACED_Q = re.compile(r"(?:\s*\?){4,}")
+
+
+def clean_line(txt: str | None) -> str:
+    """What the model wrote for a crop, with the degenerate cases removed: nothing but punctuation ('?', '????...') is
+    no reading, and a long run of one character or of spaced question marks is cut back. Letters and digits that were
+    really read are never touched."""
+    t = (txt or "").strip()
+    if not re.search(r"[A-Za-z0-9]", t):
+        return ""
+    t = _SPACED_Q.sub(" ?", t)
+    return _RUN.sub(lambda m: m.group(1) * 3, t).strip()
+
+
 QWEN_LINE_PROMPT = (
     "Transcribe exactly the text written in this image crop. It is one line from a "
     "medical prescription and may be handwritten. Copy letters, numbers, units and "
@@ -233,7 +249,12 @@ class QwenLineEngine:
                 txt, served = client.vlm_generate_ex(png, QWEN_LINE_PROMPT,
                                                      max_tokens=settings.qwen_line_max_tokens)
                 line = next((s.strip() for s in (txt or "").splitlines() if s.strip()), "")
-                return Reading(self.name, served or self.version, line, None, prompt_hash=ph)
+                cleaned = clean_line(line)
+                if line and not cleaned:
+                    # the model returned only punctuation: not a reading. What it said stays on record in the error.
+                    return Reading(self.name, served or self.version, "", None, prompt_hash=ph,
+                                   error=f"no readable text (the model wrote: {line[:30]!r})")
+                return Reading(self.name, served or self.version, cleaned, None, prompt_hash=ph)
             except Exception as exc:  # noqa: BLE001
                 return Reading(self.name, self.version, "", None, prompt_hash=ph, error=str(exc)[:200])
 

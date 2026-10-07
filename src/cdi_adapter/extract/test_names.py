@@ -79,6 +79,9 @@ def is_test_list(text: str | None) -> bool:
     return bool(words) and any(w in _STRONG for w in words) and all(w in _STRONG or w in _FILLER for w in words)
 
 
+_LIST_NO = re.compile(r"^\s*(?:\(\s*\d{1,2}\s*\)|\d{1,2}\s*[.)]|\[\s*\d{1,2}\s*\])\s*")
+
+
 def split_tests(text: str | None) -> list[str]:
     """One entry per test: ``"CBC/KFT/LFT"`` -> CBC, KFT, LFT; ``"Blood: CBC, Urea, FBS"`` -> CBC, Urea, FBS. A name that
     contains a space or a one-letter part (``"Urine R/E"``, ``"X-ray LS spine"``) is never cut."""
@@ -86,8 +89,8 @@ def split_tests(text: str | None) -> list[str]:
     if not t:
         return []
     out: list[str] = []
-    for part in re.split(r"\s*[,;+]\s*(?=[A-Za-z0-9])|\s+and\s+", t):
-        part = part.strip(" .")
+    for part in re.split(r"\s*[,;+]\s*(?=[A-Za-z0-9(\[])|\s+and\s+", t):
+        part = _LIST_NO.sub("", part).strip(" .")             # "(1) CBC" / "2. LFT" / "3) TSH" -> the test only
         if not part:
             continue
         bits = part.split("/")

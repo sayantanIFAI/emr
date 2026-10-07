@@ -281,14 +281,18 @@ async function loadResult(job){         // the connector's JSON, shown as-is (UP
 function vget(v){ return (v&&typeof v==="object"&&"value" in v)?v:{value:null,status:"absent",reason:null}; }
 function vcell(v){
   v=vget(v); const none=v.value===null||v.value===undefined||v.value==="";
+  if(none) return "";
   let t=none?'<span class="none">not on the page</span>':esc(typeof v.value==="boolean"?(v.value?"yes":"no"):v.value);
   if(!none&&v.status==="needs_check") t+=' <span class="pill warn" title="'+esc(v.reason||"")+'">needs a check</span>';
   return t;
 }
 function rowsTable(id,title,rows,note){
+  // a value that is not on the page is not shown at all (the cell is "")
+  const shown=rows.filter(r=>r[1]!=="");
   return '<section class="sumtbl" id="'+id+'"><h3>'+title+'</h3><div class="tbox"><table><tbody>'
-    +rows.map(r=>'<tr><th scope="row">'+esc(r[0])+'</th><td>'+r[1]+'</td></tr>').join("")
-    +'</tbody></table></div>'+(note?'<p class="note">'+note+'</p>':'')+'</section>';
+    +(shown.length?shown.map(r=>'<tr><th scope="row">'+esc(r[0])+'</th><td>'+r[1]+'</td></tr>').join("")
+      :'<tr><td class="none">Nothing readable on the page.</td></tr>')
+    +'</tbody></table></div>'+(shown.length&&note?'<p class="note">'+note+'</p>':'')+'</section>';
 }
 function plural(n,u){ return n+" "+u+(n===1?"":"s"); }
 function bookingOf(r){
@@ -319,7 +323,7 @@ function summaryHtml(r){
     ["Designation",vcell(D.designation)],["Qualification",vcell(D.qualification)],
     ["Clinic",vcell(C.name)],["Clinic phone",vcell(C.phone)],["Clinic address",vcell(C.address)],
     ["Stamp on the page",vcell(D.stamp_present)],["Signature on the page",vcell(D.signature_present)]],
-    "Stamp and signature are a visual guess by the model and are not verified.");
+    "Stamp and signature are a visual guess by the model and are not verified.");   // shown only when a stamp / signature row is
   const b=bookingOf(r);
   const booking=rowsTable("tbl-booking","Doctor booking",[
     ["Booking needed",'<span class="pill '+b.cls+'">'+esc(b.needed)+'</span>'+(b.status==="needs_check"&&b.text?' <span class="pill warn">needs a check</span>':"")],

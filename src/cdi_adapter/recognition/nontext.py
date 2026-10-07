@@ -39,6 +39,28 @@ def thin_ink_map(gray: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k) > settings.nontext_blackhat_threshold
 
 
+def paper_mask(lab: np.ndarray, paper: np.ndarray) -> np.ndarray:
+    """1 where the PAGE is, 0 for the floor, table, bedspread or hand around it: bright enough and paper-coloured after a
+    heavy blur (so thin pen strokes do not matter), the largest connected area, holes filled. A speckled stone floor is
+    grey but darker and broken up, a bedspread is coloured: neither joins the page."""
+    lb = cv2.GaussianBlur(lab[..., 0], (0, 0), 9)
+    ab = cv2.GaussianBlur(lab[..., 1:], (0, 0), 9)
+    chroma = np.linalg.norm(ab - paper[1:], axis=2)
+    m = ((lb >= 0.70 * paper[0]) & (chroma < 22)).astype(np.uint8)
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((31, 31), np.uint8))
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((15, 15), np.uint8))
+    n, lbl, st, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    if n < 2:
+        return np.ones(m.shape, np.uint8)                  # nothing page-like found: do not exclude anything
+    big = 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
+    cnts, _h = cv2.findContours((lbl == big).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    out = np.zeros_like(m)
+    cv2.drawContours(out, cnts, -1, 1, cv2.FILLED)
+    if float(out.mean()) < 0.25:
+        return np.ones(m.shape, np.uint8)                  # too small to be the page: the estimate is not trusted
+    return out
+
+
 class PageEvidence:
     """Computed once per page, then asked about each region."""
 
@@ -47,6 +69,7 @@ class PageEvidence:
         self.lab = cv2.cvtColor(src_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         self.paper = paper_colour(src_bgr)
         self.thin = thin_ink_map(self.gray)
+        self.mask = paper_mask(self.lab, self.paper)
 
     def measure(self, bbox: list[int]) -> dict[str, float]:
         # paper_distance compares COLOUR only (the a and b channels of CIELAB), not brightness: a shadow or a lamp makes
@@ -56,9 +79,10 @@ class PageEvidence:
         t = self.thin[y0:y1, x0:x1]
         px = self.lab[y0:y1, x0:x1].reshape(-1, 3)
         if t.size == 0 or px.size == 0:
-            return {"thin_ink_frac": 0.0, "paper_distance": 99.0}
+            return {"thin_ink_frac": 0.0, "paper_distance": 99.0, "paper_overlap": 0.0}
         light = px[px[:, 0] >= np.percentile(px[:, 0], 50)]
-        return {"thin_ink_frac": round(float(t.mean()), 4),
+        return {"paper_overlap": round(float(self.mask[y0:y1, x0:x1].mean()), 3),
+                "thin_ink_frac": round(float(t.mean()), 4),
                 "paper_distance": round(float(np.linalg.norm(np.median(light, axis=0)[1:] - self.paper[1:])), 1)}
 
 
@@ -68,6 +92,8 @@ def judge(m: dict[str, float], bbox: list[int]) -> str | None:
     w = bbox[2] - bbox[0]
     if m["thin_ink_frac"] < settings.nontext_min_thin_ink:
         return f"almost no thin pen or print strokes in it ({m['thin_ink_frac']:.1%} of the box)"
+    if m.get("paper_overlap", 1.0) < settings.nontext_min_paper_overlap:
+        return f"it is mostly off the page ({m['paper_overlap']:.0%} on the paper): floor, table or hand"
     if m["paper_distance"] > settings.nontext_max_paper_distance:
         return f"its background is not the page's paper colour (distance {m['paper_distance']:.0f}): fabric, table or hand"
     if h < settings.nontext_min_height_px or w < settings.nontext_min_width_px:
