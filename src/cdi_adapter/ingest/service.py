@@ -53,6 +53,11 @@ def _guess_mime(filename: str | None, raw: bytes) -> str:
     return "application/octet-stream"
 
 
+def document_hash(raw: bytes, scope: str | None = None) -> str:
+    """The document's identity: the SHA-256 of its bytes (all channels) or, with a scope, of its bytes and that scope."""
+    return hashlib.sha256(raw + (b"\x00scope:" + scope.encode("utf-8") if scope else b"")).hexdigest()
+
+
 def _allowed(mime: str) -> bool:
     return any(mime.startswith(p) for p in settings.allowed_mime_prefixes)
 
@@ -67,12 +72,16 @@ def ingest_bytes(
     legacy_patient_ref: str | None = None,
     captured_at: datetime | None = None,
     request_id: str | None = None,
+    dedupe_scope: str | None = None,
 ) -> IngestResult:
-    """Idempotent ingest of one scanned document. Safe to call twice with the same bytes."""
+    """Idempotent ingest of one scanned document. Safe to call twice with the same bytes.
+
+    ``dedupe_scope``: a hand-entered identity (the web upload's mobile number and token). The same bytes under another scope are
+    a different document, so a photo sent again for another patient never relabels the earlier record."""
     if not raw:
         raise ValueError("empty document")
 
-    sha256 = hashlib.sha256(raw).hexdigest()
+    sha256 = document_hash(raw, dedupe_scope)
     mime = mime_type or _guess_mime(filename, raw)
     if not _allowed(mime):
         raise ValueError(f"mime_type not allowed: {mime}")

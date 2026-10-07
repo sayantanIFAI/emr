@@ -83,7 +83,9 @@ class Settings(BaseSettings):
     # make a small / soft photo easier to read before anything reads it (ingest/enhance.py): enlarge it, then sharpen it by
     # how soft it measures. Both are checked and undone when they would make the picture worse. PLACEHOLDER thresholds until
     # measured on the pilot's own photos.
-    enhance_enabled: bool = True
+    # OFF: measured on a real photo, enlarging + sharpening made the model read the patient's surname "Broadway" in 6 of 6 runs
+    # (and "Chowdhury" with it off). Switch on only after a labelled set shows it helps.
+    enhance_enabled: bool = False
     # which picture of a page the vision model is given for the full-page read and the focused looks: "source" = the colour page
     # (cut out and straightened, no contrast / sharpening change) or "normalized" = the grey, contrast-stretched copy
     model_image: str = "normalized"
@@ -328,6 +330,8 @@ class Settings(BaseSettings):
     # a second, focused look at the page for tests written WITH the follow-up instruction ("review after 2 wks {HbA1c / FBS
     # / TSH}"): the full-page answer often misses them. One short extra call, only when a follow-up is written.
     followup_second_look: bool = True
+    second_look_repeats: int = 2         # each focused view is asked this many times and the answers are pooled: the model server does not
+                                         # answer the same picture the same way twice, so one unlucky answer must not lose a test
     # the patient's name is read again from its own line at three sizes; readings that disagree are flagged (a name is never final
     # until the front desk confirms it)
     name_reread: bool = True

@@ -72,3 +72,21 @@ def test_the_model_is_given_the_picture_the_setting_names(monkeypatch):
     X._page_image(pg)
     X._page_image({"image_uri": "s3://p/norm.png", "preproc": None})              # no source copy kept: the normalized one
     assert asked == ["s3://p/norm.png", "s3://p/src.png", "s3://p/norm.png"]
+
+
+def test_the_name_prompt_says_indian_name_not_english_word_and_gives_no_example_names():
+    p = R.name_prompt()
+    assert "Indian personal name" in p and "not an English word" in p and "space between the first name and the surname" in p
+    for leaked in ("Onkar", "Chowdhury", "Subrata", "Rajesh", "Banerjee", "Mukherjee", "Das", "Sen,"):
+        assert leaked not in p                          # an example in the prompt leaked into the answer when it was tried
+
+
+def test_the_same_bytes_for_another_patient_are_another_document_and_the_same_patient_is_the_same_document():
+    from cdi_adapter.ingest.service import document_hash
+    raw = b"\x89PNG-fake-bytes"
+    import hashlib
+    assert document_hash(raw) == hashlib.sha256(raw).hexdigest()                          # no scope: the plain file hash (all other channels)
+    assert document_hash(raw, "9830011234|T-1") == document_hash(raw, "9830011234|T-1")   # same patient + token: the same document
+    assert document_hash(raw, "9830011234|T-1") != document_hash(raw, "9830011234|T-2")   # another token: another document
+    assert document_hash(raw, "9830011234|T-1") != document_hash(raw, "9831122334|T-1")   # another mobile: another document
+    assert document_hash(raw, "9830011234|T-1") != document_hash(raw)

@@ -10,6 +10,12 @@ from cdi_adapter.ingest import enhance as E
 from cdi_adapter.ingest import pages
 
 
+@pytest.fixture(autouse=True)
+def _enhancement_on(monkeypatch):
+    """The feature is OFF by default (it made a real photo's patient name worse); these tests are about the feature itself."""
+    monkeypatch.setattr(settings, "enhance_enabled", True)
+
+
 def _page(w=700, h=900, blur=0.0) -> np.ndarray:
     img = np.full((h, w, 3), 245, np.uint8)
     for i, y in enumerate(range(80, h - 80, 70)):

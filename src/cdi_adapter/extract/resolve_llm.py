@@ -12,6 +12,7 @@ and what is stored stays marked as chosen by the model, so it is never presented
 from __future__ import annotations
 
 import difflib
+import re
 from typing import Any
 
 from ..config import settings
@@ -177,6 +178,29 @@ def page_views(image: bytes) -> list[bytes]:
     return out
 
 
+_REVIEW_LINE = re.compile(r"(?i)\b(?:review|receive|revisit|f/?u|follow[\s-]?up|come)\b")
+_AFTER_WORD = re.compile(r"(?i)\b(?:of|with|for)\b\s*[{\[(]?\s*|[{\[(]\s*")
+
+
+def tests_from_lines(blocks: list[dict[str, Any]] | None, follow_up: str | None) -> list[str]:
+    """Names written after a follow-up line's "of" / "with" / a bracket ("To review after 2 wks of HbA1c/PBS/PPBS/S. Lipase"),
+    taken from the text the readers already produced. Candidates only: each still has to pass the lab-test gate."""
+    texts = [str(b.get("text") or "") for b in blocks or []] + ([follow_up] if follow_up else [])
+    out: list[str] = []
+    for t in texts:
+        m = _REVIEW_LINE.search(t)
+        if not m:
+            continue
+        tail = _AFTER_WORD.search(t, m.end())
+        if not tail:
+            continue
+        for part in re.split(r"\s*[/,;&{}\[\]()]\s*|\s+and\s+", t[tail.end():]):
+            part = part.strip(" .")
+            if 2 <= len(part) <= 40:
+                out.append(part)
+    return out
+
+
 def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list[str],
                    blocks: list[dict[str, Any]] | None = None) -> list[str]:
     """Tests the full-page answer missed. Lab tests are the point of the product and the doctor writes them anywhere (beside
@@ -196,6 +220,8 @@ def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list
         except Exception as exc:  # noqa: BLE001
             log.warning("followup_region_failed", error=str(exc)[:200])
 
+    jobs = [j for j in jobs for _ in range(max(1, settings.second_look_repeats))]      # the same view, asked again: answers differ
+
     def ask(job: tuple[bytes, str]) -> Any:
         try:
             resp, _ = client.vlm_json_ex(job[0], job[1], FOLLOWUP_SCHEMA, max_tokens=120, retries=1)
@@ -204,12 +230,13 @@ def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list
             log.warning("followup_second_look_failed", error=str(exc)[:200])
             return None
 
-    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+    with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
         answers = list(pool.map(ask, jobs))
     got: list[Any] = []
     for a in answers:
         if isinstance(a, list):
             got.extend(a)
+    got.extend(tests_from_lines(blocks, follow_up))                  # the tests written on the follow-up line itself
     have = {norm(k) for k in known}
     out: list[str] = []
     for item in got:
@@ -232,12 +259,14 @@ NAME_SCALES = (1.0, 1.6, 2.4)
 
 
 def name_prompt() -> str:
+    """The patient's name is an Indian personal name. Saying so is what stops the model from reading an English word that looks
+    alike (MEASURED on a real photo: without it "Chowdhury" was read as "Broadway" in 6 of 6 runs; with it never). No example
+    names are given: a list of examples leaked into the answer ("Rajesh Das" for a name that is not on the page)."""
     return chr(10).join([
-        "This is one line (or two) of a doctor's handwritten prescription. It contains the PATIENT'S NAME, often after 'For', "
-        "'Name' or 'Mr / Mrs / Ms / Smt / Shri', and then the age and sex.",
-        "Write ONLY the patient's name, letter by letter exactly as handwritten. Do not write Mr / Mrs / Smt / Shri, the age "
-        "or the sex. Do not correct the spelling and do not choose a common name that looks similar. If the name is not "
-        "readable, answer null.",
+        "This is a line from a doctor's handwritten prescription in India. Write, letter by letter, the PATIENT'S NAME that "
+        "follows 'For', 'Name' or 'Mr / Mrs / Ms / Smt / Shri'. The name is an Indian personal name, not an English word and "
+        "not a place. Put a space between the first name and the surname. Do not write the title, the age or the sex. If the "
+        "name is not readable, answer null.",
         'Answer ONLY as JSON: {"name": "..."}'])
 
 

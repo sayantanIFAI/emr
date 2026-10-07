@@ -286,7 +286,8 @@ def _stage1(prog: DocProg, fn: str, raw: bytes, abha: str | None) -> None:
     try:
         prog.status = "running"
         prog.stage("ingest", "running")
-        res = ingest_bytes(raw, filename=fn, source_channel="webapp", legacy_patient_ref=abha)
+        scope = f"{prog.phone}|{prog.token_no}" if prog.phone and prog.token_no else None      # the same photo for another patient is another document
+        res = ingest_bytes(raw, filename=fn, source_channel="webapp", legacy_patient_ref=abha, dedupe_scope=scope)
         prog.document_id = res.document_id
         _tag_document(res.document_id, prog.job_id, prog.token_no, prog.phone)
         if prog.parts and not res.deduplicated:

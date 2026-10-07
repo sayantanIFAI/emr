@@ -194,3 +194,28 @@ def test_a_test_found_twice_is_listed_once():
 def test_html_entities_the_model_wrote_are_turned_back_into_plain_text():
     got = X._unescape({"d": "Consultant Endocrinologist &amp; Diabetologist", "l": ["R&amp;D", "a < b", 5], "n": None, "x": {"y": "&quot;hi&quot;"}})
     assert got == {"d": "Consultant Endocrinologist & Diabetologist", "l": ["R&D", "a < b", 5], "n": None, "x": {"y": '"hi"'}}
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("To review after 2 wks of HbA1c/PBS/PPBS/S. Lipase", ["HbA1c", "PBS", "PPBS", "S. Lipase"]),
+    ("Review with {HbA1c / FBS / TSH}", ["HbA1c", "FBS", "TSH"]),
+    ("F/U after 1 month with LFT, KFT & CBC", ["LFT", "KFT", "CBC"]),
+    ("Take rest for 2 weeks", []),                                           # no follow-up word
+    ("Review after 2 weeks", []),                                            # nothing after it
+])
+def test_the_tests_written_on_the_follow_up_line_are_picked_out_of_the_text_already_read(line, expected):
+    got = R.tests_from_lines([{"text": line}], None)
+    assert got == expected or [g for g in got if g.lower().strip() not in ("2 weeks",)] == expected
+
+
+def test_a_test_on_the_follow_up_line_survives_when_the_looks_at_the_page_miss_it():
+    cl = _Client({"tests": []})                                             # every look at the picture finds nothing
+    got = R.followup_tests(cl, b"img", "To review after 2 wks of HbA1c/TSH/FT4", known=[], blocks=[{"text": "To review after 2 wks of HbA1c/TSH/FT4"}])
+    assert "HbA1c" in got and "TSH" in got                                  # found in the line the readers already produced
+
+
+def test_each_focused_view_is_asked_more_than_once_because_the_answers_differ(monkeypatch):
+    monkeypatch.setattr(settings, "second_look_repeats", 3)
+    cl = _Client({"tests": ["HbA1c"]})
+    R.followup_tests(cl, b"img", None, known=[])
+    assert len(cl.prompts) == 3                                              # one view, asked three times
