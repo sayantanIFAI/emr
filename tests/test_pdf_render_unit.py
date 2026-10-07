@@ -424,4 +424,4 @@ def test_intermediate_pngs_use_the_fast_compression_level():
     default = pages._pil_to_png(im)
     assert pages.INTERMEDIATE_PNG_LEVEL == 1
     assert Image.open(io.BytesIO(fast)).tobytes() == im.tobytes()  # still lossless
-    assert len(fast) >= len(default)
+    # (how much bigger level 1 is than level 6 depends on the zlib in use, so only the setting is asserted)

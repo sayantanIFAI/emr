@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -46,10 +46,10 @@ def _uuid(value: str, what: str) -> str:
 
 
 @router.post("/corrections", status_code=201)
-def post_correction(body: CorrectionIn) -> dict[str, Any]:
+def post_correction(request: Request, body: CorrectionIn) -> dict[str, Any]:
     doc, fact = _uuid(body.prescription_id, "prescription"), _uuid(body.field_id, "field")
     try:
-        reviewer = svc.clean_reviewer(body.reviewer_id)
+        reviewer = svc.clean_reviewer(getattr(request.state, "user", None) or body.reviewer_id)      # the signed-in user, not the body
         with session_scope() as sess:
             ctx = svc.load_context(sess, doc, fact)
         value = svc.clean_value(body.corrected_value, ctx.original_value)      # refuse before anything changes

@@ -16,7 +16,12 @@ COPY db ./db
 COPY alembic.ini ./alembic.ini
 COPY schemas ./schemas
 
-RUN pip install --upgrade pip && pip install -e ".[dev]"
+# runtime only: no pytest / ruff / mypy in the image (editable, so schemas/ and the licence files resolve)
+RUN pip install --upgrade pip && pip install -e ".[ocr]"
+
+# never run as root
+RUN useradd --system --create-home --uid 10001 cdi && chown -R cdi:cdi /app
+USER cdi
 
 EXPOSE 8080
-CMD ["uvicorn", "cdi_adapter.api:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python", "-m", "cdi_adapter.webapp"]

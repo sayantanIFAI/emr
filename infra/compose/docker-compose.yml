@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: cdi
       POSTGRES_PASSWORD: cdi
       POSTGRES_DB: cdi
-    ports: ["5432:5432"]
+    ports: ["127.0.0.1:5432:5432"]       # this machine only: never published to the network
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,7 +18,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    ports: ["127.0.0.1:6379:6379"]       # this machine only
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -77,15 +77,19 @@ services:
     build:
       context: ../..
       dockerfile: infra/compose/Dockerfile
-    command: uvicorn cdi_adapter.api:app --host 0.0.0.0 --port 8080
+    # the hardened web app (sign-in in front of everything, review and FHIR paths closed, start-up checks), not the
+    # old unauthenticated api module. Set CDI_ADMIN_PASSWORD (12+ characters) in your shell or an .env file.
+    command: python -m cdi_adapter.webapp
     environment:
+      CDI_ADMIN_PASSWORD: ${CDI_ADMIN_PASSWORD:?set CDI_ADMIN_PASSWORD (12 or more characters) before starting}
+      CDI_WEBAPP_PORT: "8080"
       CDI_DATABASE_URL: postgresql+psycopg://cdi:cdi@postgres:5432/cdi
       CDI_REDIS_URL: redis://redis:6379/0
       CDI_S3_ENDPOINT_URL: http://objectstore:9000
       CDI_INBOX_DIR: /data/inbox
       CDI_PROCESSED_DIR: /data/processed
       CDI_FAILED_DIR: /data/failed
-    ports: ["8080:8080"]
+    ports: ["127.0.0.1:8080:8080"]       # put TLS and your own access control in front before exposing it
     volumes:
       - inbox:/data
     depends_on:

@@ -19,6 +19,12 @@ from cdi_adapter.recognition.disagreement import (
 from cdi_adapter.recognition.engines import Reading
 
 
+@pytest.fixture(autouse=True)
+def _two_readers(monkeypatch):
+    """These tests are about the two-reader set-up; TrOCR is off by default in production."""
+    monkeypatch.setattr(settings, "trocr_enabled", True)
+
+
 def R(engine, text, conf=None, error=None):
     return Reading(engine, "v1", text, conf, error=error)
 

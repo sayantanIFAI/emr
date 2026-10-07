@@ -18,6 +18,19 @@ def _fresh_upload_rate_limit():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_shared_idempotency_rows(request, monkeypatch):
+    """A fixed Idempotency-Key must not leave a row in a shared database that the next run answers with an old job.
+    Only the integration module that tests the durable key uses the real table (with random keys)."""
+    if request.module.__name__.endswith("test_out_s3_integration"):
+        yield
+        return
+    from cdi_adapter.webapp import jobs
+
+    monkeypatch.setattr(jobs, "_durable_key", lambda key, jid: jid)
+    yield
+
+
 @pytest.fixture(scope="session")
 def infra() -> None:
     if not _infra_available():

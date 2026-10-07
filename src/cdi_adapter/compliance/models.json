@@ -140,7 +140,7 @@
    "role": "handwriting_line",
    "model_id": "microsoft/trocr-base-handwritten",
    "revision": "eaacaf452b06415df8f10bb6fad3a4c11e609406",
-   "status": "champion",
+   "status": "candidate",
    "weights_format": "safetensors",
    "trust_remote_code": false,
    "files": {
@@ -195,7 +195,7 @@
    },
    "prompt_version": "computed at run time (provenance.prompt_version)",
    "schema_version": "v3",
-   "notes": "English handwriting (IAM). Reads each handwriting line crop in parallel with Qwen."
+   "notes": "SWITCHED OFF 2026-10-07: on real prescription photos from three doctors it agreed with Qwen on 3% of lines and wrote fluent unrelated English (trained on IAM sentences). Kept as a candidate; switch on only after a benchmark (recognition/bench_htr.py) says it adds value."
   },
   {
    "role": "vlm",

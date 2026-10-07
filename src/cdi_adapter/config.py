@@ -157,7 +157,11 @@ class Settings(BaseSettings):
     ocrhost_url: str = ""                 # e.g. http://127.0.0.1:8079
     ocrhost_port: int = 8079
     ocrhost_timeout_s: float = 120.0
-    trocr_enabled: bool = True
+    # OFF by default (2026-10-07): on real prescription photos from three doctors it agreed with Qwen on 3% of
+    # lines and produced fluent unrelated English (trocr-base-handwritten is trained on IAM sentences). While
+    # off, Qwen is the only handwriting reader: every handwriting line is single-reader (see validate/policy.py),
+    # checked against the reference lists (recognition/verify.py). Switch on only after a benchmark says so.
+    trocr_enabled: bool = False
     trocr_model_id: str = "microsoft/trocr-base-handwritten"   # English (IAM); Bengali is E2-S10
     trocr_max_new_tokens: int = 64
     trocr_batch_size: int = 8
@@ -175,6 +179,13 @@ class Settings(BaseSettings):
     # crop standard (IM-S3): what every handwriting crop looks like when it reaches a reader.
     # PLACEHOLDERS, not tuned: accuracy by crop size is not measured yet (the size of every crop is
     # recorded with the line so it can be). 0 turns the upscaling off.
+    # a region with no thin pen/print strokes, or a background that is not the page's paper colour (fabric, table, hand),
+    # is not writing and is not sent to a reader (recognition/nontext.py). PLACEHOLDERS from three real photos.
+    nontext_blackhat_threshold: int = 25
+    nontext_min_thin_ink: float = 0.03
+    nontext_max_paper_distance: float = 20.0
+    nontext_min_height_px: int = 9
+    nontext_min_width_px: int = 12
     crop_pad_frac: float = 0.04           # padding on each side, as a share of the box, so strokes are not cut
     crop_pad_min_px: int = 4              # ... and never less than this
     crop_min_height_px: int = 32          # a crop shorter than this is upscaled before it is read

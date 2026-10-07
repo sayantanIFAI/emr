@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request
 from sqlalchemy import text
 
 from .. import repo
@@ -19,6 +19,7 @@ from ..db import session_scope
 from ..fhir.canonical import build_bundle
 from ..fhir.validate_abdm import validate as validate_abdm
 from ..logging import get_logger
+from .surface import reviewer_name
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/api/reviewer", tags=["reviewer"])
@@ -128,8 +129,8 @@ def worklist(assignee: str) -> dict[str, Any]:
 
 
 @router.post("/items/{item_id}/claim")
-def claim(item_id: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
-    who = (body or {}).get("assignee") or "reviewer"
+def claim(request: Request, item_id: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    who = reviewer_name(request, (body or {}).get("assignee"))
     with session_scope() as sess:
         row = sess.execute(text("SELECT state, assignee FROM rv_item WHERE id = :i"),
                            {"i": item_id}).first()
@@ -147,8 +148,8 @@ def claim(item_id: str, body: dict[str, Any] = Body(default={})) -> dict[str, An
 
 
 @router.post("/items/{item_id}/release")
-def release(item_id: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
-    who = (body or {}).get("assignee") or "reviewer"
+def release(request: Request, item_id: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    who = reviewer_name(request, (body or {}).get("assignee"))
     with session_scope() as sess:
         sess.execute(text("""
             UPDATE rv_item SET state = 'open', assignee = NULL, claimed_at = NULL
@@ -194,9 +195,9 @@ def get_item(item_id: str) -> dict[str, Any]:
 
 
 @router.post("/items/{item_id}/elements")
-def save_elements(item_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def save_elements(request: Request, item_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     els = (body or {}).get("elements") or []
-    who = (body or {}).get("assignee") or "reviewer"
+    who = reviewer_name(request, (body or {}).get("assignee"))
     with session_scope() as sess:
         for e in els:
             sess.execute(text("""
@@ -221,8 +222,8 @@ def save_elements(item_id: str, body: dict[str, Any] = Body(...)) -> dict[str, A
 
 
 @router.post("/items/{item_id}/approve")
-def approve(item_id: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
-    who = (body or {}).get("reviewer") or (body or {}).get("assignee") or "reviewer"
+def approve(request: Request, item_id: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    who = reviewer_name(request, (body or {}).get("reviewer") or (body or {}).get("assignee"))
     with session_scope() as sess:
         pend = sess.execute(text("""
             SELECT count(*) FROM rv_item_element WHERE rv_item_id = :i AND decision = 'pending'
@@ -261,8 +262,8 @@ def approve(item_id: str, body: dict[str, Any] = Body(default={})) -> dict[str, 
 
 
 @router.post("/items/{item_id}/reject")
-def reject(item_id: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
-    who = (body or {}).get("reviewer") or "reviewer"
+def reject(request: Request, item_id: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    who = reviewer_name(request, (body or {}).get("reviewer"))
     with session_scope() as sess:
         sess.execute(text("UPDATE rv_item SET state = 'rejected', completed_at = now() WHERE id = :i"),
                      {"i": item_id})

@@ -67,6 +67,7 @@ def test_the_listener_stops_with_the_reason_when_sign_in_is_gone(monkeypatch):
     monkeypatch.setattr(service, "_beat", lambda c, **kw: beats.append(kw))
     monkeypatch.setattr(service, "_install_signal_handlers", lambda: None)
     monkeypatch.setattr("sys.argv", ["listener"])
+    monkeypatch.setattr(settings, "env", "dev")
     service._STOP.clear()
     with pytest.raises(SystemExit) as stop:
         service.main()
@@ -94,6 +95,7 @@ def test_an_ordinary_outage_keeps_the_listener_alive(monkeypatch):
     monkeypatch.setattr(service, "_beat", lambda c, **kw: beats.append(kw))
     monkeypatch.setattr(service, "_install_signal_handlers", lambda: None)
     monkeypatch.setattr(settings, "listener_poll_seconds", 0)
+    monkeypatch.setattr(settings, "env", "dev")
     monkeypatch.setattr("sys.argv", ["listener"])
     service._STOP.clear()
     service.main()

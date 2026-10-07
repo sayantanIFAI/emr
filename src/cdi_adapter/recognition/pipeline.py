@@ -30,6 +30,7 @@ from ..ocr.rapid import OcrLine
 from .disagreement import AGREE, DISAGREE, NONE, SINGLE, compare_engines, self_consistency
 from .drift import disagreement_rate, drift_alarm, recent_rates
 from .engines import QwenLineEngine, Reading, is_fallback_model
+from . import nontext
 from .ocrhost_client import get_ocr_host
 from .regions import PRINTED, Region, detect_regions, prepare_crop
 
@@ -111,19 +112,24 @@ def recognize_page(*, document_id: str, page: dict[str, Any], rapid_lines: list[
     src = _decode(storage.get_bytes(storage.key_from_uri(src_uri)))
     gray = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
     regions = detect_regions(gray, rapid_lines)
+    skipped = nontext.classify_regions(regions, src)         # fabric, table, hand, stray marks: never sent to a reader
+    if skipped["non_text"]:
+        log.info("non_text_regions_set_aside", document_id=document_id, page=page["page_no"], **skipped)
 
     hw = [r for r in regions if r.needs_handwriting_engines]
     prepared = [prepare_crop(src, r.bbox) for r in hw]             # the crop standard (IM-S3)
     crops = [p[0] for p in prepared]
     crop_info = [p[1] for p in prepared]
     host = get_ocr_host()
-    if crops:
+    if crops and settings.trocr_enabled:
         # the two readers are independent (neither sees the other's answer) and sit on different
         # servers, so they read the same crops at the same time
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="read") as ex:
             f_tro = ex.submit(host.trocr, crops)
             f_qwe = ex.submit(QwenLineEngine().recognize, crops)
             tro, qwe = f_tro.result(), f_qwe.result()
+    elif crops:
+        tro, qwe = [], QwenLineEngine().recognize(crops)        # TrOCR is off: Qwen is the one handwriting reader
     else:
         tro, qwe = [], []
     qwe_b: list[Reading] = []
@@ -138,6 +144,8 @@ def recognize_page(*, document_id: str, page: dict[str, Any], rapid_lines: list[
     hw_idx = {id(r): i for i, r in enumerate(hw)}
     for order, r in enumerate(regions):
         key = f"p{page['page_no']}:l{order}"
+        if r.kind == nontext.NON_TEXT:
+            continue
         if not r.needs_handwriting_engines:
             txt, conf = _region_text_printed(r)
             if not txt:

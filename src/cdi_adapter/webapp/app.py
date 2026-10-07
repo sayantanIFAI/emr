@@ -5,7 +5,7 @@ import json
 import uuid
 from typing import Any
 
-from fastapi import Body, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from .. import __version__, repo, storage
@@ -27,7 +27,7 @@ from .reviewer_page import REVIEWER_PAGE
 from .admin import router as admin_router
 from .corrections_api import router as corrections_router
 from .admin_page import ADMIN_PAGE
-from .surface import SurfaceMiddleware, require_auth_configured
+from .surface import SurfaceMiddleware, reviewer_name
 from .upload_page import ADMIN_PAGE as UPLOAD_ONLY_PAGE
 
 log = get_logger(__name__)
@@ -36,7 +36,9 @@ _DEV = settings.env.strip().lower() == "dev"
 @contextlib.asynccontextmanager
 async def _lifespan(_app: FastAPI):
     from .resume import start_in_background
+    from .surface import startup_checks
 
+    startup_checks()               # the same checks however the app is started (python -m ... or uvicorn ...:app)
     start_in_background()          # pick up uploads a restart interrupted (OUT-S3)
     yield
 
@@ -236,10 +238,10 @@ def job_facts_endpoint(job_id: str) -> Any:
 
 
 @app.post("/api/jobs/{job_id}/generate")
-def job_generate(job_id: str, body: dict[str, Any] = Body(default={})) -> Any:
+def job_generate(request: Request, job_id: str, body: dict[str, Any] = Body(default={})) -> Any:
     """Apply the editor's keep/edit/drop decisions, then build the FHIR bundles (ms)."""
     edits = (body or {}).get("edits") or []
-    reviewer = (body or {}).get("reviewer") or "reviewer"
+    reviewer = reviewer_name(request, (body or {}).get("reviewer"))
     try:
         return JSONResponse(apply_edits_and_generate(job_id, edits, reviewer))
     except KeyError:
@@ -301,11 +303,11 @@ def review_fact(fact_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/facts/{fact_id}/review")
-def review_decision(fact_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def review_decision(request: Request, fact_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     action = (body or {}).get("action", "")
     try:
         return review_svc.submit_decision(
-            fact_id, action, reviewer=body.get("reviewer") or "reviewer",
+            fact_id, action, reviewer=reviewer_name(request, body.get("reviewer")),
             corrections=body.get("corrections"), note=body.get("note"),
         )
     except ValueError as exc:
@@ -377,16 +379,9 @@ def document_evidence(document_id: str) -> dict[str, Any]:
 def main() -> None:
     import uvicorn
 
-    from ..security import require_no_default_credentials
+    from .surface import startup_checks
 
-    from ..compliance.models import require_registered
-
-    from .. import swap
-
-    require_auth_configured()
-    require_no_default_credentials()
-    swap.check_all()                 # a wrong name or a missing library stops the service, naming the setting
-    require_registered()
+    startup_checks()
     uvicorn.run(app, host="0.0.0.0", port=settings.webapp_port,
                 log_level=settings.log_level.lower())
 

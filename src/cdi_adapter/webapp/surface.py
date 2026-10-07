@@ -56,6 +56,27 @@ def require_auth_configured() -> None:
             "CDI_ENV=dev. Set CDI_ADMIN_PASSWORD (and optionally CDI_ADMIN_USER).")
 
 
+def reviewer_name(request: Any, claimed: str | None) -> str:
+    """Who is acting. When a sign-in is configured the name is the signed-in user and whatever the request body
+    says is ignored (a caller cannot sign a decision as someone else); with no sign-in (dev only) the claimed name
+    is used, defaulting to ``reviewer``."""
+    user = getattr(getattr(request, "state", None), "user", None)
+    return user or (claimed or "reviewer")
+
+
+def startup_checks() -> None:
+    """Everything that must be true before this app serves a request. Run from ``main()`` AND from the app's
+    lifespan, so ``uvicorn cdi_adapter.webapp.app:app`` is checked exactly like ``python -m cdi_adapter.webapp``."""
+    from .. import swap
+    from ..compliance.models import require_registered
+    from ..security import require_no_default_credentials
+
+    require_auth_configured()
+    require_no_default_credentials()
+    swap.check_all()               # a wrong name or a missing library stops the service, naming the setting
+    require_registered()
+
+
 def credentials_ok(header: str | None) -> bool:
     """Check an ``Authorization: Basic ...`` header against the configured admin."""
     if not header or not header.lower().startswith("basic "):
@@ -95,6 +116,7 @@ class SurfaceMiddleware:
                 await _reply(send, 401, {"detail": "Sign in required."},
                              [(b"www-authenticate", b'Basic realm="CDI admin", charset="UTF-8"')])
                 return
+            scope.setdefault("state", {})["user"] = settings.admin_user   # the one signed-in identity
         if is_closed(path):
             await _reply(send, 404, {"detail": "Not Found"})
             return
