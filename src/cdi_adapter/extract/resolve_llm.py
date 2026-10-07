@@ -16,7 +16,7 @@ from typing import Any
 
 from ..config import settings
 from ..logging import get_logger
-from . import lab_resolve
+from . import lab_resolve, medicine_resolve
 from .indian_codes import norm
 from .test_names import is_known_test, looks_like_medicine
 
@@ -87,4 +87,42 @@ def resolve_tests(client: Any, image: bytes, tests: list[str]) -> dict[str, str]
         if got:
             out[written] = got
     log.info("llm_resolve", asked=len(items), chosen=len(out))
+    return out
+
+
+def prompt_for_medicines(items: list[tuple[str, list[str]]]) -> str:
+    lines = []
+    for i, (written, cands) in enumerate(items, start=1):
+        opts = "  ".join(f"{j}) {c}" for j, c in enumerate(cands, start=1))
+        lines.append(f"{i}. read as '{written}' -> {opts}")
+    head = ("A doctor's handwritten prescription is shown. Some medicine names on it were read imperfectly. For each "
+            "numbered item below choose which candidate is what the HANDWRITING on the page says, or null if none of them "
+            "is clearly written there. Do not choose a candidate only because it is a common medicine; look at the "
+            "letters actually written.")
+    tail = 'Answer ONLY as JSON: {"choices": [one entry per item: the candidate number or null]}'
+    return chr(10).join([head, *lines, tail])
+
+
+def resolve_medicines(client: Any, image: bytes, names: list[str]) -> dict[str, str]:
+    """{medicine as read: reference name the model chose}. Same limits as for tests: only an offered candidate that is
+    textually close to the reading, never free text; empty when nothing is pending or the call fails."""
+    if not settings.llm_resolve_enabled:
+        return {}
+    items = medicine_resolve.pending(names)
+    if not items:
+        return {}
+    try:
+        resp, _ = client.vlm_json_ex(image, prompt_for_medicines(items), SCHEMA, max_tokens=120, retries=1)
+    except Exception as exc:  # noqa: BLE001 - an extra look must never cost the document
+        log.warning("llm_resolve_medicines_failed", error=str(exc)[:200])
+        return {}
+    choices = (resp or {}).get("choices")
+    if not isinstance(choices, list):
+        return {}
+    out: dict[str, str] = {}
+    for (written, cands), choice in zip(items, choices):
+        got = accept(medicine_resolve.first_word(written), cands, choice)
+        if got:
+            out[written] = got
+    log.info("llm_resolve_medicines", asked=len(items), chosen=len(out))
     return out

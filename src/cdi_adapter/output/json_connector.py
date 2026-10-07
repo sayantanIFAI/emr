@@ -90,7 +90,11 @@ def _medication(f: dict[str, Any]) -> dict[str, Any]:
         "strength": _num(d.get("strength_num")), "strength_unit": d.get("strength_unit"),
         "dose": _num(d.get("dose_num")), "dose_unit": d.get("dose_unit_ucum"),
         "route": d.get("route"), "frequency": d.get("frequency_code"),
-        "duration_days": d.get("duration_days"), "instructions": d.get("instructions")})
+        "duration_days": d.get("duration_days"), "instructions": d.get("instructions"),
+        # the reference name the MODEL chose among the list when the handwriting was close to it (None = none chosen)
+        "reference_name": (f.get("value_code_display")
+                           if f.get("value_code_display") and f.get("value_code_display") != (d.get("drug_text") or f.get("local_text"))
+                           else None)})
 
 
 def _lab_result(f: dict[str, Any]) -> dict[str, Any]:

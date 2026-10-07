@@ -191,13 +191,13 @@
     "medication": {
       "type": "object", "additionalProperties": false,
       "required": ["fact_id", "text", "drug", "strength", "strength_unit", "dose", "dose_unit", "route", "frequency",
-                   "duration_days", "instructions", "status", "reason", "confidence"],
+                   "duration_days", "instructions", "reference_name", "status", "reason", "confidence"],
       "properties": {
         "fact_id": {"type": "string"}, "text": {"type": ["string", "null"]}, "drug": {"type": ["string", "null"]},
         "strength": {"type": ["number", "null"]}, "strength_unit": {"type": ["string", "null"]},
         "dose": {"type": ["number", "null"]}, "dose_unit": {"type": ["string", "null"]},
         "route": {"type": ["string", "null"]}, "frequency": {"type": ["string", "null"]},
-        "duration_days": {"type": ["number", "null"]}, "instructions": {"type": ["string", "null"]},
+        "duration_days": {"type": ["number", "null"]}, "instructions": {"type": ["string", "null"]}, "reference_name": {"type": ["string", "null"]},
         "status": {"$ref": "#/$defs/item_status"}, "reason": {"type": ["string", "null"]},
         "confidence": {"type": ["number", "null"]}, "earlier_readings": {"$ref": "#/$defs/earlier_readings"}
       }

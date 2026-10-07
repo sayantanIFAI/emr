@@ -12,7 +12,7 @@ from ..db import session_scope
 from ..logging import get_logger
 from ..ml.client import MLError, get_client
 from .prompt import block_id_map, build_extraction_prompt, load_schema, max_tokens_for
-from . import indian_codes, lab_resolve, resolve_llm
+from . import indian_codes, lab_resolve, medicine_resolve, resolve_llm
 from .medicine_lexicon import medicine_match
 from .test_names import is_known_test, is_test_list, looks_like_medicine, split_tests
 
@@ -169,6 +169,21 @@ def _first_word(text: str) -> str:
     return m.group(0).casefold() if m else ""
 
 
+_DOSE_KEYS = ("strength", "dose", "frequency_text", "frequency", "duration_days", "timing", "dosage", "sig", "schedule",
+              "dose_pattern", "route", "form")
+
+
+def _advice_listed_as_medicine(m: Any) -> bool:
+    """A medication entry that is really advice: advice words, and nothing that says medicine (no reference-list hit,
+    no strength / dose / frequency / duration field)."""
+    if isinstance(m, str):
+        return medicine_resolve.advice_like(m)
+    if not isinstance(m, dict):
+        return False
+    name = m.get("drug_text") or m.get("text") or m.get("name") or ""
+    return medicine_resolve.advice_like(name, has_dose=any(m.get(k) for k in _DOSE_KEYS))
+
+
 def _misfiled_medicine(text: str) -> bool:
     """A medicine written among the tests: the Indian drug list / medicine marks say so, and no test list knows it."""
     if is_known_test(text) or lab_resolve.resolve(text) is not None:
@@ -182,7 +197,15 @@ def _facts_prescription(c: _Ctx, p: dict[str, Any]) -> None:
         if t:
             c.add(fact_type="condition", local_text=t, value_code_display=t, evidence=ev,
                   clinical_status="active", verification="confirmed")
+    c.med_resolved = p.get("_med_resolved") or {}              # {as read: reference name the model chose}
     for m in p.get("medications") or []:
+        if _advice_listed_as_medicine(m):
+            # "steam inhalation", "gargle with warm water", "plenty of fluids": advice, not a medicine
+            t, ev = _coded_text(m if isinstance(m, dict) else {"text": m})
+            t = t or (m.get("drug_text") if isinstance(m, dict) else "") or ""
+            if t:
+                c.add(fact_type="advice", local_text=t, value_text=t, evidence=(m.get("evidence") if isinstance(m, dict) else ev))
+            continue
         _add_medication(c, m, intent="order",
                         status=m.get("status") if isinstance(m, dict) else None)
     for a in p.get("advice") or []:
@@ -473,8 +496,9 @@ def _add_medication(c: _Ctx, m: Any, *, intent: str, status: str | None = None) 
     if not route and re.search(r"\binj|injection|penfill|s/?c\b|subcut", raw_drug.lower()):
         route = "subcutaneous" if "s/c" in raw_drug.lower() or "subcut" in raw_drug.lower() else "injection"
     cs = {"stopped": "stopped", "changed": "active"}.get(status or "", "active")
+    chosen = (getattr(c, "med_resolved", None) or {}).get(raw_drug)       # the model's pick among reference names, if any
     fid = c.add(
-        fact_type="medication", local_text=drug or raw_drug, value_code_display=drug or raw_drug,
+        fact_type="medication", local_text=drug or raw_drug, value_code_display=chosen or drug or raw_drug,
         evidence=m.get("evidence"), clinical_status=cs, verification="confirmed",
     )
     repo.insert_medication_detail(
@@ -559,6 +583,10 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
         # as a CHOICE among those names (never free text); what it picks is kept apart from what was written
         names = [one for io in payload.get("investigations") or [] for one in split_tests(_coded_text(io)[0])]
         payload["_test_resolved"] = resolve_llm.resolve_tests(client, image, names)
+        # the same for medicines: a name close to reference medicine names is a CHOICE among them, never free text
+        meds = [(_coded_text(m)[0] if not isinstance(m, dict) else (m.get("drug_text") or m.get("text") or m.get("name") or ""))
+                for m in payload.get("medications") or []]
+        payload["_med_resolved"] = resolve_llm.resolve_medicines(client, image, [x for x in meds if x])
 
     blocks_by_id = {str(b["id"]): b for b in blocks}
     handler = _HANDLERS.get(schema_id)
