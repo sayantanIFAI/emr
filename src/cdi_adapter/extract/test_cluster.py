@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import lab_mapping, lab_resolve
-from .test_names import _STRONG, looks_like_medicine, split_tests
+from .test_names import _STRONG, is_known_test, looks_like_medicine, split_tests
 
 # a line with the marks of a medicine order is not looked at (and is never part of a group)
 _MEDICINE_LINE = re.compile(r"(?i)\b(?:tabs?|tablets?|caps?|capsules?|syp|syr|inj|drops?|oint|cream|gel|susp)\b\.?"
@@ -30,7 +30,7 @@ _WEAK_WORDS = frozenset("vitamin vit iron calcium zinc magnesium folic potassium
 _MARKER = re.compile(r"(?i)(?<![0-9])(?:25|2)\s*[\(\[]?\s*oh\b")
 
 # letters handwriting makes look alike (one can be read as another); both directions
-_PAIRS = ("ab", "ao", "ae", "bh", "b6", "ce", "co", "eo", "hn", "il", "lt", "mn", "nu", "nr", "ps", "pb", "rs", "s5", "uv", "vy", "tf")
+_PAIRS = ("ab", "ao", "ae", "bh", "b6", "ce", "co", "eo", "go", "gq", "hn", "il", "lt", "mn", "nu", "nr", "ps", "pb", "rs", "s5", "uv", "vy", "tf")
 _CONFUSABLE: set[tuple[str, str]] = {p for a, b in _PAIRS for p in ((a, b), (b, a))}
 
 
@@ -217,3 +217,71 @@ def scan(blocks: list[dict[str, Any]] | None) -> list[Found]:
             seen.add(k)
             out.append(f)
     return out
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# the model's own test entries, put right by the same rules. MEASURED on a real prescription: "Chest ECG" was read "Chest ECO" and
+# "Na+ & K+ Level Test" was read "Nat & Kit Level Test"; neither was placed by the lab lists, so both showed as "outside the lab list".
+_ELECTROLYTE = re.compile(r"(?i)^\W*(?:s[.\s]*)?na\s*[+t]?\s*(?:&|and|[+,/q])\s*k\s*[+it]{0,2}\b")      # Na+ & K+ (the + is read as t)
+
+
+def repair_piece(piece: str, evidence: bool) -> tuple[str, str] | None:
+    """A test the lists do not place, put right: sodium and potassium written "Na+ & K+" (any reading of the + signs), or a word that is a
+    one-letter handwriting slip of a strong abbreviation ("ECO" -> ECG) when ``evidence`` says other tests are listed beside it. The
+    corrected name must be PLACED by the lists, and the note says what was read. ``None`` when nothing applies."""
+    if placed_text(piece):
+        return None
+    if _ELECTROLYTE.match(piece):
+        return "Na+ & K+", f"read as '{piece}' (sodium and potassium)"
+    if not evidence:
+        return None
+    fixed: list[str] = []
+    slips: list[str] = []
+    for w in piece.split():
+        slip = near_miss(re.sub(r"[^A-Za-z]", "", w))
+        if slip and not placed_text(w):
+            fixed.append(slip)
+            slips.append(slip)
+        else:
+            fixed.append(w)
+    name = " ".join(fixed)
+    if slips and placed_text(name):
+        return name, f"read as '{piece}' (one letter from {slips[0]})"
+    return None
+
+
+def repair_investigations(payload: dict[str, Any]) -> dict[str, str]:
+    """Apply ``repair_piece`` to every test the model listed (in place). Returns ``{corrected name: note}`` so the result can say what was
+    read. Evidence for a slip: at least one other listed test the lists place exactly."""
+    inv = payload.get("investigations")
+    if not isinstance(inv, list):
+        return {}
+
+    def text_of(x: Any) -> str:
+        return str(x.get("text") or "") if isinstance(x, dict) else (x if isinstance(x, str) else "")
+
+    entries = [(i, [seg for seg in re.split(r"\s*[,;]\s*", text_of(x)) if seg.strip()]) for i, x in enumerate(inv)]     # "Nat & Kit" is one test: not cut at the &
+    placed = sum(1 for _, segs in entries for seg in segs for p in split_tests(seg) if placed_text(p) or is_known_test(p))     # "CBC Test" counts: CBC is a test word
+    notes: dict[str, str] = {}
+    for i, segs in entries:
+        new: list[str] = []
+        changed = False
+        for seg in segs:
+            whole = repair_piece(seg, evidence=placed >= 1) if _ELECTROLYTE.match(seg) else None
+            if whole:
+                new.append(whole[0])
+                notes[whole[0]] = whole[1]
+                changed = True
+                continue
+            for p in split_tests(seg):
+                r = repair_piece(p, evidence=placed >= 1)
+                if r:
+                    new.append(r[0])
+                    notes[r[0]] = r[1]
+                    changed = True
+                else:
+                    new.append(p)
+        if changed:
+            text = ", ".join(new)
+            inv[i] = {**inv[i], "text": text} if isinstance(inv[i], dict) else text
+    return notes

@@ -95,3 +95,34 @@ def test_a_handwritten_line_with_one_garbled_word_keeps_its_tests():
     line = B("! CBC Blood Engn ? PP ?", 6, 846, 413, 999)
     assert [f.test for f in T.scan([line])] == ["CBC", "PP"]
 
+
+
+# ---- the model's own entries, put right (MEASURED on a real prescription: "Chest ECO", "Nat & Kit Level Test")
+@pytest.mark.parametrize("piece,expected", [
+    ("Nat & Kit Level Test", "Na+ & K+"), ("Na+ & K+ Level Test", None), ("Na+ & K+", None), ("Nat q Kit", "Na+ & K+"), ("S. Na & K", None),      # this one the lists already place
+    ("Chest ECO", "Chest ECG"), ("CBC", None), ("Chest pain", None), ("Level Test", None),
+])
+def test_a_misread_test_is_put_right_only_when_the_lists_then_place_it(piece, expected):
+    got = T.repair_piece(piece, evidence=True)
+    assert (got[0] if got else None) == expected
+
+
+def test_a_slip_needs_other_listed_tests_beside_it_but_sodium_and_potassium_does_not():
+    assert T.repair_piece("Chest ECO", evidence=False) is None
+    assert T.repair_piece("Nat & Kit Level Test", evidence=False)[0] == "Na+ & K+"
+
+
+def test_the_models_list_is_corrected_in_place_and_says_what_was_read():
+    payload = {"investigations": [{"text": "Chest ECO", "evidence": []}, "CBC Test", {"text": "Nat & Kit Level Test"}, "Lipid Profile Test"]}
+    notes = T.repair_investigations(payload)
+    assert [x["text"] if isinstance(x, dict) else x for x in payload["investigations"]] == ["Chest ECG", "CBC Test", "Na+ & K+", "Lipid Profile Test"]
+    assert "ECG" in notes["Chest ECG"] and "'Chest ECO'" in notes["Chest ECG"] and "sodium and potassium" in notes["Na+ & K+"]
+    alone = {"investigations": ["Chest ECO"]}
+    assert T.repair_investigations(alone) == {} and alone["investigations"] == ["Chest ECO"]          # no other test beside it: not taken
+
+
+def test_chest_ecg_sodium_potassium_and_fever_profile_are_in_the_mapping_table():
+    from cdi_adapter.extract import lab_mapping
+    for name, std in (("Chest ECG", "ECG"), ("Na+ & K+", "Sodium and potassium (electrolytes)"), ("Blood for fever profile", "Fever profile"),
+                      ("Serum electrolytes", "Sodium and potassium (electrolytes)")):
+        assert lab_mapping.lookup(name).canonical == std

@@ -332,7 +332,8 @@ def name_crops(image: bytes, blocks: list[dict[str, Any]] | None, name: str | No
         if not b.get("bbox"):
             continue
         bt = name_key(b.get("text")).split()
-        s = sum(1 for t in toks if difflib.get_close_matches(t, bt, n=1, cutoff=0.7))
+        glued = "".join(bt)                                          # the readers often drop the spaces: "SAYANDAS(40Y/MALE)"
+        s = sum(1 for t in toks if difflib.get_close_matches(t, bt, n=1, cutoff=0.7) or (len(t) >= 4 and t in glued))
         if s > score:
             best, score = b, s
     if best is not None and score >= 1:
@@ -442,7 +443,9 @@ def name_reads(client: Any, image: bytes, blocks: list[dict[str, Any]] | None, n
             log.warning("name_reread_failed", error=str(exc)[:200])
             return None
         n = (resp or {}).get("name")
-        return " ".join(n.split())[:80] if isinstance(n, str) and any(ch.isalpha() for ch in n) else None
+        # "null" / "none" written as text ("null DAS" came back once) is the model saying it read nothing, never part of a name
+        return " ".join(n.split())[:80] if isinstance(n, str) and any(ch.isalpha() for ch in n) \
+            and not re.search(r"(?i)\b(?:null|none|unknown)\b", n) else None
 
     if not crops:
         return []

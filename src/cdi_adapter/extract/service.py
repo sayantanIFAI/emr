@@ -565,7 +565,7 @@ def _check_the_name(client: Any, image: bytes, blocks: list[dict[str, Any]], pay
     from ..names import org_like
 
     first = payload["patient"].get("name")
-    first = first if isinstance(first, str) and first.strip() else None
+    first = first if isinstance(first, str) and first.strip() and first.strip().casefold() not in ("null", "none") else None
     if first and org_like(first):                     # the clinic's name on the letterhead was taken for the patient: it is not a name
         first, payload["patient"]["name"] = None, None
     reads = [r for r in resolve_llm.name_reads(client, image, blocks, first) if not org_like(r)]
@@ -576,6 +576,17 @@ def _check_the_name(client: Any, image: bytes, blocks: list[dict[str, Any]], pay
     payload["_name_agreement"] = [agree, total]
     if chosen and ((first is None) or (agree >= 3 and not alike(first, chosen, 0.85))):
         payload["patient"]["name"] = chosen                 # no usable first reading, or most readings agree on a different spelling
+    # the readings from the name line's own enlarged crops decide over the whole-page reading: when the same spelling (exactly, title
+    # ignored) is read by MORE THAN HALF of them it is the shown name, even when it is close to the first reading. MEASURED on a real
+    # page: "Shibaji Sen" was read 8 of 12 times from the crops while the first reading "Shibay Sen" stayed in the field because the
+    # two are 86% alike and were counted as one group.
+    from collections import Counter
+
+    from ..names import name_key
+
+    modal = Counter(name_key(r) for r in reads if name_key(r)).most_common(1)
+    if modal and modal[0][1] >= 2 and modal[0][1] * 2 > len(reads) and modal[0][0] != name_key(payload["patient"].get("name") or ""):
+        payload["patient"]["name"] = next(r for r in reads if name_key(r) == modal[0][0])
     from ..names import prefer_complete
 
     now = payload["patient"].get("name")
@@ -859,6 +870,9 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
         pid_latest = str(pages[latest_no - 1]["id"])
         focus_blocks = [b for b in blocks if str(b.get("page_id")) == pid_latest] or blocks
 
+    if isinstance(payload, dict) and cls["doc_type"] in ("prescription", "opd_note", "referral"):
+        from . import header
+        header.fill_patient(payload, page1_blocks)  # a patient printed in the header with age and sex (Apollo Sugar Clinics), when the model found none
     if isinstance(payload, dict) and isinstance(payload.get("patient"), dict) and cls["doc_type"] in ("prescription", "opd_note", "referral"):
         _check_the_name(client, page1_image, page1_blocks, payload, _both_pictures(pages[0], page1_image))     # the name is on the first page
 
@@ -869,6 +883,8 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
     if isinstance(payload, dict) and cls["doc_type"] in ("prescription", "opd_note", "referral"):
         # the hybrid step: a test the gate cannot place but that is close to reference names is put to the model
         # as a CHOICE among those names (never free text); what it picks is kept apart from what was written
+        from . import test_cluster
+        payload["_text_scan"] = test_cluster.repair_investigations(payload)      # "Chest ECO" -> ECG, "Nat & Kit" -> Na+ & K+, with a note of what was read
         names = [one for io in payload.get("investigations") or [] for one in split_tests(_coded_text(io)[0])]
         fu = payload.get("follow_up")
         fu_text = fu if isinstance(fu, str) else (fu.get("text") if isinstance(fu, dict) else None)
@@ -876,8 +892,7 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
         if extra:                          # tests written with the follow-up line, found by the focused second look
             payload.setdefault("investigations", []).extend({"text": t, "evidence": [], "source": "second_look"} for t in extra)
             payload["_second_look"] = list(extra)          # kept so the result can say where these tests came from
-            from . import test_cluster
-            payload["_text_scan"] = {f.test: f.note for f in test_cluster.scan(focus_blocks) if f.test in extra}
+            payload["_text_scan"].update({f.test: f.note for f in test_cluster.scan(focus_blocks) if f.test in extra})
             names += extra
         payload["_test_resolved"] = resolve_llm.resolve_tests(client, image, names)
         # the same for medicines: a name close to reference medicine names is a CHOICE among them, never free text

@@ -67,3 +67,33 @@ def test_the_garbled_long_line_is_skipped_and_the_clean_printed_one_is_the_clini
     H.fill(payload, page)
     assert payload["prescriber"]["clinic"]["name"] == "KS HEALTHCARE" and payload["prescriber"]["name"] == "Dr. Kumar Sourav"
 
+
+
+# ---- the patient printed in the header (Apollo Sugar Clinics): a name with "(40 Y / MALE)" beside it
+def BX(text, y0, y1):
+    return {"text": text, "bbox": [400, y0, 600, y1]}
+
+
+APOLLO = [BX("Apollo Sugar Clinics", 10, 60), BX("SAYANDAS(40Y/MALE)", 120, 150), BX("OPDBNO:6065/15", 160, 185), BX("M:8697709557,", 190, 215),
+          BX("OR.SUSHMITAPALSANTRA", 250, 280), BX("Mob: 7980988837", 300, 320), BX("x", 900, 1000)]          # MEASURED: the readers drop the spaces
+
+
+def test_the_patient_is_the_name_before_the_age_and_sex_in_the_header_with_the_phone_beside_it():
+    got = H.patient_in_header(APOLLO)
+    assert got == {"name": "Sayandas", "age_text": "40 Y", "sex": "M", "phone": "8697709557"}      # not the doctor's 7980988837
+    spaced = [BX("SAYAN DAS (40 Y / MALE)", 120, 150)] + APOLLO[2:]
+    assert H.patient_in_header(spaced)["name"] == "Sayan Das"
+
+
+@pytest.mark.parametrize("line", ["Dr. B. Mondal (50 Y / MALE)", "KS Healthcare Clinic (5 Y / M)", "Patient Name Mr. Shibaji Sen", "Age 40 Y Sex MALE", ""])
+def test_a_doctor_an_organisation_or_a_line_without_age_and_sex_is_not_the_patient(line):
+    assert H.patient_in_header([BX(line, 10, 40), BX("x", 900, 1000)]) is None
+
+
+def test_the_header_patient_fills_only_what_is_empty_and_text_null_counts_as_empty():
+    payload = {"patient": {"name": "null", "sex": "F", "phone": "None"}}
+    assert H.fill_patient(payload, APOLLO) == ["name", "age_text", "phone"]
+    assert payload["patient"] == {"name": "Sayandas", "sex": "F", "phone": "8697709557", "age_text": "40 Y"}      # the sex the model gave stays
+    kept = {"patient": {"name": "Sayan Das", "age_text": "40", "sex": "M", "phone": "1"}}
+    assert H.fill_patient(kept, APOLLO) == [] and kept["patient"]["name"] == "Sayan Das"
+    assert H.fill_patient({"patient": "text"}, APOLLO) == [] and H.fill_patient({}, []) == []

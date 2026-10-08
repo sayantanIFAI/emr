@@ -222,3 +222,20 @@ def test_when_the_first_reading_is_the_clinics_name_the_rereads_decide_and_it_is
     X._check_the_name(Seq("Sanjeewan", "Sanjeewan", "Sanjeevan"), _png(), BLOCKS, payload)
     assert payload["patient"]["name"].startswith("Sanjee") and "Limited" not in payload["patient"]["name"]
     assert all("Limited" not in n for n in payload["_name_reads"])
+
+
+def test_the_spelling_most_name_line_readings_agree_on_is_the_shown_name_even_when_close_to_the_first_reading():
+    # MEASURED on a real page: "Shibaji Sen" was read 8 of 12 times from the crops; the whole-page reading "Shibay Sen" stayed in the field
+    payload = {"patient": {"name": "Mr. Shibay Sen"}}
+    X._check_the_name(Seq("Mr. Shibaji Sen", "Shibaji Sen", "Shibay Son"), _png(), BLOCKS, payload)
+    assert payload["patient"]["name"] == "Mr. Shibaji Sen"
+    split = {"patient": {"name": "Mr. Shibay Sen"}}
+    X._check_the_name(Seq("Shibaji Sen", "Shibay Son", "Shibaa Sen"), _png(), BLOCKS, split)
+    assert split["patient"]["name"] == "Mr. Shibay Sen"                                    # no spelling read by more than half: the first stays
+
+
+def test_null_written_as_text_is_never_a_name_reading_and_a_glued_header_line_still_finds_the_name_line():
+    assert X._check_the_name(Seq("null DAS", "null", "Rajesh"), _png(), BLOCKS, {"patient": {"name": "x"}}) is None
+    blocks = [{"id": "g", "text": "SAYANDAS(40Y/MALE)", "bbox": [120, 300, 800, 360], "page_id": "p1"}]
+    got = R.name_crops(_png(), blocks, "Sayandas")
+    assert len(got) == 3 and cv2.imdecode(np.frombuffer(got[0], np.uint8), cv2.IMREAD_COLOR).shape[0] < 400          # the line, not the top third of the page

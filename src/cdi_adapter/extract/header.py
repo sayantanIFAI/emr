@@ -101,3 +101,74 @@ def fill(payload: dict[str, Any], blocks: list[dict[str, Any]]) -> list[str]:
         payload["prescriber"] = pres
         log.info("header_filled", filled=filled)
     return filled
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# the PATIENT in the header: some clinics (Apollo Sugar Clinics) print the patient's name with the age and sex in the header and
+# leave the "Patient Name" space on the form empty. A name followed by "(40 Y / MALE)" is the patient, not the doctor.
+_AGE_SEX = re.compile(r"(?P<name>[A-Za-z][A-Za-z .'\-]{2,40}?)\s*\(\s*(?P<age>\d{1,3})\s*(?:Y|Yr|Yrs|Years?)?\s*/\s*(?P<sex>MALE|FEMALE|M|F)\s*\)", re.I)
+_PHONE = re.compile(r"(?i)\b(?:M|Mob|Mobile|Ph|Phone)\b\s*[:.\-]?\s*(?:\+?91[\s\-]?)?([6-9]\d{9})\b")
+_TITLE = re.compile(r"^\s*(?:mr|mrs|ms|miss|master|baby|smt|shri|sri)\b\.?\s*", re.I)
+_EMPTY = frozenset(("", "null", "none", "n/a", "na"))
+
+
+def _empty(v: Any) -> bool:
+    return v is None or str(v).strip().casefold() in _EMPTY
+
+
+def patient_in_header(blocks: list[dict[str, Any]]) -> dict[str, str] | None:
+    """The patient's name, age, sex (and the mobile number printed beside them) from the top of the first page, or None. The line must
+    hold a name followed by ``(40 Y / MALE)``; a name that starts with Dr or holds an organisation word is not a patient. The phone is
+    taken only from the same line or a line right beside it, never from the doctor's own header lines further away."""
+    rows: list[tuple[float, float, float, str]] = []
+    for b in blocks or []:
+        try:
+            x0, y0, x1, y1 = (float(v) for v in b["bbox"][:4])
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+        rows.append((y0, y1, x0, str(b.get("text") or "")))
+    if not rows:
+        return None
+    top = max(y1 for _, y1, _, _ in rows) * _HEADER_FRACTION
+    for y0, y1, _x0, text in rows:
+        if y0 > top:
+            continue
+        m = _AGE_SEX.search(text)
+        if not m:
+            continue
+        name = _TITLE.sub("", m.group("name")).strip(" .-'")
+        if not name or re.match(r"(?i)dr\b", name) or _ORG_WORD.search(name) or len(name.split()) > 4:
+            continue
+        if name.isupper():
+            name = name.title()
+        out = {"name": name, "age_text": f"{int(m.group('age'))} Y", "sex": "F" if m.group("sex").upper().startswith("F") else "M"}
+        near = max(y1 - y0, 20.0) * 2.5
+        for ny0, ny1, _nx0, ntext in rows:
+            if abs((ny0 + ny1) / 2 - (y0 + y1) / 2) <= near:
+                p = _PHONE.search(ntext)
+                if p:
+                    out["phone"] = p.group(1)
+                    break
+        return out
+    return None
+
+
+def fill_patient(payload: dict[str, Any], blocks: list[dict[str, Any]]) -> list[str]:
+    """Fill the patient's empty name, age, sex and phone from the header (``patient_in_header``). A value the model gave is never
+    replaced; "null" written as text counts as empty. Returns what was filled."""
+    found = patient_in_header(blocks)
+    if not found:
+        return []
+    pat = payload.get("patient")
+    if pat is not None and not isinstance(pat, dict):
+        return []
+    pat = dict(pat or {})
+    filled = []
+    for key in ("name", "age_text", "sex", "phone"):
+        if key in found and _empty(pat.get(key)):
+            pat[key] = found[key]
+            filled.append(key)
+    if filled:
+        payload["patient"] = pat
+        log.info("header_patient_filled", filled=filled)
+    return filled
