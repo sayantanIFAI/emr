@@ -669,6 +669,7 @@ function summaryHtml(r){
     ["With",b.doc?esc(b.doc):'<span class="none">doctor not read</span>'],
     ["When",b.when?esc(b.when):'<span class="none">—</span>'],
     ["As written",b.text?esc(b.text):'<span class="none">—</span>'],
+    ["Next date written",(r.follow_up||{}).next_date?esc((r.follow_up||{}).next_date)+((r.follow_up||{}).next_date_iso?' <span class="none">('+esc((r.follow_up||{}).next_date_iso)+')</span>':""):""],
     ["From the visit",lat&&V.length>1?esc(lat.where+(lat.date_text?" · dated "+lat.date_text:"")+" (the latest of "+V.length+" dated visits)"):""],
     ["Bring to the visit",b.bring&&b.tests.length?esc("Results of: "+b.tests.join(", ")):b.bring?"Reports (as written)":'<span class="none">nothing written</span>']],
     b.needed==="Yes"?"The date is not guessed: it is counted from the day of the visit written on the prescription.":"");

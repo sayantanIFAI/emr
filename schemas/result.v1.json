@@ -128,6 +128,7 @@
         "value": {"type": ["string", "null"]}, "status": {"$ref": "#/$defs/value_status"},
         "reason": {"type": ["string", "null"]}, "confidence": {"type": ["number", "null"]},
         "text": {"type": ["string", "null"]},
+        "next_date": {"type": ["string", "null"]}, "next_date_iso": {"type": ["string", "null"]},
         "kind": {"enum": ["interval", "date", "as_needed", null]},
         "interval_value": {"type": ["number", "null"]},
         "interval_unit": {"enum": ["days", "weeks", "months", "years", null]},

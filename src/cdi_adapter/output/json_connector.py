@@ -237,6 +237,12 @@ def _intake(doc: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
             "name_candidates": cands[:6]}
 
 
+def _next_date(blocks: list[dict[str, Any]]) -> dict[str, Any]:
+    """The "next date" written on the page (``Next dose: April 2026``), beside the follow-up: its words and, when it is a date, ISO."""
+    got = F.find_next_date(blocks)
+    return {"next_date": got["text"], "next_date_iso": got["iso"]} if got else {"next_date": None, "next_date_iso": None}
+
+
 def _visits(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """The dated visits found on the pages (newest first), as stored by the page merge (extract/visits.py)."""
     out: list[dict[str, Any]] = []
@@ -374,7 +380,7 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         "lab_preparation": checks["preparation"],
         "retracted_preparation": checks["retracted"],
         "advice": buckets.pop("advice"),
-        "follow_up": {**_v(fu), **fu["detail"]},
+        "follow_up": {**_v(fu), **fu["detail"], **_next_date(inp.blocks)},
         **buckets,
         "other": other,
         "not_extracted": _not_extracted(doc),

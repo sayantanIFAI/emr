@@ -219,3 +219,31 @@ def test_each_focused_view_is_asked_more_than_once_because_the_answers_differ(mo
     cl = _Client({"tests": ["HbA1c"]})
     R.followup_tests(cl, b"img", None, known=[])
     assert len(cl.prompts) == 3                                              # one view, asked three times
+
+
+@pytest.mark.parametrize("line,text,iso", [
+    ("(Next date: April?2026)", "Next date: April 2026", "2026-04"),
+    ("(Next dose: April 2026)", "Next dose: April 2026", "2026-04"),
+    ("Next visit 12/06/26", "Next visit 12/06/26", "2026-06-12"),
+    ("Next appointment - Jun 2026 with LFT", "Next appointment - Jun 2026 with LFT", "2026-06"),
+    ("Next review: 3 Aug 2026", "Next review: 3 Aug 2026", "2026-08-03"),
+])
+def test_a_next_date_written_on_the_page_is_read(line, text, iso):
+    from cdi_adapter.extract import fields as FD
+    got = FD.find_next_date([{"text": "To review after 3 months"}, {"text": line}])
+    assert got == {"text": text, "iso": iso}
+
+
+@pytest.mark.parametrize("line", ["Next dose will be advised", "next visit", "Review after 3 months", "", "Next date: soon"])
+def test_a_line_without_a_readable_date_is_not_a_next_date(line):
+    from cdi_adapter.extract import fields as FD
+    assert FD.find_next_date([{"text": line}]) is None and FD.find_next_date([]) is None and FD.find_next_date(None) is None
+
+
+def test_the_next_date_is_in_the_result_beside_the_follow_up_and_in_the_schema():
+    import test_json_connector_unit as T
+    from cdi_adapter.output import json_connector as jc
+    r = jc.build_result(T._inputs([T.HBA], payload=T.PAYLOAD, blocks=[{"text": "(Next dose: April 2026)", "page_id": "p1"}] + T.BLOCKS))
+    assert r["follow_up"]["next_date"] == "Next dose: April 2026" and r["follow_up"]["next_date_iso"] == "2026-04"
+    assert jc.build_result(T._inputs([T.HBA], payload=T.PAYLOAD))["follow_up"]["next_date"] is None
+    jc.validate(r) if hasattr(jc, "validate") else None

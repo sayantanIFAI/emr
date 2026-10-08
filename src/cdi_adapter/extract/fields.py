@@ -379,6 +379,38 @@ _UNIT_NORM = {"day": "days", "days": "days", "week": "weeks", "weeks": "weeks", 
               "month": "months", "months": "months", "mo": "months", "year": "years", "years": "years"}
 
 
+# a "next date" written on the page: "(Next dose: April 2026)", "Next visit 12/06/26", "Next appointment - June 2026"
+_NEXT = re.compile(r"\bnext\s+(?:date|dose|visit|appointment|appt|review|follow[\s-]?up|due)\b[\s:\-]*([^\n]{3,60})", re.I)
+_MONTHS = {m: i for i, m in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split(), start=1)}
+_NEXT_MONTH = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?[\s'\u2019,?]*((?:19|20)\d{2})\b", re.I)
+
+
+def find_next_date(blocks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The "next date / dose / visit / appointment" the doctor wrote, from the lines the readers produced: ``{text, iso}`` where ``iso``
+    is ``YYYY-MM-DD`` (a day written) or ``YYYY-MM`` (a month and year written), or None when the words give no date. Nothing is
+    worked out: a line with no readable date is not a next date."""
+    for b in blocks or []:
+        line = str(b.get("text") or "")
+        m = _NEXT.search(line)
+        if not m:
+            continue
+        tail = m.group(1)
+        iso = None
+        md = _FU_DATE.search(tail)
+        d = parse_date_text(md[1]) if md else None
+        if d:
+            iso = d.isoformat()
+        else:
+            mm = _NEXT_MONTH.search(tail)
+            if mm:
+                iso = f"{int(mm[2]):04d}-{_MONTHS[mm[1].lower()[:3]]:02d}"
+        if iso is None:
+            continue
+        text = re.sub(r"\s+", " ", re.sub(r"[?()\[\]]+", " ", m.group(0))).strip(" :-")
+        return {"text": text, "iso": iso}
+    return None
+
+
 # printed form text that is not the doctor's instruction (a letterhead footer, a booking line)
 _FU_PRINTED = re.compile(r"\bbring\b.{0,30}\bprescription\b|\bfor\s+appointment\b.{0,12}\bcall\b|\bappointment\s+call\b", re.I)
 
