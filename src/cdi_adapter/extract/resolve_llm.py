@@ -265,7 +265,7 @@ def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list
         if isinstance(a, list):
             for item in a:
                 if isinstance(item, str):
-                    for one in split_tests(item):
+                    for one in [*split_tests(item), *test_cluster.answer_tests(item)]:      # and the tests inside a garbled string, word by word
                         seen.append((norm(one), job[2]))
                         items.append((one, False))
     for item in [*tests_from_lines(blocks, follow_up), *tests_from_text(blocks)]:     # read from the text of the page, not by the model

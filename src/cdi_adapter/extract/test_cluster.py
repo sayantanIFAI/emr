@@ -97,7 +97,7 @@ class _Hit:
     kind: str          # "strong" | "weak" | "near" | "marker"
 
 
-def _line_hits(line: str) -> list[_Hit]:
+def _line_hits(line: str, long_rule: bool = True) -> list[_Hit]:
     """Every test-like thing in one line: the longest run of up to three words the lists place wins, and the line goes on."""
     out: list[_Hit] = []
     sentence = len(re.findall(r"[A-Za-z0-9?]+", line)) > 4
@@ -127,7 +127,7 @@ def _line_hits(line: str) -> list[_Hit]:
         for _ in range(written - 1):
             out.append(_Hit(slip_hit.test, slip_hit.as_read, "near"))
     total = len(re.findall(r"[A-Za-z0-9?]+", line))
-    if total >= 6 and sum(h.kind == "strong" for h in out) / total < 0.25:
+    if long_rule and total >= 6 and sum(h.kind == "strong" for h in out) / total < 0.25:
         # a long line that is mostly other words (the clinic's printed list of services, a sentence): a test name inside it is weak
         # evidence, like an ambiguous name (MEASURED: "ECG" in a printed footer "Endoscopy Ultrasonography Echocardiography ...")
         out = [_Hit(h.test, h.as_read, "weak") if h.kind == "strong" else h for h in out]
@@ -222,7 +222,28 @@ def scan(blocks: list[dict[str, Any]] | None) -> list[Found]:
 # ---------------------------------------------------------------------------------------------------------------------
 # the model's own test entries, put right by the same rules. MEASURED on a real prescription: "Chest ECG" was read "Chest ECO" and
 # "Na+ & K+ Level Test" was read "Nat & Kit Level Test"; neither was placed by the lab lists, so both showed as "outside the lab list".
-_ELECTROLYTE = re.compile(r"(?i)^\W*(?:s[.\s]*)?na\s*[+t]?\s*(?:&|and|[+,/q])\s*k\s*[+it]{0,2}\b")      # Na+ & K+ (the + is read as t)
+# Na+ & K+ as handwriting gets read: the + comes out as t ("Nat"), the & as "-2" / "+ q" / q, the N as NP; "Kit" for "K+".
+# MEASURED on a real page: "NAT & Kit Level Test", "NAT-2 Kit Level Th", "NAT + Q Kit Level Test", "NPT & K+ Level F".
+_ELECTROLYTE_CORE = r"(?:s[.\s]*)?n[ap]\s*[+t]?\s*(?:&|and|-?\s*2|\+\s*q|[+,/q])\s*k\s*[+it]{0,2}\b"
+_ELECTROLYTE = re.compile(r"(?i)^\W*" + _ELECTROLYTE_CORE)
+_ELECTROLYTE_IN = re.compile(r"(?i)\b" + _ELECTROLYTE_CORE)
+
+
+def answer_tests(text: str) -> list[str]:
+    """The tests a model's answer holds, WORD by word, however garbled the rest of the string is: ``"CBC w. NPT & K+ Level F"`` holds CBC
+    and sodium-and-potassium. MEASURED on a real page: the enlarged views read CBC inside strings that differed every time
+    ("CBC w. diff.", "CBC + WBC", "CBC w. NPT & K+ ..."), so comparing whole strings never found it read in two views."""
+    out: list[str] = []
+    for h in _line_hits(text, long_rule=False):
+        if h.kind != "strong":
+            continue
+        mapped = lab_mapping.lookup(h.test)
+        name = "Na+ & K+" if mapped and mapped.canonical.startswith("Sodium and potassium") else h.test      # "Na K" and "Na+ & K+" are one test
+        if name not in out:
+            out.append(name)
+    if _ELECTROLYTE_IN.search(text) and "Na+ & K+" not in out:
+        out.append("Na+ & K+")
+    return out
 
 
 def repair_piece(piece: str, evidence: bool) -> tuple[str, str] | None:

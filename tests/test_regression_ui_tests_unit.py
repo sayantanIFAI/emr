@@ -201,6 +201,16 @@ def test_a_question_mark_for_an_unread_letter_fits_exactly_one_standard_test_or_
     assert lab_mapping.fit("??? D") is None and lab_mapping.fit("vitamin D") is None      # too little known / no wildcard
 
 
+def test_cbc_and_sodium_potassium_read_inside_different_garbled_strings_in_two_views_are_found():
+    # MEASURED on a real page: view 1 said "CBC w. NPT & K+ Level F", view 2 "CBC w. diff." and "NAT & Kit Level Test"; the whole strings
+    # never matched, so nothing was added and CBC and Na+ & K+ were lost (the text reader had no line for CBC at all)
+    cl, image = _views_client([["Chest ECG"], ["CBC w. NPT & K+ Level F", "Lipid Profile"], ["CBC w. diff.", "NAT & Kit Level Test", "chest ECG"], []])
+    got = R.followup_tests(cl, image, None, known=["case m.", "NAT-2 Kit Level Th"])
+    assert "CBC" in got and "Na+ & K+" in got and "Chest ECG" in got
+    only_one_view = _views_client([[], ["CBC w. diff."], [], []])
+    assert "CBC" not in R.followup_tests(only_one_view[0], only_one_view[1], None, known=[])          # one view alone is still not enough
+
+
 def test_a_blood_sugar_with_no_letters_is_not_added_beside_the_one_that_has_them():
     cl, image = _views_client([["Blood Sugar"], ["Blood Sugar"], [], []])
     assert R.followup_tests(cl, image, None, known=["Blood sugar PP"]) == []

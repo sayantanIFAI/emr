@@ -126,3 +126,18 @@ def test_chest_ecg_sodium_potassium_and_fever_profile_are_in_the_mapping_table()
     for name, std in (("Chest ECG", "ECG"), ("Na+ & K+", "Sodium and potassium (electrolytes)"), ("Blood for fever profile", "Fever profile"),
                       ("Serum electrolytes", "Sodium and potassium (electrolytes)")):
         assert lab_mapping.lookup(name).canonical == std
+
+
+# ---- MEASURED on the real Dr. Mondal page: what each enlarged view answered (3 rounds), and where CBC / Na+ & K+ were lost
+@pytest.mark.parametrize("answer,expected", [
+    ("CBC w. NPT & K+ Level F", ["CBC", "Na+ & K+"]), ("CBC w. diff.", ["CBC"]), ("CBC + WBC", ["CBC"]),
+    ("NAT & Kit Level Test", ["Na+ & K+"]), ("NAT + Q Kit Level Test", ["Na+ & K+"]), ("NAT-2 Kit Level Th", ["Na+ & K+"]),
+    ("Chest ECG", ["Chest ECG"]), ("Lipid Profile", ["Lipid Profile"]), ("case m.", []), ("Na+ & K+ Level Test", ["Na+ & K+"]),
+])
+def test_the_tests_inside_a_garbled_model_answer_are_taken_word_by_word(answer, expected):
+    assert T.answer_tests(answer) == expected
+
+
+def test_the_models_nat_2_kit_entry_is_put_right():
+    got = T.repair_piece("NAT-2 Kit Level Th", evidence=False)
+    assert got and got[0] == "Na+ & K+" and "sodium and potassium" in got[1]
