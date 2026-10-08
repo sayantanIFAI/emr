@@ -109,6 +109,34 @@ def confirm_name(document_id: str, name: str, by: str) -> dict[str, Any] | None:
             "token_no": row["token_no"], "name_confirmed": True, "name_confirmed_by": by[:60]}
 
 
+def token_conflict(token: str, phone: str) -> dict[str, Any] | None:
+    """A token number is issued once a day. When this token was already used TODAY (the clinic's day) for a DIFFERENT mobile number,
+    ``{phone, name, when}`` of that earlier use; None otherwise. The same token with the SAME mobile number is not a conflict: that is
+    more pages of one patient. Never called for a token that is empty."""
+    from ..config import settings
+
+    if not settings.token_unique_per_day or not token:
+        return None
+    with session_scope() as sess:
+        row = sess.execute(text(
+            "SELECT phone, patient_name, ingested_at FROM source_document "
+            "WHERE upper(token_no) = upper(:t) AND phone IS DISTINCT FROM :p "
+            "AND (ingested_at AT TIME ZONE :tz)::date = (now() AT TIME ZONE :tz)::date "
+            "ORDER BY ingested_at DESC LIMIT 1"),
+            {"t": token, "p": phone, "tz": settings.clinic_timezone}).mappings().first()
+    if not row:
+        return None
+    return {"phone": row["phone"], "name": row["patient_name"], "when": _iso(row["ingested_at"])}
+
+
+def token_message(token: str, c: dict[str, Any]) -> str:
+    """The refusal, as one plain sentence the front desk can act on."""
+    who = f"mobile {c['phone'][:5]} {c['phone'][5:]}" if c.get("phone") and len(c["phone"]) == 10 else "another mobile number"
+    name = f" ({c['name']})" if c.get("name") else ""
+    return (f"Token {token} was already used today for {who}{name}. A token is for one patient: check the token number, or use the "
+            f"same mobile number if these are more pages of that patient.")
+
+
 def existing(phone: str) -> dict[str, Any]:
     """What is already uploaded for this mobile number, so the screen can say so before another one is added."""
     rows = [r for r in prescriptions(phone) if r["status"] not in ("error", "quality_hold")]     # a failed read is not "uploaded"

@@ -165,6 +165,19 @@ def patients_prescriptions(phone: str, name: str | None = None) -> dict[str, Any
     return {"prescriptions": patients.prescriptions(phone, name)}
 
 
+@app.get("/api/intake/token-check")
+def intake_token_check(token: str, phone: str) -> dict[str, Any]:
+    """Before anything is uploaded: is this token already used today for another mobile number?"""
+    from . import patients
+    try:
+        t = upload.clean_token(token)
+        p = upload.clean_phone(phone)
+    except upload.UploadError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    clash = patients.token_conflict(t or "", p or "")
+    return {"conflict": bool(clash), "message": patients.token_message(t or "", clash) if clash else None}
+
+
 @app.get("/api/intake/existing")
 def patients_existing(phone: str) -> dict[str, Any]:
     """Prescriptions already uploaded for this mobile number (the upload screen warns before another is added)."""
@@ -272,6 +285,11 @@ async def submit_job(
         need = settings.upload_require_intake              # the front desk enters the token and the mobile number first
         token = upload.clean_token(token_no, required=need)
         mobile = upload.clean_phone(phone, required=need)
+        if token and mobile:
+            from . import patients
+            clash = patients.token_conflict(token, mobile)
+            if clash:                                       # the same token for another patient today: stop, say why
+                raise upload.UploadError(patients.token_message(token, clash), 409)
         if len(files) > settings.upload_max_files:        # before reading any bytes
             raise upload.UploadError(f"You can send up to {settings.upload_max_files} files at once.")
         cap = settings.upload_max_file_bytes

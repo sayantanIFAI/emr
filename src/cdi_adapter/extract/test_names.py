@@ -196,6 +196,9 @@ def is_grounded(test: str | None, page_text: str) -> bool:
     pool = [w for w in page if len(w) >= 3]
     hits = 0
     for w in key:
-        if w in page or (len(w) >= 4 and difflib.get_close_matches(w, pool, n=1, cutoff=0.8)):
+        # a word counts when it is on the page as a word, or INSIDE a page word: the text reader runs ticked words together
+        # ("✓CBC ✓CRP" read as "CBCCRP", "✓LFT" as "vLFT"), a close spelling (4+ letters) also counts
+        if w in page or (len(w) >= 3 and any(w in p for p in pool)) \
+                or (len(w) >= 4 and difflib.get_close_matches(w, pool, n=1, cutoff=0.8)):
             hits += 1
     return hits / len(key) >= 0.5

@@ -393,3 +393,59 @@ def test_the_name_confirmation_endpoint_validates_and_passes_who_confirmed(clien
     assert ok.status_code == 200 and seen["name"] == "Oukar Chowdhury" and seen["by"]
     assert client.post("/api/intake/name", json={"document_id": "doc-1", "name": "A1"}).status_code == 422
     assert client.post("/api/intake/name", json={"document_id": "nope", "name": "Asha Rao"}).status_code == 404
+
+
+# ---- a token number is issued once a day: the same token for another mobile number is refused
+def test_the_same_token_today_for_another_mobile_number_is_refused_in_plain_words_and_nothing_is_created(client, monkeypatch):
+    from cdi_adapter.webapp import patients
+    monkeypatch.setattr(patients, "token_conflict", lambda t, p: {"phone": "9830011234", "name": "Asha Rao", "when": "2026-10-08T05:00:00"})
+    r = _post(client, [("a.png", _png())], token_no="T-17", phone="9831122334")
+    assert r.status_code == 409 and not client.calls
+    msg = r.json()["detail"]
+    assert "Token T-17 was already used today" in msg and "98300 11234" in msg and "Asha Rao" in msg and "same mobile number" in msg
+
+
+def test_the_same_token_with_the_same_mobile_number_is_more_pages_of_one_patient_and_is_allowed(client, monkeypatch):
+    from cdi_adapter.webapp import patients
+    seen = []
+    monkeypatch.setattr(patients, "token_conflict", lambda t, p: seen.append((t, p)))            # None: no clash
+    assert _post(client, [("a.png", _png())]).status_code == 202 and seen == [("T-17", "9830011234")]
+
+
+def test_the_token_check_asks_the_database_for_the_clinics_day_and_a_different_mobile_only(monkeypatch):
+    from contextlib import contextmanager
+    from cdi_adapter.webapp import patients
+    captured = {}
+
+    class Res:
+        def __init__(self, row): self.row = row
+        def mappings(self): return self
+        def first(self): return self.row
+
+    class Sess:
+        def execute(self, stmt, params):
+            captured["sql"], captured["params"] = str(stmt), params
+            return Res({"phone": "9830011234", "patient_name": None, "ingested_at": None})
+
+    @contextmanager
+    def scope():
+        yield Sess()
+    monkeypatch.setattr(patients, "session_scope", scope)
+    from cdi_adapter.config import settings
+    monkeypatch.setattr(settings, "token_unique_per_day", True)
+    got = patients.token_conflict("t-17", "9831122334")
+    assert got == {"phone": "9830011234", "name": None, "when": None}
+    sql = captured["sql"]
+    assert "upper(token_no) = upper(:t)" in sql and "phone IS DISTINCT FROM :p" in sql and "now() AT TIME ZONE :tz" in sql
+    assert captured["params"]["tz"] == "Asia/Kolkata"
+    monkeypatch.setattr(settings, "token_unique_per_day", False)
+    assert patients.token_conflict("t-17", "9831122334") is None and patients.token_conflict("", "9831122334") is None
+
+
+def test_the_token_check_endpoint_answers_conflict_or_free(client, monkeypatch):
+    from cdi_adapter.webapp import patients
+    monkeypatch.setattr(patients, "token_conflict", lambda t, p: {"phone": "9830011234", "name": None, "when": None} if t == "T-9" else None)
+    bad = client.get("/api/intake/token-check", params={"token": "T-9", "phone": "9831122334"}).json()
+    ok = client.get("/api/intake/token-check", params={"token": "T-10", "phone": "9831122334"}).json()
+    assert bad["conflict"] and "Token T-9 was already used today" in bad["message"] and ok == {"conflict": False, "message": None}
+    assert client.get("/api/intake/token-check", params={"token": "T 9", "phone": "x"}).status_code == 422

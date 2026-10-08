@@ -185,3 +185,17 @@ def test_a_list_of_tests_on_one_line_is_cut_into_its_tests(written, expected):
 def test_a_name_that_is_one_test_is_never_cut(written):
     from cdi_adapter.extract.test_names import split_tests
     assert split_tests(written) == [written]
+
+
+# ---- a test the doctor ticked is not rejected because the text reader ran the ticked words together
+@pytest.mark.parametrize("test", ["CBC", "CRP", "LFT", "Creatinine", "KFT"])
+def test_ticked_words_run_together_by_the_text_reader_still_support_the_test(test):
+    from cdi_adapter.extract.test_names import is_grounded
+    page = "Review after. 2 months CBCCRP vLFT ? Creatinine vKFT"                      # what the real page read as
+    assert is_grounded(test, page)
+
+
+def test_a_test_nothing_on_the_page_supports_is_still_not_grounded():
+    from cdi_adapter.extract.test_names import is_grounded
+    assert not is_grounded("HbA1c", "Review after. 2 months CBCCRP vLFT Creatinine")
+    assert not is_grounded("TSH", "Tab Metformin 500 mg 1-0-1 after food")

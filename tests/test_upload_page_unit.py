@@ -113,18 +113,48 @@ def test_there_are_two_tabs_and_the_upload_flow_and_the_extracted_list_sit_in_th
     assert 'role="tablist"' in ADMIN_PAGE and 'id="tab-up"' in ADMIN_PAGE and 'id="tab-ex"' in ADMIN_PAGE
     up = ADMIN_PAGE[ADMIN_PAGE.index('id="panel-up"'):ADMIN_PAGE.index('id="panel-ex"')]
     ex = ADMIN_PAGE[ADMIN_PAGE.index('id="panel-ex"'):ADMIN_PAGE.index("<dialog")]
-    for block in ('id="patient-card"', 'id="form-card"', 'id="emr-card"', 'id="jobs"', 'id="camera"'):
+    for block in ('id="patient-card"', 'id="form-card"', 'id="emr-card"', 'id="jobs"', 'id="camera"', 'id="current-card"'):
         assert block in up and block not in ex                                              # token, capture, upload and progress: tab 1
     for block in ('id="patients-card"', 'id="psearch"', 'id="groups"', 'id="map-card"'):
         assert block in ex and block not in up                                              # the extracted list (and the mapping table): tab 2
     assert 'id="panel-ex" role="tabpanel" aria-labelledby="tab-ex" hidden' in ADMIN_PAGE     # opens on the upload tab
 
 
-def test_a_read_prescription_goes_to_the_extracted_tab_collapsed_with_a_badge_and_a_link():
+def test_a_read_prescription_is_shown_as_the_current_one_in_the_capture_tab_and_the_earlier_ones_are_in_extracted():
     done = ADMIN_PAGE[ADMIN_PAGE.index("async function loadResultsOf"):ADMIN_PAGE.index("async function loadDoc")]
-    assert "OPEN.add" not in done                                                           # nothing is opened: the list stays collapsed
-    assert "NEWCOUNT++" in done and 'id="ex-badge"' in ADMIN_PAGE and "Read: open in Extracted" in ADMIN_PAGE
-    assert "function showTab" in ADMIN_PAGE and "ArrowRight" in ADMIN_PAGE                  # keyboard: arrow keys move between the tabs
+    assert "current:true" in done and "renderCurrent()" in done and "OPEN.add" not in done          # shown in the Capture tab, nothing opened in Extracted
+    assert 'id="current-card"' in ADMIN_PAGE and "Current prescription" in ADMIN_PAGE
+    assert "function retireCurrent" in ADMIN_PAGE and "NEWCOUNT+=n" in ADMIN_PAGE and 'id="ex-badge"' in ADMIN_PAGE
+    send = ADMIN_PAGE[ADMIN_PAGE.index("TOKEN_ASKED.clear(); TOKEN_CLASH.clear();"):ADMIN_PAGE.index("JOBS.unshift")]
+    assert "retireCurrent()" in send                                                                 # the next prescription is sent: the current one moves
+    lst = ADMIN_PAGE[ADMIN_PAGE.index("function renderGroups"):ADMIN_PAGE.index("function docBody") if ADMIN_PAGE.index("function docBody") > ADMIN_PAGE.index("function renderGroups") else None]
+    assert "!d.current" in lst                                                                       # the Extracted list shows only the history
+    assert "function showTab" in ADMIN_PAGE and "ArrowRight" in ADMIN_PAGE                           # keyboard: arrow keys move between the tabs
+
+
+# ---- the prescription image can be clicked and shown; the name line is shown beside the confirm box
+def test_the_prescription_picture_opens_in_a_viewer_with_zoom_pages_and_the_original_photo():
+    assert 'id="imgdlg"' in ADMIN_PAGE and "function openImage" in ADMIN_PAGE and "api/intake/page-image" in ADMIN_PAGE
+    for control in ("img-in", "img-out", "img-fit", "img-prev", "img-next", "img-view", "img-close"):
+        assert f'id="{control}"' in ADMIN_PAGE
+    assert 'class="docthumb"' in ADMIN_PAGE and "Click the picture to see the prescription full size." in ADMIN_PAGE
+
+
+def test_the_name_as_written_is_shown_beside_the_confirm_box_and_opens_the_page():
+    assert "api/intake/name-crop" in ADMIN_PAGE and "As written on the paper" in ADMIN_PAGE and 'class="img-open"' in ADMIN_PAGE
+
+
+# ---- two tabs: capture & upload (the whole flow) and Extracted (collapsed list)
+def test_there_are_two_tabs_and_the_upload_flow_and_the_extracted_list_sit_in_their_own_panel():
+    assert 'role="tablist"' in ADMIN_PAGE and 'id="tab-up"' in ADMIN_PAGE and 'id="tab-ex"' in ADMIN_PAGE
+    up = ADMIN_PAGE[ADMIN_PAGE.index('id="panel-up"'):ADMIN_PAGE.index('id="panel-ex"')]
+    ex = ADMIN_PAGE[ADMIN_PAGE.index('id="panel-ex"'):ADMIN_PAGE.index("<dialog")]
+    for block in ('id="patient-card"', 'id="form-card"', 'id="emr-card"', 'id="jobs"', 'id="camera"', 'id="current-card"'):
+        assert block in up and block not in ex                                              # token, capture, upload and progress: tab 1
+    for block in ('id="patients-card"', 'id="psearch"', 'id="groups"', 'id="map-card"'):
+        assert block in ex and block not in up                                              # the extracted list (and the mapping table): tab 2
+    assert 'id="panel-ex" role="tabpanel" aria-labelledby="tab-ex" hidden' in ADMIN_PAGE     # opens on the upload tab
+
 
 
 def test_the_page_script_has_no_stray_control_characters_and_the_title_word_boundary_is_a_real_regex_escape():
@@ -147,3 +177,16 @@ def test_the_page_itself_is_never_cached_so_an_update_is_seen_at_once():
     c.headers["Authorization"] = "Basic " + __import__("base64").b64encode(f"{webapp.settings.admin_user}:{webapp.settings.admin_password}".encode()).decode()
     r = c.get("/")
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store" and 'id="tab-ex"' in r.text
+
+
+def test_a_recognised_test_is_always_in_the_list_and_never_in_a_footnote():
+    summary = ADMIN_PAGE[ADMIN_PAGE.index("const labs=allLabs.filter"):ADMIN_PAGE.index("const unrec=")]
+    assert "!isUnconf(t)" not in summary                                           # the unconfirmed ones are listed with the rest
+    assert "not confirmed by the text reader, look at the image" in ADMIN_PAGE
+    assert "The reader suggested these, but nothing on the page supports them" not in ADMIN_PAGE.split("const unconfNote=")[0] or "const unconf=[]" in ADMIN_PAGE
+
+
+def test_the_screen_stops_a_token_already_used_today_for_another_mobile_number_before_upload():
+    assert "api/intake/token-check" in ADMIN_PAGE and "TOKEN_CLASH" in ADMIN_PAGE
+    gate = ADMIN_PAGE[ADMIN_PAGE.index("function gate()"):ADMIN_PAGE.index("const TOKEN_CLASH")]
+    assert "const clash=" in gate and "&&!clash" in gate and 'form-card").hidden=!open' in gate        # the upload stays hidden while the token clashes

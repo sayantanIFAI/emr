@@ -158,6 +158,11 @@ details.sec>summary{font-weight:650;font-size:15px;min-height:40px}
     <div id="jobs"></div>
   </div>
 
+  <div class="card" id="current-card" hidden>
+    <h2>Current prescription</h2>
+    <p class="hint">The prescription just read is shown here. When the next prescription is uploaded (a new token or mobile number) it moves to the <b>Extracted</b> tab.</p>
+    <div id="current-body" aria-live="polite"></div>
+  </div>
 </section>
 <section id="panel-ex" role="tabpanel" aria-labelledby="tab-ex" hidden>
   <div class="card" id="patients-card">
@@ -262,7 +267,9 @@ function gate(){
   if(t&&!tOk) err="The token can use letters, numbers and - _ / only, up to 20 characters.";
   else if(raw&&(d.length>=10)&&!pOk) err="The mobile number must be 10 digits and start with 6, 7, 8 or 9.";
   $("#pt-err").textContent=err;
-  const have=pOk&&EXIST_FOR===d&&EXIST;                // the look-up for this number has come back
+  const clash=tOk&&pOk&&TOKEN_CLASH.get(t+"|"+d);          // the same token already used today for another mobile number
+  if(clash&&!err) err=clash;
+  const have=pOk&&EXIST_FOR===d&&EXIST&&!clash;          // the look-up for this number has come back, and the token is free
   const dup=have&&EXIST.count>0;
   $("#existing").hidden=!dup;
   if(dup){
@@ -276,6 +283,14 @@ function gate(){
   if(!open) say("");
   render();
 }
+const TOKEN_CLASH=new Map(), TOKEN_ASKED=new Set();      // "token|mobile" -> the refusal text, or ""
+async function checkToken(){
+  const t=$("#token").value.trim(), d=phoneDigits($("#phone").value), k=t+"|"+d;
+  if(!tokenOk(t)||!phoneOk(d)||TOKEN_ASKED.has(k)) return;
+  TOKEN_ASKED.add(k);
+  try{ const r=await fetch("api/intake/token-check?token="+encodeURIComponent(t)+"&phone="+encodeURIComponent(d)); if(r.ok){ const j=await r.json(); TOKEN_CLASH.set(k,j.conflict?j.message:""); } }catch(e){}
+  gate();
+}
 let PHONE_SEQ=0;
 async function checkExisting(){
   const d=phoneDigits($("#phone").value);
@@ -287,8 +302,8 @@ async function checkExisting(){
   if(my!==PHONE_SEQ) return;
   EXIST=j; EXIST_FOR=d; gate();
 }
-$("#token").addEventListener("input",()=>{ SEND_KEY=null; gate(); });
-$("#phone").addEventListener("input",()=>{ SEND_KEY=null; ACK=""; gate(); checkExisting(); });
+$("#token").addEventListener("input",()=>{ SEND_KEY=null; gate(); checkToken(); });
+$("#phone").addEventListener("input",()=>{ SEND_KEY=null; ACK=""; gate(); checkExisting(); checkToken(); });
 $("#proceed").onclick=()=>{ ACK=phoneDigits($("#phone").value); gate(); };
 
 // ---- autocomplete (a list of thousands is never shown: type, then choose) ---------------------------------
@@ -474,6 +489,8 @@ $("#go").onclick=async()=>{
   const id=(await r.json()).job_id;
   // accepted: it is read in the background. The desk is free straight away for the next patient: the token and
   // mobile number are cleared so the next paper is never filed under this one by mistake.
+  TOKEN_ASKED.clear(); TOKEN_CLASH.clear();                       // a token just used is looked up afresh next time
+  retireCurrent();                                                 // the next prescription is on its way: the one shown moves to Extracted
   JOBS.unshift({id,token,phone,names:sent.map(p=>p.file.name),j:null,finished:false,err:""});
   for(const p of sent) if(p.url) URL.revokeObjectURL(p.url);
   PAGES=[]; SEND_KEY=null; SENDING=false; $("#hint").textContent="";
@@ -510,32 +527,49 @@ async function loadResultsOf(job){                     // the finished job's JSO
   catch(e){ job.err="The result could not be loaded. Please try again in a moment."; return; }
   for(const r of (j.results||[])){
     const it=r.intake||{}, name=it.patient_name||((r.patient||{}).name||{}).value||null, phone=it.phone||job.phone;
-    const g=addDoc(phone,name,{document_id:r.document_id,token_no:it.token_no||job.token,filename:r.filename,status:r.status,result:r,uploaded:new Date().toISOString()});
-    job.groupKey=g.key;                                            // collapsed in the Extracted tab; the badge says something new arrived
-    if($("#tab-ex").getAttribute("aria-selected")!=="true"){ NEWCOUNT++; badge(); }
+    retireCurrent();                                               // the one before moves to Extracted
+    const g=addDoc(phone,name,{document_id:r.document_id,token_no:it.token_no||job.token,filename:r.filename,status:r.status,result:r,uploaded:new Date().toISOString(),current:true});
+    job.groupKey=g.key;
   }
-  renderGroups();
+  renderGroups(); renderCurrent();
 }
 async function loadDoc(id){
   for(const g of GROUPS.values()){ const d=g.docs.get(id); if(d&&!d.result&&!d.loading){
     d.loading=true;
     try{ const r=await fetch("api/documents/"+id+"/result.json"); if(r.ok) d.result=await r.json(); else d.err="This result could not be loaded."; }catch(e){ d.err="This result could not be loaded."; }
-    d.loading=false; renderGroups(); } }
+    d.loading=false; renderGroups(); renderCurrent(); } }
 }
 function renderGroups(){
   const newest=g=>[...g.docs.values()].reduce((m,d)=>(d.uploaded||"")>m?(d.uploaded||""):m,"");
   const list=[...GROUPS.values()].sort((a,b)=>newest(b).localeCompare(newest(a)));
-  $("#groups").innerHTML=list.length?list.map(g=>{
-    const docs=[...g.docs.values()].sort((a,b)=>(b.uploaded||"").localeCompare(a.uploaded||"")||b.seq-a.seq);      // newest first
+  const history=list.filter(g=>[...g.docs.values()].some(d=>!d.current));
+  $("#groups").innerHTML=history.length?history.map(g=>{
+    const docs=[...g.docs.values()].filter(d=>!d.current).sort((a,b)=>(b.uploaded||"").localeCompare(a.uploaded||"")||b.seq-a.seq);      // newest first
     return '<details class="cf-det grp" data-k="'+esc(g.key)+'"'+(OPEN.has("g:"+g.key)?" open":"")+'><summary><b>'+esc(g.name||"Name not read")+'</b> · '
       +esc(fmtPhone(g.phone))+' <span class="pill">'+plural(docs.length,"prescription")+'</span></summary><div class="det-body">'
       +docs.map(docHtml).join("")+'</div></details>';
-  }).join(""):'<p class="muted" style="margin-top:12px">Nothing here yet. Upload a prescription, or find a patient above.</p>';
+  }).join(""):'<p class="muted" style="margin-top:12px">Nothing here yet. Earlier prescriptions appear here once the next one is uploaded, or find a patient above.</p>';
+}
+function retireCurrent(){                                       // the next prescription was uploaded: the earlier ones become history (Extracted)
+  let n=0;
+  for(const g of GROUPS.values()) for(const d of g.docs.values()) if(d.current){ d.current=false; n++; }
+  if(n){ if($("#tab-ex").getAttribute("aria-selected")!=="true"){ NEWCOUNT+=n; badge(); } renderGroups(); renderCurrent(); }
+}
+function docBody(d){
+  const r=d.result;
+  const thumb=r&&r.document_id?'<div class="docthumb"><button type="button" class="img-open" data-doc="'+esc(r.document_id)+'" data-pages="'+(r.page_count||1)+'" aria-label="Open the prescription image"><img src="api/intake/page-image?document_id='+encodeURIComponent(r.document_id)+'&w=300" alt="The prescription (click to enlarge)" loading="lazy"/></button><span class="muted">Click the picture to see the prescription full size.</span></div>':"";
+  return r?thumb+summaryHtml(r)+jsonBlock(r):(d.err?'<p class="jerr">'+esc(d.err)+'</p>':'<p class="muted">Loading…</p>');
+}
+function renderCurrent(){
+  const cur=[];
+  for(const g of GROUPS.values()) for(const d of g.docs.values()) if(d.current) cur.push({g,d});
+  $("#current-card").hidden=!cur.length;
+  $("#current-body").innerHTML=cur.map(({g,d})=>'<h3 style="margin:8px 0 2px">'+esc(g.name||"Name not read")+' · '+esc(fmtPhone(g.phone))+' · token '+esc(d.token_no||"—")
+    +' <button type="button" class="vbtn img-open" data-doc="'+esc(d.document_id)+'" data-pages="'+(d.result?(d.result.page_count||1):1)+'" aria-label="View the prescription image full screen">View image</button></h3>'+docBody(d)).join("");
 }
 function docHtml(d){
   const r=d.result, st=r?(r.status==="complete"?'<span class="pill ok">all values accepted</span>':r.status==="needs_check"?'<span class="pill warn">needs a check</span>':'<span class="pill">'+esc(r.status||"")+'</span>'):"";
-  const thumb=r&&r.document_id?'<div class="docthumb"><button type="button" class="img-open" data-doc="'+esc(r.document_id)+'" data-pages="'+(r.page_count||1)+'" aria-label="Open the prescription image"><img src="api/intake/page-image?document_id='+encodeURIComponent(r.document_id)+'&w=300" alt="The prescription (click to enlarge)" loading="lazy"/></button><span class="muted">Click the picture to see the prescription full size.</span></div>':"";
-  const body=r?thumb+summaryHtml(r)+jsonBlock(r):(d.err?'<p class="jerr">'+esc(d.err)+'</p>':'<p class="muted">Loading…</p>');
+  const body=docBody(d);
   return '<details class="cf-det doc" data-d="'+esc(d.document_id)+'"'+(OPEN.has("d:"+d.document_id)?" open":"")+'><summary>Token <b>'+esc(d.token_no||"—")+'</b> · '
     +esc(fmtDate(d.uploaded))+' · '+esc(d.filename||"")+' '+st+' <button type="button" class="vbtn img-open" data-doc="'+esc(d.document_id)+'" data-pages="'+(r?(r.page_count||1):(d.pages||1))+'" aria-label="View the prescription image full screen">View image</button></summary><div class="det-body">'+body+'</div></details>';
 }
@@ -570,7 +604,7 @@ $("#img-next").onclick=()=>{ if(IMG.page<IMG.pages){ IMG.page++; imgShow(); } };
 $("#img-view").onclick=()=>{ IMG.view=IMG.view==="page"?"original":"page"; imgShow(); };
 $("#imgdlg").addEventListener("click",e=>{ if(e.target===$("#imgdlg")) $("#imgdlg").close(); });
 document.addEventListener("click",e=>{ const b=e.target.closest(".img-open"); if(b){ e.preventDefault(); openImage(b.dataset.doc,b.dataset.pages); } });
-$("#groups").addEventListener("click",async e=>{            // the patient's name: pick another reading, or confirm / correct it
+document.addEventListener("click",async e=>{                  // the patient's name: pick another reading, or confirm / correct it (either tab)
   const cand=e.target.closest(".nm-cand"); if(cand){ cand.closest(".nmbox").querySelector(".nm-in").value=cand.dataset.name; return; }
   const ok=e.target.closest(".nm-ok"); if(!ok) return;
   const box=ok.closest(".nmbox"), id=box.dataset.doc, err=box.querySelector(".nm-err");
@@ -588,7 +622,7 @@ function applyName(id,j){                                    // the confirmed na
     const ng=addDoc(g.phone,j.patient_name,d); OPEN.add("g:"+ng.key); OPEN.add("d:"+id);
     break;
   }
-  renderGroups(); loadDoc(id);
+  renderGroups(); renderCurrent(); loadDoc(id);
 }
 $("#groups").addEventListener("toggle",e=>{                  // keep what is open open when the list is drawn again
   const el=e.target; if(!(el instanceof HTMLDetailsElement)) return;
@@ -676,9 +710,9 @@ function summaryHtml(r){
   const allLabs=r.lab_tests||[];
   const isUnrec=t=>/^not a recognised test name/.test(t.reason||"");
   const isUnconf=t=>/^not confirmed on the page/.test(t.reason||"");
-  const labs=allLabs.filter(t=>t.status!=="rejected"&&!isUnrec(t)&&!isUnconf(t));
+  const labs=allLabs.filter(t=>t.status!=="rejected"&&!isUnrec(t));            // a test the lists know is ALWAYS listed, never put in a footnote
   const unrec=allLabs.filter(t=>t.status!=="rejected"&&isUnrec(t));
-  const unconf=allLabs.filter(t=>t.status!=="rejected"&&isUnconf(t));
+  const unconf=[];
   const dropped=allLabs.filter(t=>t.status==="rejected");
   const prep=r.lab_preparation||[];
   const labRows=labs.map((t,i)=>{
@@ -688,6 +722,7 @@ function summaryHtml(r){
       :t.code?esc(t.code_display||t.code)+' <span class="none">'+esc(t.code_system||"")+" "+esc(t.code)+'</span>':'<span class="none">not matched to a standard test</span>';
     const pr=(t.preparation||[]).length?t.preparation.map(esc).join("<br>"):'<span class="none">none written</span>';
     const st=t.status==="accepted"?'<span class="pill ok">read</span>':t.status==="rejected"?'<span class="pill err">rejected</span>'
+      :isUnconf(t)?'<span class="pill warn" title="'+esc(t.reason||"")+'">needs a check: not confirmed by the text reader, look at the image</span>'
       :'<span class="pill warn" title="'+esc(t.reason||"")+'">needs a check</span>';
     return '<tr><td>'+(i+1)+'</td><td>'+esc(t.as_written||t.text||"")+'</td><td>'+std+'</td><td>'+pr+'</td><td>'+(ctx||'<span class="none">—</span>')+'</td><td>'+st+'</td></tr>';
   }).join("");
