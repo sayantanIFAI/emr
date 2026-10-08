@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     upload_max_total_bytes: int = 150_000_000
 
     # --- image preprocessing ---
+    # which way up a page is, decided by reading its PRINTED text at the four turns (ingest/orient_ocr.py); the ink-shape rule stays as
+    # the fallback when there is no printed text. A real page was turned the wrong way by the ink rule and then read as garbage.
+    orient_ocr_check: bool = True
+    orient_ocr_min_score: float = 40.0     # the best turn must have read at least this much real text
+    orient_ocr_min_ratio: float = 1.3      # ... and at least this many times the second best
     deskew_enabled: bool = True
     denoise_enabled: bool = True
     # make a small / soft photo easier to read before anything reads it (ingest/enhance.py): enlarge it, then sharpen it by

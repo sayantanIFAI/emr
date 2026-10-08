@@ -191,30 +191,56 @@ def _straighten(arr: np.ndarray, meta: dict[str, Any]) -> tuple[np.ndarray, dict
                   "the edges of the page could not be found, so the whole picture was read as it is - "
                   "check the result, or retake it on a plain background")
 
+    def turn(arr: np.ndarray, k: int, info: dict[str, Any]) -> np.ndarray:
+        """Turn the page by ``k`` quarter turns (numpy.rot90) and record it in the page transform."""
+        h, w = arr.shape[:2]
+        out = np.ascontiguousarray(np.rot90(arr, k))
+        op = "rotate180" if k == 2 else "rotate90"
+        G.add_step(t, {"op": op, **({"k": k} if k != 2 else {}), **info}, G.rot90_matrix(w, h, k), (out.shape[1], out.shape[0]))
+        meta["steps"].append(op)
+        return out
+
+    # Which way up? The PRINTED text is the witness (ingest/orient_ocr.py): the page is read at the four turns and the turn where the
+    # print reads best wins. For a phone photo it is asked first (the ink-shape rule is fooled by a photo's background); for a flat
+    # scan it checks the ink-shape rule when that rule wants to turn the page.
+    from . import orient_ocr
+
+    voted: tuple[int | None, dict[str, Any]] | None = None
+    if settings.orient_enabled and settings.orient_ocr_check and is_photo:
+        voted = orient_ocr.vote(arr)
+        meta["orientation_vote"] = voted[1]
+    if voted is not None and voted[0] is not None:
+        if voted[0]:
+            arr = turn(arr, voted[0], {"by": "printed text", **voted[1]})
+            gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
     # a photo's background fools the axis test: judge orientation on a flat scan or a page cut out of a photo
-    if settings.orient_enabled and (not is_photo or "perspective" in meta["steps"] or "crop_to_page" in meta["steps"]):
+    elif settings.orient_enabled and (not is_photo or "perspective" in meta["steps"] or "crop_to_page" in meta["steps"]):
         ratio = _orientation_ratio(gray)
         if ratio is not None and ratio > settings.quality_sideways_ratio:          # lines run vertically
             k, info = G.decide_sideways(gray)
+            if settings.orient_ocr_check:                                          # the rule knows the page is SIDEWAYS; the print says which way
+                voted = orient_ocr.vote(arr, candidates=(1, 3))
+                meta["orientation_vote"] = voted[1]
+                if voted[0] is not None:
+                    k, info = voted[0], {"by": "printed text", **voted[1]}
             if k is None:
                 _hold(meta, ORIENTATION_UNCERTAIN, "the page is sideways but which way is up could not be decided "
                       "- please retake it with the page upright")
                 t["steps"].append({"op": "sideways_undecided", **info})
             else:
-                h, w = arr.shape[:2]
-                arr = np.ascontiguousarray(np.rot90(arr, k))
-                G.add_step(t, {"op": "rotate90", "k": k, **info}, G.rot90_matrix(w, h, k), (arr.shape[1], arr.shape[0]))
-                meta["steps"].append("rotate90")
+                arr = turn(arr, k, info)
                 gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
         elif settings.orient_upside_down:
             score, n = G.upright_score(gray)
             if score is not None and score < settings.upside_down_threshold:
-                h, w = arr.shape[:2]
-                arr = np.ascontiguousarray(np.rot90(arr, 2))
-                G.add_step(t, {"op": "rotate180", "upright_score": round(score, 4), "lines": n},
-                           G.rot90_matrix(w, h, 2), (arr.shape[1], arr.shape[0]))
-                meta["steps"].append("rotate180")
-                gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+                flip = True
+                if settings.orient_ocr_check:                                      # the rule says upside down; the print confirms or overrules
+                    voted = orient_ocr.vote(arr, candidates=(0, 2))
+                    meta["orientation_vote"] = voted[1]
+                    flip = voted[0] != 0                                           # decided "upright": do not turn it
+                if flip:
+                    arr = turn(arr, 2, {"upright_score": round(score, 4), "lines": n})
+                    gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
     return arr, t
 
 

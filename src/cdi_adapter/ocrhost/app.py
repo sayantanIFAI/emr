@@ -26,6 +26,7 @@ def _trocr_engine():
 
 class RapidReq(BaseModel):
     image_b64: str
+    use_cls: bool = True        # False: no per-line "upside down" correction (the page-orientation vote needs print read as it lies)
 
 
 class TrocrReq(BaseModel):
@@ -51,7 +52,7 @@ def ocr_rapid(req: RapidReq) -> dict[str, Any]:
     from ..ocr.rapid import run_rapidocr
 
     try:
-        lines = run_rapidocr(base64.b64decode(req.image_b64))
+        lines = run_rapidocr(base64.b64decode(req.image_b64), use_cls=req.use_cls)
     except Exception as exc:  # noqa: BLE001
         log.error("ocrhost_rapid_failed", error=str(exc)[:200])
         raise HTTPException(500, str(exc)[:300]) from exc

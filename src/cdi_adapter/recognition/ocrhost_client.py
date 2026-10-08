@@ -15,7 +15,7 @@ log = get_logger(__name__)
 
 
 class OcrHost(Protocol):
-    def rapid(self, png: bytes) -> list[OcrLine]: ...
+    def rapid(self, png: bytes, use_cls: bool = True) -> list[OcrLine]: ...
     def trocr(self, crops_png: list[bytes]) -> list[Reading]: ...
 
 
@@ -23,10 +23,10 @@ class LocalOcrHost:
     def __init__(self) -> None:
         self._trocr = TrOCREngine()
 
-    def rapid(self, png: bytes) -> list[OcrLine]:
+    def rapid(self, png: bytes, use_cls: bool = True) -> list[OcrLine]:
         from ..ocr.rapid import run_rapidocr
 
-        return run_rapidocr(png)
+        return run_rapidocr(png, use_cls=use_cls)
 
     def trocr(self, crops_png: list[bytes]) -> list[Reading]:
         return self._trocr.recognize(crops_png) if crops_png else []
@@ -36,8 +36,8 @@ class HttpOcrHost:
     def __init__(self, base_url: str) -> None:
         self._c = httpx.Client(base_url=base_url.rstrip("/"), timeout=settings.ocrhost_timeout_s)
 
-    def rapid(self, png: bytes) -> list[OcrLine]:
-        r = self._c.post("/ocr/rapid", json={"image_b64": base64.b64encode(png).decode()})
+    def rapid(self, png: bytes, use_cls: bool = True) -> list[OcrLine]:
+        r = self._c.post("/ocr/rapid", json={"image_b64": base64.b64encode(png).decode(), "use_cls": use_cls})
         r.raise_for_status()
         return [OcrLine(text=x["text"], bbox=list(x["bbox"]), conf=float(x["conf"]),
                         polygon=x.get("polygon") or []) for x in r.json()["lines"]]

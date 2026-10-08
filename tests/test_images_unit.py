@@ -42,10 +42,10 @@ def fake(monkeypatch):
 
 
 def test_the_page_is_the_colour_source_the_original_photo_or_a_thumbnail(fake):
-    data, mime = images.page_image(DOC, 1, "page")
-    assert mime == "image/png" and data == fake["src"]                                   # the colour page, not the grey copy
-    assert images.page_image(DOC, 1, "original") == (b"JPEGBYTES", "image/jpeg")
-    small, _ = images.page_image(DOC, 1, "page", width=300)
+    data, mime, n = images.page_image(DOC, 1, "page")
+    assert mime == "image/png" and data == fake["src"] and n == 1                                   # the colour page, not the grey copy
+    assert images.page_image(DOC, 1, "original") == (b"JPEGBYTES", "image/jpeg", 1)
+    small, _, _n = images.page_image(DOC, 1, "page", width=300)
     assert cv2.imdecode(np.frombuffer(small, np.uint8), cv2.IMREAD_COLOR).shape[1] == 300
 
 

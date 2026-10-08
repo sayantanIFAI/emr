@@ -39,8 +39,8 @@ def _source_uri(page: dict[str, Any]) -> str:
     return (pre.get("src_uri") if isinstance(pre, dict) else None) or page["image_uri"]
 
 
-def page_image(document_id: str, page_no: int = 1, view: str = "page", width: int | None = None) -> tuple[bytes, str] | None:
-    """``(picture bytes, media type)`` of one page, or None. ``view``: ``page`` = the colour page the system read; ``original`` =
+def page_image(document_id: str, page_no: int = 1, view: str = "page", width: int | None = None) -> tuple[bytes, str, int] | None:
+    """``(picture bytes, media type, number of pages)`` of one page, or None. ``view``: ``page`` = the colour page the system read; ``original`` =
     the file as it was uploaded (when it is a picture; a PDF falls back to the page). ``width`` shrinks it (a thumbnail)."""
     doc_id = _valid(document_id)
     if doc_id is None or view not in VIEWS:
@@ -60,8 +60,8 @@ def page_image(document_id: str, page_no: int = 1, view: str = "page", width: in
         if arr is not None and arr.shape[1] > width:
             w = max(60, min(int(width), MAX_WIDTH))
             arr = cv2.resize(arr, (w, max(1, int(arr.shape[0] * w / arr.shape[1]))), interpolation=cv2.INTER_AREA)
-            return _png(arr), "image/png"
-    return data, mime
+            return _png(arr), "image/png", len(pages)
+    return data, mime, len(pages)
 
 
 def name_crop(document_id: str) -> bytes | None:

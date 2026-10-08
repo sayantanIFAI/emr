@@ -79,11 +79,16 @@ def _poly_to_bbox(poly: Any) -> list[int]:
             int(pts[:, 0].max()), int(pts[:, 1].max())]
 
 
-def run_rapidocr(png_bytes: bytes) -> list[OcrLine]:
+def run_rapidocr(png_bytes: bytes, use_cls: bool = True) -> list[OcrLine]:
+    """``use_cls=False`` switches off the per-line "is this text upside down" correction, so upside-down or sideways print reads
+    as nonsense: what the page-orientation vote needs (ingest/orient_ocr.py)."""
     arr = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
     if arr is None:
         raise ValueError("could not decode page image for OCR")
-    result, _elapse = _get_engine()(arr)
+    try:
+        result, _elapse = _get_engine()(arr) if use_cls else _get_engine()(arr, use_cls=False)
+    except TypeError:                                     # an older rapidocr without the option
+        result, _elapse = _get_engine()(arr)
     lines: list[OcrLine] = []
     for item in result or []:
         poly, text, score = item[0], item[1], float(item[2])

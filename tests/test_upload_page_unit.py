@@ -125,3 +125,25 @@ def test_a_read_prescription_goes_to_the_extracted_tab_collapsed_with_a_badge_an
     assert "OPEN.add" not in done                                                           # nothing is opened: the list stays collapsed
     assert "NEWCOUNT++" in done and 'id="ex-badge"' in ADMIN_PAGE and "Read: open in Extracted" in ADMIN_PAGE
     assert "function showTab" in ADMIN_PAGE and "ArrowRight" in ADMIN_PAGE                  # keyboard: arrow keys move between the tabs
+
+
+def test_the_page_script_has_no_stray_control_characters_and_the_title_word_boundary_is_a_real_regex_escape():
+    assert not any(ord(c) < 32 and c not in "\n\r\t" for c in ADMIN_PAGE)             # a \b in an editing slip once became a backspace
+    assert r"|late)\b\.?\s*/i" in ADMIN_PAGE
+
+
+def test_the_image_can_be_opened_full_screen_from_the_progress_card_and_from_every_collapsed_prescription_row():
+    assert "width:100vw;height:100vh" in ADMIN_PAGE                                             # the viewer fills the whole screen
+    assert "View image: " in ADMIN_PAGE and "View the uploaded image full screen" in ADMIN_PAGE  # in the upload progress, once the document exists
+    assert 'class="vbtn img-open"' in ADMIN_PAGE and "View the prescription image full screen" in ADMIN_PAGE   # on the collapsed row
+    assert 'document.addEventListener("click",e=>{ const b=e.target.closest(".img-open")' in ADMIN_PAGE
+    assert 'X-Page-Count' in ADMIN_PAGE
+
+
+def test_the_page_itself_is_never_cached_so_an_update_is_seen_at_once():
+    from fastapi.testclient import TestClient
+    from cdi_adapter.webapp import app as webapp
+    c = TestClient(webapp.app)
+    c.headers["Authorization"] = "Basic " + __import__("base64").b64encode(f"{webapp.settings.admin_user}:{webapp.settings.admin_password}".encode()).decode()
+    r = c.get("/")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-store" and 'id="tab-ex"' in r.text

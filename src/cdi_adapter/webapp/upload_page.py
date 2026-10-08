@@ -68,7 +68,8 @@ details.sec>summary{font-weight:650;font-size:15px;min-height:40px}
 .nmcrop{margin:6px 0}
 .nmcrop button{border:1px solid var(--line-strong,#cfd9ec);border-radius:10px;background:#fff;padding:4px;cursor:zoom-in;line-height:0;max-width:100%}
 .nmcrop img{max-width:100%;max-height:120px;display:block;border-radius:6px}
-#imgdlg{border:none;border-radius:16px;padding:0;width:min(98vw,1100px);height:min(94vh,900px);box-shadow:0 20px 60px rgba(0,0,0,.4)}
+#imgdlg{border:none;border-radius:0;padding:0;width:100vw;height:100vh;max-width:100vw;max-height:100vh;box-shadow:none}
+.vbtn{border:1px solid var(--line-strong,#cfd9ec);border-radius:8px;background:#fff;padding:3px 10px;font-size:13px;font-weight:600;cursor:zoom-in;color:var(--blue-700,#1e40af)}
 #imgdlg::backdrop{background:rgba(15,23,42,.65)}
 #imgdlg .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--line,#e4eaf4);background:#fff}
 #imgdlg .bar .grow{flex:1}
@@ -485,7 +486,7 @@ const GROUPS=new Map(), OPEN=new Set();               // GROUPS: "phone|name" ->
 let SEQ=0;
 function gkey(phone,name){ return phone+"|"+(name||""); }
 // a name read a little differently each time ("Onkar" / "Oukar") is the same patient on the same mobile number
-function nameKey(n){ return String(n||"").replace(/^\s*(mr|mrs|ms|miss|master|baby|dr|smt|shri|sri|sh|late)\.?\s*/i,"").toLowerCase().replace(/[^a-z ]/g,"").replace(/\s+/g," ").trim(); }
+function nameKey(n){ return String(n||"").replace(/^\s*(mr|mrs|ms|miss|master|baby|dr|smt|shri|sri|sh|late)\b\.?\s*/i,"").toLowerCase().replace(/[^a-z ]/g,"").replace(/\s+/g," ").trim(); }
 function lev(a,b){ const m=a.length,n=b.length; let p=Array.from({length:n+1},(_,j)=>j); for(let i=1;i<=m;i++){ const c=[i]; for(let j=1;j<=n;j++) c[j]=Math.min(p[j]+1,c[j-1]+1,p[j-1]+(a[i-1]===b[j-1]?0:1)); p=c; } return p[n]; }
 function sameName(a,b){ const x=nameKey(a),y=nameKey(b); if(!x||!y) return x===y; if(x===y) return true; return 1-lev(x,y)/Math.max(x.length,y.length)>=0.8; }
 function addDoc(phone,name,doc){
@@ -536,7 +537,7 @@ function docHtml(d){
   const thumb=r&&r.document_id?'<div class="docthumb"><button type="button" class="img-open" data-doc="'+esc(r.document_id)+'" data-pages="'+(r.page_count||1)+'" aria-label="Open the prescription image"><img src="api/intake/page-image?document_id='+encodeURIComponent(r.document_id)+'&w=300" alt="The prescription (click to enlarge)" loading="lazy"/></button><span class="muted">Click the picture to see the prescription full size.</span></div>':"";
   const body=r?thumb+summaryHtml(r)+jsonBlock(r):(d.err?'<p class="jerr">'+esc(d.err)+'</p>':'<p class="muted">Loading…</p>');
   return '<details class="cf-det doc" data-d="'+esc(d.document_id)+'"'+(OPEN.has("d:"+d.document_id)?" open":"")+'><summary>Token <b>'+esc(d.token_no||"—")+'</b> · '
-    +esc(fmtDate(d.uploaded))+' · '+esc(d.filename||"")+' '+st+'</summary><div class="det-body">'+body+'</div></details>';
+    +esc(fmtDate(d.uploaded))+' · '+esc(d.filename||"")+' '+st+' <button type="button" class="vbtn img-open" data-doc="'+esc(d.document_id)+'" data-pages="'+(r?(r.page_count||1):(d.pages||1))+'" aria-label="View the prescription image full screen">View image</button></summary><div class="det-body">'+body+'</div></details>';
 }
 function jsonBlock(r){
   const dl=r.document_id?'<a class="btn btn-ghost btn-sm" href="api/documents/'+esc(r.document_id)+'/result.json?download=true" download>Download JSON</a>':"";
@@ -544,10 +545,16 @@ function jsonBlock(r){
 }
 // ---- the prescription image viewer: any page, zoom, the page as read or the original photo
 const IMG={doc:null,pages:1,page:1,view:"page",zoom:100};
-function imgShow(){
+let IMG_URL=null;
+async function imgShow(){
   const el=$("#img-el");
   el.style.width=IMG.zoom+"%";
-  el.src="api/intake/page-image?document_id="+encodeURIComponent(IMG.doc)+"&page="+IMG.page+"&view="+IMG.view;
+  const url="api/intake/page-image?document_id="+encodeURIComponent(IMG.doc)+"&page="+IMG.page+"&view="+IMG.view;
+  try{
+    const r=await fetch(url); if(!r.ok) throw 0;
+    IMG.pages=Math.max(1,+r.headers.get("X-Page-Count")||IMG.pages);          // the server knows how many pages there are
+    const blob=await r.blob(); if(IMG_URL) URL.revokeObjectURL(IMG_URL); IMG_URL=URL.createObjectURL(blob); el.src=IMG_URL;
+  }catch(e){ el.removeAttribute("src"); el.alt="The picture could not be loaded."; }
   $("#img-pg").textContent=IMG.pages>1?("Page "+IMG.page+" of "+IMG.pages):"";
   $("#img-prev").hidden=$("#img-next").hidden=IMG.pages<2;
   $("#img-view").textContent=IMG.view==="page"?"Original photo":"Page as read";
@@ -562,7 +569,7 @@ $("#img-prev").onclick=()=>{ if(IMG.page>1){ IMG.page--; imgShow(); } };
 $("#img-next").onclick=()=>{ if(IMG.page<IMG.pages){ IMG.page++; imgShow(); } };
 $("#img-view").onclick=()=>{ IMG.view=IMG.view==="page"?"original":"page"; imgShow(); };
 $("#imgdlg").addEventListener("click",e=>{ if(e.target===$("#imgdlg")) $("#imgdlg").close(); });
-$("#groups").addEventListener("click",e=>{ const b=e.target.closest(".img-open"); if(b){ e.preventDefault(); openImage(b.dataset.doc,b.dataset.pages); } });
+document.addEventListener("click",e=>{ const b=e.target.closest(".img-open"); if(b){ e.preventDefault(); openImage(b.dataset.doc,b.dataset.pages); } });
 $("#groups").addEventListener("click",async e=>{            // the patient's name: pick another reading, or confirm / correct it
   const cand=e.target.closest(".nm-cand"); if(cand){ cand.closest(".nmbox").querySelector(".nm-in").value=cand.dataset.name; return; }
   const ok=e.target.closest(".nm-ok"); if(!ok) return;
@@ -746,6 +753,7 @@ function renderJobs(){
       +' · token '+esc(job.token)+' '+state+'</summary><div class="det-body">'
       +(job.err?'<div class="jerr" role="alert">'+esc(job.err)+'</div>':'')
       +(j?'<div style="overflow-x:auto"><table class="emr-grid">'+jobGrid(j)+'</table></div>':'<div class="muted">sent — waiting to start…</div>')
+      +(j?j.documents.filter(d=>d.document_id).map(d=>'<div style="margin-top:8px"><button type="button" class="btn btn-ghost btn-sm img-open" data-doc="'+esc(d.document_id)+'" data-pages="1" aria-label="View the uploaded image full screen">View image: '+esc(d.filename)+'</button></div>').join(""):"")
       +(job.finished&&!job.err?'<div style="margin-top:8px"><button type="button" class="btn btn-primary btn-sm job-go" data-job="'+esc(job.id)+'">Read: open in Extracted ›</button></div>':'')
       +'<div class="muted" style="margin-top:6px">'+esc(job.names.join(", "))+'</div></div></details>';
   }).join("");

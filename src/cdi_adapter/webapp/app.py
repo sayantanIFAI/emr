@@ -61,9 +61,10 @@ app.include_router(corrections_router)
 
 
 @app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    # the full screen (patient look-up, reviewer links) only when the review screens are on
-    return PAGE if settings.review_ui_enabled else UPLOAD_ONLY_PAGE
+def index() -> HTMLResponse:
+    # the full screen (patient look-up, reviewer links) only when the review screens are on. Never cached: a changed screen is
+    # what the next person sees (a cached copy once showed an old layout after an update).
+    return HTMLResponse(PAGE if settings.review_ui_enabled else UPLOAD_ONLY_PAGE, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/healthz")
@@ -182,7 +183,7 @@ def intake_page_image(document_id: str, page: int = 1, view: str = "page", w: in
     got = images.page_image(document_id, page, view, w)
     if got is None:
         raise HTTPException(404, "page not found")
-    return Response(content=got[0], media_type=got[1], headers={"Cache-Control": "private, max-age=300"})
+    return Response(content=got[0], media_type=got[1], headers={"Cache-Control": "private, max-age=300", "X-Page-Count": str(got[2])})
 
 
 @app.get("/api/intake/name-crop")

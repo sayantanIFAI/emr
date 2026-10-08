@@ -22,6 +22,17 @@ def _no_database_for_the_lab_mapping(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_ocr_orientation_vote_by_default(request, monkeypatch):
+    """The page-orientation vote reads the page with OCR; tests of the geometry rules stay fast and exact without it. Only
+    test_orient_ocr_unit turns it on (with a fake OCR host)."""
+    if not request.module.__name__.endswith("test_orient_ocr_unit"):
+        from cdi_adapter.config import settings
+
+        monkeypatch.setattr(settings, "orient_ocr_check", False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_enlarging_by_default(request, monkeypatch):
     """Many tests pin the size of a normalised page to the size it was rendered at; enlarging a small picture (ingest/enhance)
     changes that on purpose. Only test_enhance_unit tests it, and turns it on itself."""
