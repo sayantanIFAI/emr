@@ -334,3 +334,13 @@ def test_the_next_date_is_in_the_result_beside_the_follow_up_and_in_the_schema()
     assert r["follow_up"]["next_date"] == "Next dose: April 2026" and r["follow_up"]["next_date_iso"] == "2026-04"
     assert jc.build_result(T._inputs([T.HBA], payload=T.PAYLOAD))["follow_up"]["next_date"] is None
     jc.validate(r) if hasattr(jc, "validate") else None
+
+
+def test_an_advice_line_whose_words_are_already_listed_as_test_entries_adds_no_composite_row():
+    # MEASURED on a real page: the model wrote the list as advice lines ("Digital OPG.", "FBS, BJS CT."); "BJS CT" came out as one more test
+    c = _Ctx()
+    X._facts_prescription(c, {"advice": [{"text": "Digital OPG."}, {"text": "FBS, BJS CT."}],
+                              "investigations": [{"text": "FBS", "source": "list_context"}, {"text": "BJS", "source": "list_context"},
+                                                 {"text": "CT", "source": "list_context"}, {"text": "Digital OPG", "source": "list_context"}]})
+    got = [a["local_text"] for a in c.added if a["fact_type"] == "investigation_order"]
+    assert "BJS CT" not in got and "FBS" in got and "CT" in got and "BJS" in got

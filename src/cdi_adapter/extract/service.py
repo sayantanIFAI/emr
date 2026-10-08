@@ -220,7 +220,12 @@ def _facts_prescription(c: _Ctx, p: dict[str, Any]) -> None:
             continue                       # a medicine in the advice list: medicines are not extracted in this profile
         if lab_resolve.resolve(t) is not None or is_known_test(t):
             # a test written among the advice ("S. Lipase", "S. Fructosamine"): it belongs with the tests
+            listed = {w.casefold() for io in p.get("investigations") or [] if isinstance(io, dict) and io.get("source") == "list_context"
+                      for w in re.findall(r"[A-Za-z0-9?]+", str(io.get("text") or ""))}      # entries of a test list, already listed one by one
             for one in split_tests(t):
+                words = re.findall(r"[A-Za-z0-9?]+", one)
+                if len(words) >= 2 and all(w.casefold() in listed for w in words) and not lab_resolve.resolve(one):
+                    continue                                       # "BJS CT" beside BJS and CT says nothing more
                 if _test_key(one) in seen_tests:
                     continue
                 seen_tests.add(_test_key(one))
@@ -921,8 +926,6 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
                                                f"written in a list with a test, not recognised (read as '{as_read}')")
                 names.append(name)
                 listed_entries.append((name, as_read, placed))
-        if listed_entries:
-            payload["investigations"] = test_cluster.drop_composites(payload.get("investigations") or [], listed_entries)
         colour = None if not settings.marks_enabled else _colour_page(pages[latest_no - 1] if len(pages) > 1 and 1 <= latest_no <= len(pages) else pages[0], image)     # for the pen marks
         extra = resolve_llm.followup_tests(client, image, fu_text, names, focus_blocks, colour=colour)    # looks even when no follow-up was found
         if extra:                          # tests written with the follow-up line, found by the focused second look
@@ -930,6 +933,8 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
             payload["_second_look"] = list(extra)          # kept so the result can say where these tests came from
             payload["_text_scan"].update({f.test: f.note for f in test_cluster.scan(focus_blocks, colour) if f.test in extra})
             names += extra
+        if listed_entries:                  # after the second look has added its own: "BJS CT" beside BJS and CT says nothing more
+            payload["investigations"] = test_cluster.drop_composites(payload.get("investigations") or [], listed_entries)
         payload["_test_resolved"] = resolve_llm.resolve_tests(client, image, names)
         # the same for medicines: a name close to reference medicine names is a CHOICE among them, never free text
         meds = [(_coded_text(m)[0] if not isinstance(m, dict) else (m.get("drug_text") or m.get("text") or m.get("name") or ""))
