@@ -626,7 +626,7 @@ def _suggest_joined_name(payload: dict[str, Any]) -> None:
 
 def _suggest_surnames(client: Any, images: list[bytes], blocks: list[dict[str, Any]], payload: dict[str, Any]) -> None:
     """The surname put to the model as a choice among the readings and the closest common surnames (``names.surname_options``; a
-    ``?`` for an unread letter is a wildcard), plus "none of these". The three spellings picked most often
+    ``?`` for an unread letter is a wildcard), plus "none of these". Up to five (the ones picked, then the closest)
     are added to the offered readings as <first name> <surname>. Suggestions only: the shown name does not change here. Skipped
     when every reading agrees on a surname with no ``?`` in it."""
     from ..names import surname_options
@@ -642,7 +642,11 @@ def _suggest_surnames(client: Any, images: list[bytes], blocks: list[dict[str, A
     crops = _name_line_crops(images, blocks, payload["patient"].get("name") or "")
     votes = resolve_llm.surname_votes(client, crops, options)
     payload["_surname_votes"] = votes
-    ranked = [w for w, _n in sorted(votes.items(), key=lambda kv: -kv[1])]            # only spellings the model picked: no votes, no suggestion
+    if not votes:
+        return                                              # the model gave no answer: nothing is suggested
+    # the spellings the model picked, most picked first, then the closest list names it did not pick: one run's votes can miss the
+    # right surname (MEASURED: Sarkar got 1 vote in one run and none in the next) and it must still be on the screen to pick
+    ranked = [w for w, _n in sorted(votes.items(), key=lambda kv: -kv[1])] + [o for o in options if o not in votes]
     have = {n.casefold() for n in payload.get("_name_reads") or [] if isinstance(n, str)}
     added = 0
     for word in ranked:
@@ -652,7 +656,7 @@ def _suggest_surnames(client: Any, images: list[bytes], blocks: list[dict[str, A
         payload.setdefault("_name_reads", []).append(full)
         have.add(full.casefold())
         added += 1
-        if added >= 3:
+        if added >= 5:
             break
 
 

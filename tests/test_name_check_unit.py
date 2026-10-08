@@ -170,7 +170,12 @@ def test_the_surname_votes_leave_out_none_of_these_and_the_suggestions_join_the_
     payload = {"patient": {"name": "MR. Debabrata San?ar"}, "_name_reads": ["MR. Debabrata San?ar", "Debabrata Sanwar", "Debabrata San?ar"]}
     X._suggest_surnames(object(), [b"img"], BLOCKS, payload)
     assert payload["patient"]["name"] == "MR. Debabrata San?ar"                  # the shown name does not change
-    assert [n for n in payload["_name_reads"] if n.startswith("Debabrata")] == ["Debabrata Sanwar", "Debabrata San?ar", "Debabrata Sankar", "Debabrata Sarkar"]
+    assert [n for n in payload["_name_reads"] if n.startswith("Debabrata")] == [
+        "Debabrata Sanwar", "Debabrata San?ar", "Debabrata Sankar", "Debabrata Sarkar", "Debabrata Shankar", "Debabrata Sanyal", "Debabrata Santra"]
+    monkeypatch.setattr(R, "surname_votes", lambda client, crops, options, shuffles=3: {})
+    quiet = {"patient": {"name": "MR. Debabrata San?ar"}, "_name_reads": ["MR. Debabrata San?ar", "Debabrata Sanwar"]}
+    X._suggest_surnames(object(), [b"img"], BLOCKS, quiet)
+    assert quiet["_name_reads"] == ["MR. Debabrata San?ar", "Debabrata Sanwar"]       # no votes, no suggestion
 
 
 def test_when_every_reading_agrees_on_the_surname_the_model_is_not_asked(monkeypatch):
@@ -178,6 +183,13 @@ def test_when_every_reading_agrees_on_the_surname_the_model_is_not_asked(monkeyp
     payload = {"patient": {"name": "Onkar Chowdhury"}, "_name_reads": ["Onkar Chowdhury", "Omkar Chowdhury"]}
     X._suggest_surnames(object(), [b"img"], BLOCKS, payload)
     assert payload["_name_reads"] == ["Onkar Chowdhury", "Omkar Chowdhury"]
+
+
+def test_the_offered_readings_ignore_the_title_and_hold_ten():
+    from cdi_adapter.output.json_connector import _intake
+    reads = ["MR. Debabrata San?ar", "Debabrata Sanwar", "Mr. Debabrata Sanwar", *[f"Debabrata Sur{c}name" for c in "abcdefghijkl"]]
+    got = _intake({"patient_name": "Debabrata San?ar"}, {"_name_reads": reads})["name_candidates"]
+    assert got[0] == "Debabrata Sanwar" and got.count("Debabrata Sanwar") == 1 and "MR. Debabrata San?ar" not in got and len(got) == 10
 
 
 def test_a_title_is_not_part_of_the_name_words():

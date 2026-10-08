@@ -226,15 +226,17 @@ def _intake(doc: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     readings of the name (so the screen can offer them)."""
     shown = (doc.get("patient_name") or "").strip() or None
     cands: list[str] = []
-    from ..names import org_like
+    from ..names import name_key, org_like
 
+    seen = {name_key(shown)}                       # "MR. Debabrata Sanwar" and "Debabrata Sanwar" are one offer
     for n in payload.get("_name_reads") or []:
-        if isinstance(n, str) and n.strip() and n.strip() not in cands and n.strip() != shown and not org_like(n):
+        if isinstance(n, str) and n.strip() and name_key(n) not in seen and not org_like(n):
+            seen.add(name_key(n))
             cands.append(n.strip())
     return {"token_no": doc.get("token_no"), "phone": doc.get("phone"), "patient_name": shown,
             "name_read": doc.get("name_read") or shown, "name_confirmed": bool(doc.get("name_confirmed_at")),
             "name_confirmed_by": doc.get("name_confirmed_by") if doc.get("name_confirmed_at") else None,
-            "name_candidates": cands[:6]}
+            "name_candidates": cands[:10]}
 
 
 def _next_date(blocks: list[dict[str, Any]]) -> dict[str, Any]:
