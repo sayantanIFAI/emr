@@ -126,6 +126,11 @@ def _line_hits(line: str) -> list[_Hit]:
         written = len(re.findall(r"(?i)(?<![a-z])" + re.escape(slip_hit.as_read) + r"(?![a-z])", line))
         for _ in range(written - 1):
             out.append(_Hit(slip_hit.test, slip_hit.as_read, "near"))
+    total = len(re.findall(r"[A-Za-z0-9?]+", line))
+    if total >= 6 and sum(h.kind == "strong" for h in out) / total < 0.4:
+        # a long line that is mostly other words (the clinic's printed list of services, a sentence): a test name inside it is weak
+        # evidence, like an ambiguous name (MEASURED: "ECG" in a printed footer "Endoscopy Ultrasonography Echocardiography ...")
+        out = [_Hit(h.test, h.as_read, "weak") if h.kind == "strong" else h for h in out]
     m = _MARKER.search(line)
     if m:
         out.append(_Hit("Vitamin D", m.group(0), "marker"))               # beside or not, "25(OH)" is the vitamin D test
@@ -180,8 +185,7 @@ def _groups(items: list[tuple[int, dict[str, Any]]]) -> list[list[int]]:
 def scan(blocks: list[dict[str, Any]] | None) -> list[Found]:
     """The tests the page's text holds, by position (see the module text). Medicine lines are never looked at. Candidates only."""
     items = [(i, b) for i, b in enumerate(blocks or []) if str(b.get("text") or "").strip()
-             and not _MEDICINE_LINE.search(str(b["text"])) and not looks_like_medicine(str(b["text"]))
-             and (b.get("recognition") or {}).get("state") != "printed"]       # printed text is the clinic's (its services, its header), not an order
+             and not _MEDICINE_LINE.search(str(b["text"])) and not looks_like_medicine(str(b["text"]))]
     hits = [_line_hits(str(b["text"])) for _, b in items]
     found: list[tuple[int, Found]] = []
     for group in _groups(items):

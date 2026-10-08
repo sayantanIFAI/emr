@@ -77,9 +77,14 @@ def test_a_word_that_can_be_read_two_ways_is_not_taken():
     assert T.near_miss("apt") is None and T.near_miss("fas") == "FBS"                # apt: AST by one letter or APTT by a doubled letter
 
 
-def test_printed_text_is_the_clinics_not_an_order():
-    printed = {"text": "Endoscopy Ultrasonography ECG Echocardiography", "bbox": [138, 1491, 1123, 1511], "recognition": {"state": "printed"}}
-    assert T.scan([printed]) == []
-    hand = dict(printed, recognition={"state": "single_engine"})
-    assert [f.test for f in T.scan([hand])] == ["ECG"]
+def test_a_test_name_inside_a_long_line_of_other_words_is_weak_evidence_not_a_test():
+    # MEASURED on a real page: the clinic's footer "?oscopy ?NT Endoscopy ? Ultras?nography ? Echocardiography ... ECG" gave ECG
+    footer = B("Endoscopy Ultrasonography Echocardiography ECG Colonoscopy Treadmill Spirometry", 138, 1491, 1123, 1511)
+    assert T.scan([footer]) == []
+    assert [f.test for f in T.scan([footer, B("CBC, LFT", 140, 1520, 300, 1550)])] == ["ECG", "CBC", "LFT"]       # beside tests it counts (page order)
+    assert [f.test for f in T.scan([B("CBC CRP LFT KFT TSH FT4", 3, 100, 400, 130)])] == ["CBC", "CRP", "LFT", "KFT", "TSH", "FT4"]   # a real list is taken
 
+
+def test_a_line_the_reader_calls_printed_is_still_read_because_handwritten_tests_are_often_called_that():
+    # MEASURED: "CBCCRP" and "VCRP" are handwritten and were labelled printed; skipping printed lines lost them on two real pages
+    assert [f.test for f in T.scan([{"text": "CBCCRP", "bbox": [989, 917, 1065, 945], "recognition": {"state": "printed"}}])] == ["CBC", "CRP"]
