@@ -181,7 +181,7 @@ def test_fasting_and_post_prandial_blood_sugar_are_never_taken_for_one_test():
 
 @pytest.mark.parametrize("line,expected", [
     ("vitam?? D", []),                                               # vitamin D on its own may be a supplement: not taken (beside tests it is)
-    ("25(OH) vitamin D", ["vitamin D"]), ("CBC FBS PPBS", ["CBC", "FBS", "PPBS"]), ("PT ?/ATI", ["PT"]),
+    ("25(OH) vitamin D", ["vitamin D"]), ("CBC FBS PPBS", ["CBC", "FBS", "PPBS"]), ("PT ?/ATI", []),                                              # "PT" on its own may be the word "patient": beside tests only
     ("Tabs. Glimepiride 10?/Generic", []), ("Tab. Sitaglin (10) 1tab a jor", []), ("Cap. Vitamin D3 60000 IU", []),
     ("MR. Debabrata San?ar(63/M) DATE 16/03/24", []), ("STOP SMOKING", []), ("fas, fas", ["FBS"]), ("??? D", []),
 ])

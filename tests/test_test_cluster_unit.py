@@ -65,3 +65,21 @@ def test_where_a_test_came_from_is_said_in_words():
 def test_lines_without_boxes_are_grouped_in_reading_order():
     got = [f.test for f in T.scan([{"text": "CBC"}, {"text": "vitamin D"}])]
     assert got == ["CBC", "vitamin D"]
+
+
+def test_pt_is_the_test_only_beside_tests_never_as_the_word_patient():
+    assert T.scan([B("Currently moderate articolar activity as conveyed by pt henc", 196, 560, 672, 692)]) == []     # MEASURED: a real page
+    assert [f.test for f in T.scan([B("pt", 3, 100, 40, 130)])] == []
+    assert [f.test for f in T.scan([B("CBC", 3, 100, 60, 130), B("PT", 3, 135, 40, 165)])] == ["CBC", "PT"]
+
+
+def test_a_word_that_can_be_read_two_ways_is_not_taken():
+    assert T.near_miss("apt") is None and T.near_miss("fas") == "FBS"                # apt: AST by one letter or APTT by a doubled letter
+
+
+def test_printed_text_is_the_clinics_not_an_order():
+    printed = {"text": "Endoscopy Ultrasonography ECG Echocardiography", "bbox": [138, 1491, 1123, 1511], "recognition": {"state": "printed"}}
+    assert T.scan([printed]) == []
+    hand = dict(printed, recognition={"state": "single_engine"})
+    assert [f.test for f in T.scan([hand])] == ["ECG"]
+

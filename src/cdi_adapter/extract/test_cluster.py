@@ -25,7 +25,7 @@ from .test_names import _STRONG, looks_like_medicine, split_tests
 _MEDICINE_LINE = re.compile(r"(?i)\b(?:tabs?|tablets?|caps?|capsules?|syp|syr|inj|drops?|oint|cream|gel|susp)\b\.?"
                             r"|\d\s*(?:mg|mcg|ml|gm|iu)\b|\b\d+\s*tabs?\b")
 # a word that also names a supplement: the name is a test only beside other test evidence
-_WEAK_WORDS = frozenset("vitamin vit iron calcium zinc magnesium folic potassium sodium".split())
+_WEAK_WORDS = frozenset("vitamin vit iron calcium zinc magnesium folic potassium sodium pt".split())      # "pt" is also "patient"
 # "25(OH)", "25 OH", "2OH" (the 5 lost): the vitamin D test is written, whatever else the line says
 _MARKER = re.compile(r"(?i)(?<![0-9])(?:25|2)\s*[\(\[]?\s*oh\b")
 
@@ -81,12 +81,13 @@ def near_miss(token: str) -> str | None:
         return None
     hits = []
     for a in abbr:
-        if len(a) != len(w):
-            continue
-        diff = [(x, y) for x, y in zip(w, a) if x != y]
-        if len(diff) == 1 and diff[0] in _CONFUSABLE:
-            hits.append(a)
-    return hits[0].upper() if len(hits) == 1 else None
+        if len(a) == len(w):
+            diff = [(x, y) for x, y in zip(w, a) if x != y]
+            if len(diff) == 1 and diff[0] in _CONFUSABLE:
+                hits.append(a)
+        elif len(a) == len(w) + 1 and any(a[:k] + a[k + 1:] == w and a[k] == a[k - 1] for k in range(1, len(a))):
+            hits.append(a)                                         # a doubled letter written once ("apt" for APTT)
+    return hits[0].upper() if len(hits) == 1 else None             # two ways to read it: it is not taken
 
 
 @dataclass
@@ -179,7 +180,8 @@ def _groups(items: list[tuple[int, dict[str, Any]]]) -> list[list[int]]:
 def scan(blocks: list[dict[str, Any]] | None) -> list[Found]:
     """The tests the page's text holds, by position (see the module text). Medicine lines are never looked at. Candidates only."""
     items = [(i, b) for i, b in enumerate(blocks or []) if str(b.get("text") or "").strip()
-             and not _MEDICINE_LINE.search(str(b["text"])) and not looks_like_medicine(str(b["text"]))]
+             and not _MEDICINE_LINE.search(str(b["text"])) and not looks_like_medicine(str(b["text"]))
+             and (b.get("recognition") or {}).get("state") != "printed"]       # printed text is the clinic's (its services, its header), not an order
     hits = [_line_hits(str(b["text"])) for _, b in items]
     found: list[tuple[int, Found]] = []
     for group in _groups(items):
