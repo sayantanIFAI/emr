@@ -100,6 +100,24 @@ def _heuristic_classify(text: str | None) -> dict[str, Any] | None:
     }
 
 
+_RX_SIGNS = re.compile(r"\badv\b|\br[x×]\b|℞|\bfollow\s*up\b|\b(tab|cap|syp|inj)\.?\s+[a-z]|\bcomplain|\bc/o\b")
+
+
+def override_misread_type(obj: dict[str, Any], page_text: str | None) -> dict[str, Any]:
+    """A clinic's handwritten note the model called an operative note: when the page holds NONE of the words an operative note carries
+    (operative note, surgeon, anaesthesia, procedure performed, EBL ...) but does hold the marks of a prescription (Adv, Rx, Tab / Cap,
+    follow up, complains), it is a prescription. MEASURED on a real dental clinic page ("Adv Digital OPG, FBS, BT CT"): the model said
+    operative_note, so none of the prescription steps (the test list, the header, the second look) ever ran and "no lab test is written".
+    Only operative_note is overridden, and only with nothing on the page to support it."""
+    if obj.get("doc_type") != "operative_note" or not page_text:
+        return obj
+    low = page_text.casefold()
+    if any(rx.search(low) for dt, _w, rx in _SIGNALS if dt == "operative_note") or not _RX_SIGNS.search(low):
+        return obj
+    return {**obj, "doc_type": "prescription", "confidence": round(min(float(obj.get("confidence") or 0.8), 0.8), 3),
+            "rationale": (str(obj.get("rationale") or "") + "; operative_note overridden: no operative-note words on the page, prescription marks present").lstrip("; ")}
+
+
 @dataclass
 class ClassifyResult:
     document_id: str
@@ -154,6 +172,7 @@ def classify_document(document_id: str) -> ClassifyResult:
                 repo.set_document_status(sess, document_id, "error", error_detail=f"classify: {exc}")
             raise
 
+    obj = override_misread_type(obj, hint)
     doc_type = obj["doc_type"]
     is_hw = bool(obj["is_handwritten"])
     langs = obj.get("languages") or ["en"]

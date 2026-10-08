@@ -909,6 +909,7 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
         # a list with one test the lists place is a list of tests (the follow-up text and the advice lines): the model wrote "Digital OPG, FBS, BJS CT" as the
         # booking text and listed no test. The placed names go in by their standard name, the entries nothing places go in to be checked.
         have_names = {re.sub(r"[^a-z0-9]", "", n.casefold()) for n in names}
+        listed_entries: list[tuple[str, str, bool]] = []
         for src in [fu_text, *[_coded_text(a)[0] for a in payload.get("advice") or []]]:
             for name, as_read, placed in test_cluster.list_entries(src):
                 key = re.sub(r"[^a-z0-9]", "", name.casefold())
@@ -919,6 +920,9 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
                 payload["_text_scan"][name] = (f"listed together with a test the lists place ('{as_read}')" if placed else
                                                f"written in a list with a test, not recognised (read as '{as_read}')")
                 names.append(name)
+                listed_entries.append((name, as_read, placed))
+        if listed_entries:
+            payload["investigations"] = test_cluster.drop_composites(payload.get("investigations") or [], listed_entries)
         colour = None if not settings.marks_enabled else _colour_page(pages[latest_no - 1] if len(pages) > 1 and 1 <= latest_no <= len(pages) else pages[0], image)     # for the pen marks
         extra = resolve_llm.followup_tests(client, image, fu_text, names, focus_blocks, colour=colour)    # looks even when no follow-up was found
         if extra:                          # tests written with the follow-up line, found by the focused second look

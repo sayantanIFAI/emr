@@ -199,3 +199,10 @@ def test_a_list_with_no_placed_test_is_not_a_list_of_tests(text):
 def test_ordinary_words_beside_a_test_are_not_entries_only_capital_abbreviations_are():
     got = [n for n, _a, _p in T.list_entries("Adv: FBS, rest, Diet control, KT")]
     assert got == ["FBS", "KT"]
+
+
+def test_a_composite_entry_of_words_already_listed_one_by_one_is_dropped():
+    entries = T.list_entries("Digital OPG, FBS, BJS CT")
+    inv = [{"text": "BJS CT"}, {"text": "FBS"}, {"text": "Digital OPG"}, "Chest pain", {"text": "BJS"}]
+    got = [x["text"] if isinstance(x, dict) else x for x in T.drop_composites(inv, entries)]
+    assert got == ["FBS", "Digital OPG", "Chest pain", "BJS"]

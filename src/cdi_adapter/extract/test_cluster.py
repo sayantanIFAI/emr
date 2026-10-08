@@ -410,3 +410,17 @@ def list_entries(text: str | None) -> list[tuple[str, str, bool]]:
             seen.add(key)
             out.append((name, as_read, placed))
     return out
+
+
+def drop_composites(investigations: list[Any], entries: list[tuple[str, str, bool]]) -> list[Any]:
+    """The model's own entry that is only the words of entries already listed one by one ("BJS CT" beside BJS and CT) is dropped: it says
+    nothing the entries do not say better. An entry the lists place is never dropped."""
+    covered = {as_read.casefold() for _n, as_read, _p in entries} | {n.casefold() for n, _a, _p in entries}
+    out = []
+    for item in investigations:
+        text = str(item.get("text") or "") if isinstance(item, dict) else str(item or "")
+        words = re.findall(r"[A-Za-z0-9?]+", text)
+        if len(words) >= 2 and not placed_text(text) and all(w.casefold() in covered for w in words):
+            continue
+        out.append(item)
+    return out
