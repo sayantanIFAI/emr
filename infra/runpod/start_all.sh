@@ -33,6 +33,7 @@ bash "$REPO/infra/runpod/bootstrap_pod.sh" || echo "(bootstrap returned non-zero
 . .venv/bin/activate
 set -a; . "$REPO/.env"; set +a
 export HF_HOME=/workspace/hf-cache
+bash "$REPO/infra/runpod/ensure_indian_codes.sh" || true       # the national lab / drug code lists the gate reads (not in git: see that script)
 MLP="${CDI_MLSERVE_PORT:-8077}"
 WBP="${CDI_WEBAPP_PORT:-8080}"
 

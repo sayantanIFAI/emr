@@ -100,3 +100,18 @@ and the stored scans come back; the code and the models are downloaded again):
 scp -P <port> cdi-state.tar.gz* root@<ip>:/workspace/offpod/
 bash <(curl -fsSL https://raw.githubusercontent.com/sayantanIFAI/emr/main/infra/runpod/restore_pack.sh) /workspace/offpod/cdi-state.tar.gz
 ```
+
+
+## National code lists (not in git)
+
+The lab-test gate reads the C-DAC / NRCeS lists (Common Lab Codes for India, Common Drug Codes for India) from `CDI_INDIAN_CODES_DIR`
+(`/workspace/data`). The packages are C-DAC's (redistribution "within India"), so neither they nor the indexes built from them are in
+the public repository. `start_all.sh` runs `ensure_indian_codes.sh` on every start: it uses the built indexes if they are there,
+rebuilds them from the zips in `/workspace/data-src`, or downloads them from `CDI_INDIAN_CODES_URL`, and otherwise prints a loud
+warning. MEASURED on a pod that had none: the gate ran on 199 mapping aliases instead of about 1,100 lab names.
+
+Give a pod the data once, from the machine that holds the packages:
+
+```bash
+bash infra/runpod/push_indian_codes.sh <ip> <ssh-port> [ssh-key] [dir-with-the-zips]
+```
