@@ -195,3 +195,7 @@ def test_the_screen_stops_a_token_already_used_today_for_another_mobile_number_b
 def test_the_refusal_for_a_used_token_is_drawn_after_the_token_check_returns():
     gate = ADMIN_PAGE[ADMIN_PAGE.index("function gate()"):ADMIN_PAGE.index("const TOKEN_CLASH")]
     assert gate.index("if(clash&&!err) err=clash;") < gate.rindex('$("#pt-err").textContent=err;')       # the text is set again once the clash is known
+
+
+def test_each_test_shows_the_lab_list_result_and_the_page_match_score():
+    assert "lab list: recognised" in ADMIN_PAGE and "lab list: not placed" in ADMIN_PAGE and "page match " in ADMIN_PAGE

@@ -88,6 +88,7 @@ _RESULT_TAIL = re.compile(r"(?<=[A-Za-z]{3})\s*[-–:=]\s*\d{3,}(?:\.\d+)?\s*$|(
 _BRACKETS = re.compile(r"[{}\[\]]")
 
 
+_MARKS = re.compile("[\u2713\u2714\u2611\u221a\u2022\u00b7\u25cf\u25e6\u25aa\u2023\u2043\u2192\u279c\u2794*]")   # tick, bullet, arrow marks
 _STRONG_SEP = re.compile(r"\s*[/\\|,;+&]\s*")                   # a list written with / \ | , ; + &
 _WEAK_SEP = re.compile(r"\s*(?:\s-\s|(?<=[A-Za-z0-9])-(?=[A-Za-z0-9])|\.(?=\s*[A-Za-z0-9]))\s*")   # " - ", "-", "." between names
 _SPECIMEN = frozenset("s sr serum plasma".split())
@@ -115,23 +116,54 @@ def _run_test(w: str) -> bool:
     return k not in _NOT_A_TEST_ALONE and (k in _STRONG or k in _RUN_EXTRA or _single_test(w))
 
 
+def _unvee(w: str) -> str:
+    """A tick written before a test is read by the text reader as a letter "v" stuck to it ("vLFT", "vCRP"). Taken off only when what
+    is left is a test and the whole word is not one itself (VLDL stays VLDL)."""
+    if len(w) >= 4 and w[0] in "vV" and w[1].isupper() and not _run_test(w) and _run_test(w[1:]):
+        return w[1:]
+    return w
+
+
+def _glued(w: str) -> list[str]:
+    """``"CBCCRP"`` -> ``["CBC", "CRP"]``: a word made ONLY of known tests run together (the text reader drops the space between
+    ticked words). Nothing is cut unless every part is a known test of at least two letters; otherwise ``[]``."""
+    n = len(w)
+    best: dict[int, list[str]] = {0: []}
+    for i in range(1, n + 1):
+        for j in range(max(0, i - 12), i - 1):
+            if j in best and _run_test(w[j:i]):
+                cand = best[j] + [w[j:i]]
+                if i not in best or len(cand) < len(best[i]):
+                    best[i] = cand
+    got = best.get(n, [])
+    return got if len(got) >= 2 else []
+
+
 def _split_runs(piece: str) -> list[str]:
-    """``"S LIPASE TSH"`` -> ``"S LIPASE"``, ``"TSH"``: a piece made ONLY of an optional specimen word and known single tests
-    written one after another. Any other word in it (``"Blood urea nitrogen"``) leaves it whole."""
-    words = piece.split()
-    if len(words) < 2 or _single_test(piece):
+    """``"S LIPASE TSH"`` -> ``"S LIPASE"``, ``"TSH"``; ``"vCBC vCRP"`` -> CBC, CRP; ``"CBCCRP"`` -> CBC, CRP: a piece made ONLY of an
+    optional specimen word and known single tests written one after another (a tick may be a stuck "v", the space may be lost). Any
+    other word in it (``"Blood urea nitrogen"``) leaves it whole."""
+    if _single_test(piece):
         return [piece]
+    words = piece.split()
     out: list[str] = []
     pending: list[str] = []
-    for w in words:
-        if w.casefold().strip(".") in _SPECIMEN:
-            pending.append(w)
-        elif _run_test(w):
+    for raw in words:
+        if raw.casefold().strip(".") in _SPECIMEN:
+            pending.append(raw)
+            continue
+        w = _unvee(raw)
+        if _run_test(w):
             out.append(" ".join([*pending, w]))
-            pending = []
+        elif (parts := _glued(w)):
+            out.append(" ".join([*pending, parts[0]]))
+            out += parts[1:]
         else:
             return [piece]
-    return out if len(out) >= 2 and not pending else [piece]
+        pending = []
+    if pending or not out:
+        return [piece]
+    return out if (len(out) >= 2 or out[0] != piece) else [piece]
 
 
 def _split_composite(part: str) -> list[str]:
@@ -159,6 +191,7 @@ def split_tests(text: str | None) -> list[str]:
     if not t:
         return []
     out: list[str] = []
+    t = _MARKS.sub(",", t)                                    # a tick / bullet / arrow written before each test is a separator
     for part in re.split(r"\s*[,;+]\s*(?=[A-Za-z0-9(\[{])|\s+and\s+", t):
         part = _LIST_NO.sub("", part).strip(" .")             # "(1) CBC" / "2. LFT" / "3) TSH" -> the test only
         part = _BRACKETS.sub("", part).strip(" .")             # "{HbA1c" / "TSH}" / "[HbA1c / FBS]": the braces are the doctor's
@@ -182,6 +215,27 @@ SECOND_LOOK = "found by a second look at the page, please check it"   # a test r
 
 _GENERIC = frozenset("test tests for and of the with blood serum urine function profile scan study screen routine "
                      "panel examination exam general count".split())
+
+
+def page_support(test: str | None, page_text: str) -> float | None:
+    """A similarity score, 0 to 1, of how well the page's text supports this test name: each word of the test scores 1.0 when it is a
+    word on the page, 0.9 when it sits inside a page word (words run together), else its best spelling similarity to a page word;
+    the score is the mean. ``None`` when there is nothing to compare. Shown beside the lab-list result; it never rejects a test."""
+    words = re.findall(r"[a-z0-9]+", (test or "").casefold())
+    key = [w for w in words if len(w) >= 2 and w not in _GENERIC] or [w for w in words if len(w) >= 2]
+    page = set(re.findall(r"[a-z0-9]+", (page_text or "").casefold()))
+    if not key or not page:
+        return None
+    pool = [w for w in page if len(w) >= 2]
+    scores = []
+    for w in key:
+        if w in page:
+            scores.append(1.0)
+        elif len(w) >= 3 and any(w in p for p in pool):
+            scores.append(0.9)
+        else:
+            scores.append(max((difflib.SequenceMatcher(None, w, p).ratio() for p in pool), default=0.0))
+    return round(sum(scores) / len(scores), 2)
 
 
 def is_grounded(test: str | None, page_text: str) -> bool:

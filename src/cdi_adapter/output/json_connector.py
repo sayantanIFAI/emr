@@ -41,7 +41,7 @@ from ..extract import indian_codes, lab_resolve
 from ..extract.indian_codes import norm as _norm_name
 from ..extract.medicine_lexicon import medicine_match
 from ..terminology.service import licensed_only
-from ..extract.test_names import SECOND_LOOK, UNCONFIRMED, UNRECOGNISED, is_grounded, is_known_test, looks_like_medicine
+from ..extract.test_names import SECOND_LOOK, UNCONFIRMED, page_support, UNRECOGNISED, is_grounded, is_known_test, looks_like_medicine
 
 SCHEMA_VERSION = "result.v1"
 NOTICE = ("Read by a machine. Values marked needs a check must be verified by a person. "
@@ -112,7 +112,7 @@ def _lab_order(f: dict[str, Any]) -> dict[str, Any]:
     return _item(f, {
         "as_written": f.get("local_text"), "code": f.get("code"), "code_system": f.get("code_system"),
         "code_display": f.get("code_display"), "code_status": f.get("code_status"),
-        "standard_name": None, "standard_source": None,
+        "standard_name": None, "standard_source": None, "page_support": None, "gate_recognised": False,
         "context": [], "preparation": []})
 
 
@@ -282,7 +282,9 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         known = rz is not None or is_known_test(key) or (bool(alt) and is_known_test(alt))
         drug = None if known else indian_codes.drug_lookup(key)                # Common Drug Codes for India
         med = None if known else (drug.matched if drug else medicine_match(key))
-        if t.get("status") != "rejected" and (med or looks_like_medicine(key)):
+        t["gate_recognised"] = bool(known)                                       # the lab lists place this name (or a reference name the model chose)
+        t["page_support"] = page_support(key, page_text) if page_text else None   # a similarity score against the page's text, never a reason to reject
+        if t.get("status") != "rejected" and not known and (med or looks_like_medicine(key)):
             # a drug line the reader filed under the tests (a crowded handwritten page): never shown as a test
             t["status"] = "rejected"
             t["reason"] = f"looks like a medicine ('{med}'), not a test" if med else "looks like a medicine, not a test"

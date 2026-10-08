@@ -725,7 +725,9 @@ function summaryHtml(r){
     const st=t.status==="accepted"?'<span class="pill ok">read</span>':t.status==="rejected"?'<span class="pill err">rejected</span>'
       :isUnconf(t)?'<span class="pill warn" title="'+esc(t.reason||"")+'">needs a check: not confirmed by the text reader, look at the image</span>'
       :'<span class="pill warn" title="'+esc(t.reason||"")+'">needs a check</span>';
-    return '<tr><td>'+(i+1)+'</td><td>'+esc(t.as_written||t.text||"")+'</td><td>'+std+'</td><td>'+pr+'</td><td>'+(ctx||'<span class="none">—</span>')+'</td><td>'+st+'</td></tr>';
+    const match=(t.gate_recognised?'<div class="none">lab list: recognised</div>':'<div class="none">lab list: not placed</div>')
+      +(t.page_support!=null?'<div class="none">page match '+Math.round(t.page_support*100)+'%</div>':'');
+    return '<tr><td>'+(i+1)+'</td><td>'+esc(t.as_written||t.text||"")+'</td><td>'+std+match+'</td><td>'+pr+'</td><td>'+(ctx||'<span class="none">—</span>')+'</td><td>'+st+'</td></tr>';
   }).join("");
   const droppedNote=dropped.length?'<p class="note">Left out because they look like medicines, not tests: '+dropped.map(t=>esc(t.as_written||t.text||"")).join("; ")+'.</p>':"";
   const unrecNote=unrec.length?'<p class="note">Read from the page but not recognised as a test name, so not listed above (please check the page): '+unrec.map(t=>esc(t.as_written||t.text||"")).join("; ")+'.</p>':"";

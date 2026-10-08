@@ -199,6 +199,7 @@
         "code": {"type": ["string", "null"]}, "code_system": {"type": ["string", "null"]},
         "code_display": {"type": ["string", "null"]},
         "code_status": {"enum": ["unmapped", "candidate", "bound", "local_only", null]},
+        "page_support": {"type": ["number", "null"]}, "gate_recognised": {"type": "boolean"},
         "standard_name": {"type": ["string", "null"]},
         "standard_source": {"enum": ["mapping table", "Indian lab list", "abbreviation table", null]},
         "context": {

@@ -199,3 +199,46 @@ def test_a_test_nothing_on_the_page_supports_is_still_not_grounded():
     from cdi_adapter.extract.test_names import is_grounded
     assert not is_grounded("HbA1c", "Review after. 2 months CBCCRP vLFT Creatinine")
     assert not is_grounded("TSH", "Tab Metformin 500 mg 1-0-1 after food")
+
+
+# ---- any separator the doctor used is used to find ALL the tests: ticks, bullets, a stuck "v", words run together
+@pytest.mark.parametrize("written,expected", [
+    ("✓CBC ✓CRP ✓LFT ✓Creatinine", ["CBC", "CRP", "LFT", "Creatinine"]),
+    ("✔ CBC ✔ CRP ✔ LFT", ["CBC", "CRP", "LFT"]),
+    ("• CBC • CRP", ["CBC", "CRP"]),
+    ("* HbA1c * FBS * PPBS", ["HbA1c", "FBS", "PPBS"]),
+    ("CBC → CRP → LFT", ["CBC", "CRP", "LFT"]),
+    ("vCBC vCRP vLFT vCreatinine", ["CBC", "CRP", "LFT", "Creatinine"]),
+    ("CBCCRP vLFT", ["CBC", "CRP", "LFT"]),
+    ("CBCCRP", ["CBC", "CRP"]),
+    ("vLFT", ["LFT"]),
+    ("CBC CRP LFT Creatinine", ["CBC", "CRP", "LFT", "Creatinine"]),
+])
+def test_every_test_in_a_list_is_found_whatever_separates_them(written, expected):
+    from cdi_adapter.extract.test_names import split_tests
+    assert split_tests(written) == expected
+
+
+@pytest.mark.parametrize("written", ["VLDL", "Vitamin D", "Vitamin B12", "Serum creatinine", "Lipid profile", "Urine culture", "A/G ratio",
+                                     "CK-MB", "Blood urea nitrogen", "X-ray LS spine", "vitamin"])
+def test_a_name_that_is_one_test_is_still_never_cut_by_the_new_rules(written):
+    from cdi_adapter.extract.test_names import split_tests
+    assert split_tests(written) == [written]
+
+
+# ---- the similarity score is shown, the gate result decides, and a score never rejects a test
+def test_the_page_support_score_is_one_for_a_word_on_the_page_lower_for_run_together_and_low_for_nothing():
+    from cdi_adapter.extract.test_names import page_support
+    page = "Review after 2 months CBCCRP vLFT Creatinine"
+    assert page_support("Creatinine", page) == 1.0
+    assert page_support("CBC", page) == 0.9 and page_support("LFT", page) == 0.9              # inside a run-together word
+    assert page_support("HbA1c", page) < 0.5 and page_support("HbA1c", "") is None and page_support("", page) is None
+
+
+def test_a_test_the_gate_places_is_never_rejected_whatever_its_page_score():
+    import test_json_connector_unit as T
+    from cdi_adapter.output import json_connector as jc
+    fact = T._fact("investigation_order", "HbA1c 7.2", state="in_review", code_status="unmapped", conf=0.4)      # a number after a known test
+    r = jc.build_result(T._inputs([fact], payload=T.PAYLOAD, blocks=[{"text": "unrelated words only", "page_id": "p1"}]))
+    t = r["lab_tests"][0]
+    assert t["gate_recognised"] is True and t["status"] != "rejected" and t["page_support"] is not None and t["page_support"] < 0.5
