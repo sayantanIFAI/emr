@@ -188,6 +188,10 @@ def _resolve(schema: Any) -> Any:
 def repair_payload(obj: Any, schema: dict | None = None) -> Any:
     """Best-effort coercion of common VLM JSON slips before validation."""
     schema = _resolve(schema)
+    if isinstance(obj, str) and isinstance(schema, dict) and schema.get("type") == "object"             and "text" in (schema.get("properties") or {}) and obj.strip():
+        # a plain string where the schema wants an entry object ("diagnoses": ["PTCA"] for [{"text": "PTCA"}]): a very common slip.
+        # Left alone it fails validation, the model is asked again (two more full generations) and the answer ends up "partial".
+        return {"text": obj}
     if isinstance(obj, dict):
         props = (schema or {}).get("properties") if isinstance(schema, dict) else None
         addl_false = isinstance(schema, dict) and schema.get("additionalProperties") is False

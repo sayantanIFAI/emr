@@ -81,3 +81,15 @@ def test_the_result_says_what_was_not_asked_for():
         assert "medications" not in jc._not_extracted({})
     finally:
         settings.extract_profile = "mlp1"
+
+
+def test_plain_strings_where_the_schema_wants_entry_objects_are_repaired_so_the_first_answer_validates():
+    from cdi_adapter.ml.client import repair_payload, validate_schema
+    _id, schema = P.load_schema("prescription")
+    answer = {"extracted_at_confidence": 0.9, "patient": {"name": "Asha Rao"}, "diagnoses": ["T2 AM: 19y", "PTCA", "CABG"],
+              "investigations": ["CBC", {"text": "LFT", "evidence": ["b3"]}], "advice": ["low salt diet"], "follow_up": "after 2 weeks"}
+    fixed = repair_payload(answer, schema)
+    assert fixed["diagnoses"] == [{"text": "T2 AM: 19y"}, {"text": "PTCA"}, {"text": "CABG"}]
+    assert fixed["investigations"][0] == {"text": "CBC"} and fixed["investigations"][1]["text"] == "LFT"
+    validate_schema(fixed, schema)                                   # no retry needed: this is what made every document slow
+    assert repair_payload({"diagnoses": ["", "  "]}, schema)["diagnoses"] == ["", "  "]      # an empty string is not made into an entry
