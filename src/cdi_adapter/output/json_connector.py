@@ -226,8 +226,10 @@ def _intake(doc: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     readings of the name (so the screen can offer them)."""
     shown = (doc.get("patient_name") or "").strip() or None
     cands: list[str] = []
+    from ..names import org_like
+
     for n in payload.get("_name_reads") or []:
-        if isinstance(n, str) and n.strip() and n.strip() not in cands and n.strip() != shown:
+        if isinstance(n, str) and n.strip() and n.strip() not in cands and n.strip() != shown and not org_like(n):
             cands.append(n.strip())
     return {"token_no": doc.get("token_no"), "phone": doc.get("phone"), "patient_name": shown,
             "name_read": doc.get("name_read") or shown, "name_confirmed": bool(doc.get("name_confirmed_at")),

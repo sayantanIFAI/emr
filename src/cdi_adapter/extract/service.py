@@ -560,16 +560,20 @@ def _check_the_name(client: Any, image: bytes, blocks: list[dict[str, Any]], pay
     from ..names import alike, consensus
     from . import resolve_llm
 
+    from ..names import org_like
+
     first = payload["patient"].get("name")
     first = first if isinstance(first, str) and first.strip() else None
-    reads = resolve_llm.name_reads(client, image, blocks, first)
+    if first and org_like(first):                     # the clinic's name on the letterhead was taken for the patient: it is not a name
+        first, payload["patient"]["name"] = None, None
+    reads = [r for r in resolve_llm.name_reads(client, image, blocks, first) if not org_like(r)]
     payload["_name_reads"] = [first, *reads] if first else list(reads)
     if not reads:
         return
     chosen, agree, total = consensus([first or "", *reads])
     payload["_name_agreement"] = [agree, total]
-    if chosen and agree >= 3 and (first is None or not alike(first, chosen, 0.85)):
-        payload["patient"]["name"] = chosen                 # most readings agree on a different spelling than the first reading
+    if chosen and ((first is None) or (agree >= 3 and not alike(first, chosen, 0.85))):
+        payload["patient"]["name"] = chosen                 # no usable first reading, or most readings agree on a different spelling
     if settings.name_choice_votes:
         _suggest_first_names(client, images or [image], blocks, payload)
 

@@ -13,6 +13,16 @@ def name_key(name: str | None) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z ]", "", n.casefold())).strip()
 
 
+_ORG_WORDS = re.compile(r"\b(?:limited|ltd|pvt|private|hospital|hospitals|clinic|clinics|centre|center|health|healthcare|lifestyle|"
+                        r"diagnostic|diagnostics|pharmacy|medical|laboratory|laboratories|nursing|polyclinic|institute|foundation|"
+                        r"trust|corporation|enterprises|company)\b", re.I)
+
+
+def org_like(name: str | None) -> bool:
+    """True for a company / hospital name ("Sanjeevani Health and Lifestyle Private Limited"): never a patient's name."""
+    return bool(name and _ORG_WORDS.search(name))
+
+
 def similarity(a: str | None, b: str | None) -> float:
     ka, kb = name_key(a), name_key(b)
     if not ka or not kb:

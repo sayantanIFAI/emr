@@ -139,3 +139,17 @@ def test_a_loop_that_wrote_the_same_entry_again_and_again_keeps_one_copy():
 
 def test_the_extraction_has_a_lower_token_ceiling_and_a_stronger_retry_penalty():
     assert settings.extract_max_tokens_mlp1 == 800 and settings.vllm_retry_repetition_penalty >= 1.15
+
+
+@pytest.mark.parametrize("name,org", [("Sanjeevani Health and Lifestyle Private Limited", True), ("Apollo Clinic", True), ("City Care Hospital", True),
+                                      ("Sanjeewan", False), ("Onkar Chowdhury", False), ("Mr. Subrata Das", False), ("Health", True), (None, False)])
+def test_a_company_name_is_never_a_patient_name(name, org):
+    from cdi_adapter.names import org_like
+    assert org_like(name) is org
+
+
+def test_when_the_first_reading_is_the_clinics_name_the_rereads_decide_and_it_is_not_offered_as_a_reading():
+    payload = {"patient": {"name": "Sanjeevani Health and Lifestyle Private Limited"}}
+    X._check_the_name(Seq("Sanjeewan", "Sanjeewan", "Sanjeevan"), _png(), BLOCKS, payload)
+    assert payload["patient"]["name"].startswith("Sanjee") and "Limited" not in payload["patient"]["name"]
+    assert all("Limited" not in n for n in payload["_name_reads"])
