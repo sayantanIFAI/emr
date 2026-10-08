@@ -179,6 +179,28 @@ def test_fasting_and_post_prandial_blood_sugar_are_never_taken_for_one_test():
     assert R._same_test("blood sugar", "blood sugar pp")                       # no letters: the same sugar, said less
 
 
+@pytest.mark.parametrize("line,expected", [
+    ("vitam?? D", ["Vitamin d"]),                                    # MEASURED: the page's own text had it, nothing checked the text
+    ("25(OH) vitamin D", ["vitamin D"]), ("CBC FBS PPBS", ["CBC", "FBS", "PPBS"]), ("PT ?/ATI", ["PT"]),
+    ("Tabs. Glimepiride 10?/Generic", []), ("Tab. Sitaglin (10) 1tab a jor", []), ("Cap. Vitamin D3 60000 IU", []),
+    ("MR. Debabrata San?ar(63/M) DATE 16/03/24", []), ("STOP SMOKING", []), ("fas, fas", []), ("??? D", []),
+])
+def test_every_line_of_the_page_text_is_checked_word_by_word_against_the_lab_lists(line, expected):
+    assert R.tests_from_text([{"text": line}]) == expected
+
+
+def test_a_test_in_the_page_text_is_listed_even_when_the_model_sees_nothing():
+    cl = _Client({"tests": []})                                      # MEASURED: the tests prompt answered [] 24 of 24 times on this page
+    got = R.followup_tests(cl, b"img", None, known=["Tab. Glimepiride"], blocks=[{"text": "vitam?? D"}, {"text": "STOP SMOKING"}])
+    assert got == ["Vitamin d"]
+
+
+def test_a_question_mark_for_an_unread_letter_fits_exactly_one_standard_test_or_nothing():
+    from cdi_adapter.extract import lab_mapping
+    assert lab_mapping.fit("vitam?? D").canonical == "Vitamin D"
+    assert lab_mapping.fit("??? D") is None and lab_mapping.fit("vitamin D") is None      # too little known / no wildcard
+
+
 def test_a_blood_sugar_with_no_letters_is_not_added_beside_the_one_that_has_them():
     cl, image = _views_client([["Blood Sugar"], ["Blood Sugar"], [], []])
     assert R.followup_tests(cl, image, None, known=["Blood sugar PP"]) == []

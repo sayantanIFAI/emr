@@ -585,6 +585,8 @@ def _check_the_name(client: Any, image: bytes, blocks: list[dict[str, Any]], pay
     _suggest_joined_name(payload)
     if settings.name_choice_votes:
         _suggest_first_names(client, images or [image], blocks, payload)
+    if settings.name_surname_votes:
+        _suggest_surnames(client, images or [image], blocks, payload)
 
 
 _TITLE_WORDS = frozenset(("mr", "mrs", "ms", "miss", "master", "smt", "shri", "sri", "dr"))
@@ -622,6 +624,51 @@ def _suggest_joined_name(payload: dict[str, Any]) -> None:
                 have.add(full.casefold())
 
 
+def _suggest_surnames(client: Any, images: list[bytes], blocks: list[dict[str, Any]], payload: dict[str, Any]) -> None:
+    """The surname put to the model as a choice among the readings and the closest common surnames (``names.surname_options``; a
+    ``?`` for an unread letter is a wildcard), plus "none of these". The three spellings picked most often
+    are added to the offered readings as <first name> <surname>. Suggestions only: the shown name does not change here. Skipped
+    when every reading agrees on a surname with no ``?`` in it."""
+    from ..names import surname_options
+    from . import resolve_llm
+
+    shown = _name_tokens(payload["patient"].get("name") or "")
+    if len(shown) < 2:
+        return
+    lasts = [t[-1] for n in payload.get("_name_reads") or [] if isinstance(n, str) for t in [_name_tokens(n)] if len(t) >= 2]
+    if len({x.casefold() for x in lasts}) <= 1 and not any("?" in x for x in lasts):
+        return
+    options = surname_options(lasts)
+    crops = _name_line_crops(images, blocks, payload["patient"].get("name") or "")
+    votes = resolve_llm.surname_votes(client, crops, options)
+    payload["_surname_votes"] = votes
+    ranked = [w for w, _n in sorted(votes.items(), key=lambda kv: -kv[1])]            # only spellings the model picked: no votes, no suggestion
+    have = {n.casefold() for n in payload.get("_name_reads") or [] if isinstance(n, str)}
+    added = 0
+    for word in ranked:
+        full = f"{shown[0]} {word}"
+        if full.casefold() in have or word.casefold() == shown[-1].casefold():
+            continue
+        payload.setdefault("_name_reads", []).append(full)
+        have.add(full.casefold())
+        added += 1
+        if added >= 3:
+            break
+
+
+def _name_line_crops(images: list[bytes], blocks: list[dict[str, Any]], shown: str) -> list[bytes]:
+    """The name line, cut out and enlarged, from each picture of the page (two sizes of each)."""
+    from . import resolve_llm
+
+    crops: list[bytes] = []
+    for img in images:
+        try:
+            crops += resolve_llm.name_crops(img, blocks, shown)[:2]
+        except Exception as exc:  # noqa: BLE001
+            log.warning("name_crop_failed", error=str(exc)[:200])
+    return crops
+
+
 def _suggest_first_names(client: Any, images: list[bytes], blocks: list[dict[str, Any]], payload: dict[str, Any]) -> None:
     """Put the first name to the model as a choice among the readings and their one-letter confusions, and add the spellings it
     picks most often to the readings the screen offers. Suggestions only: the shown name does not change here."""
@@ -631,12 +678,7 @@ def _suggest_first_names(client: Any, images: list[bytes], blocks: list[dict[str
     surname = " ".join(_name_tokens(shown)[1:])
     firsts = [t[0] for n in payload.get("_name_reads") or [] if isinstance(n, str) for t in [_name_tokens(n)] if t]
     options = resolve_llm.first_name_options(firsts)
-    crops: list[bytes] = []
-    for img in images:
-        try:
-            crops += [c for c in resolve_llm.name_crops(img, blocks, shown)[:2]]
-        except Exception as exc:  # noqa: BLE001
-            log.warning("name_crop_failed", error=str(exc)[:200])
+    crops = _name_line_crops(images, blocks, shown)
     votes = resolve_llm.first_name_votes(client, crops, options)
     payload["_name_votes"] = votes
     have = {n.casefold() for n in payload.get("_name_reads") or [] if isinstance(n, str)}

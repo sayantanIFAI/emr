@@ -66,3 +66,36 @@ def consensus(candidates: list[str], threshold: float = 0.85) -> tuple[str | Non
     best = max(groups, key=len)                                   # max keeps the earliest group on a tie
     medoid = max(best, key=lambda x: (sum(similarity(x, y) for y in best), -best.index(x)))
     return medoid, len(best), len(cands)
+
+
+# Common surnames of the patients (Kolkata and India wide). Used ONLY to offer spellings the front desk can pick from when a surname
+# is read badly ("San?ar", "Sanwar" for Sarkar); never to decide a name. A surname that is not here is simply not offered.
+COMMON_SURNAMES = tuple("""Sarkar Sarker Sircar Sen Sengupta Sanyal Saha Shaw Sinha Singh Sharma Shah Sheikh Chowdhury Chaudhuri Choudhury
+Chaudhary Chatterjee Chattopadhyay Banerjee Bandyopadhyay Mukherjee Mukhopadhyay Ganguly Gangopadhyay Ghosh Ghoshal Bose Basu Das Dasgupta
+Dutta Datta Dey Roy Rai Majumder Majumdar Mondal Mandal Biswas Halder Haldar Paul Pal Pramanik Manna Naskar Mitra Mitter Guha Gupta Kundu
+Bhattacharya Bhattacharjee Chakraborty Chakrabarti Chakravarty Dhar Laha Nandi Nag Karmakar Kar Kumar Kumari Yadav Verma Mishra Misra
+Pandey Tiwari Agarwal Aggarwal Jain Patel Mehta Joshi Reddy Rao Nair Iyer Iyengar Pillai Khan Ali Ahmed Hussain Begum Khatun Bibi Devi
+Prasad Thakur Santra Samanta Sahoo Panda Patra Behera Mahato Murmu Soren Tudu Roychowdhury Sankar Shankar Sanwar""".split())
+
+
+def surname_options(readings: list[str], limit: int = 7) -> list[str]:
+    """Spellings of the surname to choose between: the readings made (a reading with a ``?`` for a letter it could not read is not
+    offered as it is), then the list names a ``?`` reading fits exactly (``San?ar`` -> Sankar, Sansar), then the list names closest
+    to what was read. ``readings`` are surnames (the last word of each reading of the name)."""
+    reads = [r for r in dict.fromkeys(x for x in readings if isinstance(x, str) and len(x) >= 3 and re.fullmatch(r"[A-Za-z?]+", x))]
+    plain = [r for r in reads if "?" not in r][:3]
+    fits: list[str] = []
+    close: dict[str, float] = {}
+    for r in reads:
+        pat = re.compile(re.escape(r.casefold()).replace("\\?", "."))
+        for s in COMMON_SURNAMES:
+            if "?" in r and pat.fullmatch(s.casefold()):
+                fits.append(s)
+            ratio = difflib.SequenceMatcher(None, r.casefold().replace("?", ""), s.casefold()).ratio()
+            if ratio >= 0.5:
+                close[s] = max(close.get(s, 0.0), ratio)
+    ranked = fits + [s for s, _ in sorted(close.items(), key=lambda kv: -kv[1])]
+    have = {p.casefold() for p in plain}
+    listed = [s for s in dict.fromkeys(ranked) if s.casefold() not in have][: max(0, limit - len(plain))]
+    return plain + listed
+

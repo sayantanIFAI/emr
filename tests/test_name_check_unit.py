@@ -149,6 +149,37 @@ def test_a_short_middle_word_every_reading_agrees_on_is_a_real_part_of_the_name_
     assert none["_name_reads"] == []
 
 
+def test_the_surname_options_are_the_readings_then_the_list_names_a_question_mark_fits_then_the_closest(monkeypatch):
+    from cdi_adapter.names import surname_options
+    got = surname_options(["San?ar", "Sanwar", "San?ar"])                       # MEASURED on a real page: it is Sarkar
+    assert got[0] == "Sanwar" and "San?ar" not in got                           # a reading with a placeholder is never offered as it is
+    assert "Sankar" in got and "Sarkar" in got                                  # what "San?ar" fits, and what is closest
+    assert surname_options([]) == [] and surname_options(["Chowdhury"])[0] == "Chowdhury"
+
+
+def test_the_surname_votes_leave_out_none_of_these_and_the_suggestions_join_the_offered_readings(monkeypatch):
+    seen = []
+
+    class Rec:
+        def vlm_json_ex(self, image, prompt, schema, **kw):
+            seen.append(prompt)
+            return {"choice": 99}, "m"
+    assert R.surname_votes(Rec(), [b"c"], ["Sarkar", "Sankar"]) == {} and all("none of these" in p for p in seen)
+    monkeypatch.setattr(R, "surname_votes", lambda client, crops, options, shuffles=3: {"Sankar": 3, "Sanwar": 2, "Sarkar": 1})
+    monkeypatch.setattr(R, "name_crops", lambda img, blocks, name: [b"c1", b"c2"])
+    payload = {"patient": {"name": "MR. Debabrata San?ar"}, "_name_reads": ["MR. Debabrata San?ar", "Debabrata Sanwar", "Debabrata San?ar"]}
+    X._suggest_surnames(object(), [b"img"], BLOCKS, payload)
+    assert payload["patient"]["name"] == "MR. Debabrata San?ar"                  # the shown name does not change
+    assert [n for n in payload["_name_reads"] if n.startswith("Debabrata")] == ["Debabrata Sanwar", "Debabrata San?ar", "Debabrata Sankar", "Debabrata Sarkar"]
+
+
+def test_when_every_reading_agrees_on_the_surname_the_model_is_not_asked(monkeypatch):
+    monkeypatch.setattr(R, "surname_votes", lambda *a, **k: (_ for _ in ()).throw(AssertionError("asked")))
+    payload = {"patient": {"name": "Onkar Chowdhury"}, "_name_reads": ["Onkar Chowdhury", "Omkar Chowdhury"]}
+    X._suggest_surnames(object(), [b"img"], BLOCKS, payload)
+    assert payload["_name_reads"] == ["Onkar Chowdhury", "Omkar Chowdhury"]
+
+
 def test_a_title_is_not_part_of_the_name_words():
     assert X._name_tokens("Mr. Onkar Chowdhury") == ["Onkar", "Chowdhury"] and X._name_tokens("Smt Asha Rao") == ["Asha", "Rao"]
     assert X._name_tokens("Asha Rao") == ["Asha", "Rao"] and X._name_tokens("") == []

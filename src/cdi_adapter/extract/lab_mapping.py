@@ -13,6 +13,7 @@ switch off any row. It is consulted FIRST, before the Indian national list and t
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -291,6 +292,21 @@ def lookup(name: str | None) -> Mapped | None:
             if hit is not None:
                 return hit
     return None
+
+
+def fit(written: str | None) -> Mapped | None:
+    """The mapping row a reading with ``?`` for the letters it could not read fits ("vitam?? D" -> "vitamin d"). At least four letters
+    must be known and at most 40% of the characters may be ``?``; when the fit is more than one row for different standard tests, or
+    none, the answer is None (nothing is guessed)."""
+    key = re.sub(r"[^a-z0-9? ]", "", (written or "").casefold())
+    key = re.sub(r"\s+", " ", key).strip()
+    if "?" not in key or sum(c.isalpha() for c in key) < 4 or key.count("?") > 0.4 * len(key.replace(" ", "")):
+        return None
+    pat = re.compile(re.escape(key).replace("\\?", ".").replace("\\ ", " "))
+    hits = {k: m for k, m in _load().items() if pat.fullmatch(k)}
+    if not hits or len({m.canonical for m in hits.values()}) != 1:
+        return None
+    return hits[sorted(hits)[0]]
 
 
 def ensure_seed() -> int:

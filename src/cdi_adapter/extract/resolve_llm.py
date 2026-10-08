@@ -178,6 +178,49 @@ def page_views(image: bytes) -> list[bytes]:
     return out
 
 
+_MEDICINE_LINE = re.compile(r"(?i)\b(?:tabs?|tablets?|caps?|capsules?|syp|syr|inj|drops?|oint|cream|gel|susp)\b\.?|\d\s*(?:mg|mcg|ml|gm|iu)\b|\b\d+\s*tabs?\b")
+
+
+def _placed_text(gram: str) -> str | None:
+    """The name to list when the lab lists place these words EXACTLY (the mapping table, the national list, the gazetteer), or when a
+    reading with ``?`` for unreadable letters fits exactly one standard test; otherwise None. A fuzzy match never counts."""
+    if sum(ch.isalpha() for ch in gram) < 2:
+        return None
+    if "?" in gram:
+        from . import lab_mapping
+
+        hit = lab_mapping.fit(gram)
+        return hit.alias.capitalize() if hit else None
+    rz = lab_resolve.resolve(gram)
+    return gram if rz is not None and not getattr(rz, "fuzzy", False) else None
+
+
+def tests_from_text(blocks: list[dict[str, Any]] | None) -> list[str]:
+    """Every line of text the readers produced, from every area of the page, checked word by word against the lab lists: the
+    longest run of up to three words the lists place wins, and the rest of the line goes on. Lines that carry the marks of a
+    medicine (Tab, Cap, mg, 1tab ...) are not looked at. Candidates only: each still has to pass the gate in ``followup_tests``."""
+    from .test_names import split_tests
+
+    out: list[str] = []
+    for b in blocks or []:
+        line = str(b.get("text") or "")
+        if not line.strip() or _MEDICINE_LINE.search(line) or looks_like_medicine(line):
+            continue
+        for piece in split_tests(line):
+            words = re.findall(r"[A-Za-z0-9?]+", piece)
+            i = 0
+            while i < len(words):
+                for n in (3, 2, 1):
+                    got = _placed_text(" ".join(words[i:i + n])) if i + n <= len(words) else None
+                    if got:
+                        out.append(got)
+                        i += n
+                        break
+                else:
+                    i += 1
+    return out
+
+
 _REVIEW_LINE = re.compile(r"(?i)\b(?:review|receive|revisit|f/?u|follow[\s-]?up|come)\b")
 _AFTER_WORD = re.compile(r"(?i)\b(?:of|with|for)\b\s*[{\[(]?\s*|[{\[(]\s*")
 
@@ -261,7 +304,7 @@ def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list
                     for one in split_tests(item):
                         seen.append((norm(one), job[2]))
                         items.append((one, False))
-    for item in tests_from_lines(blocks, follow_up):                 # the tests written on the follow-up line itself: read from text
+    for item in [*tests_from_lines(blocks, follow_up), *tests_from_text(blocks)]:     # read from the text of the page, not by the model
         items.extend((one, True) for one in split_tests(item))
     answered = {job[2] for job, a in zip(jobs, answers) if isinstance(a, list)}
     need = min(max(1, settings.second_look_min_views), len(answered)) if answered else 1
@@ -363,9 +406,10 @@ def first_name_options(tokens: list[str], limit: int = 7) -> list[str]:
     return [w for w, _ in score.most_common(limit)]
 
 
-def first_name_votes(client: Any, crops: list[bytes], options: list[str], shuffles: int = 3) -> dict[str, int]:
+def _choice_votes(client: Any, crops: list[bytes], options: list[str], ask_text: Any, shuffles: int) -> dict[str, int]:
     """How often the model picks each spelling when asked which one is written, over several crops and several orders of the
-    options (so the position in the list does not decide). Suggestions only: the votes decide nothing by themselves."""
+    options (so the position in the list does not decide). ``ask_text(opts)`` builds the question. A pick of "none of these" is not
+    counted. Suggestions only: the votes decide nothing by themselves."""
     import random
     from collections import Counter
     from concurrent.futures import ThreadPoolExecutor
@@ -382,11 +426,8 @@ def first_name_votes(client: Any, crops: list[bytes], options: list[str], shuffl
 
     def ask(job: tuple[bytes, list[str]]) -> str | None:
         crop, opts = job
-        prompt = ("This is a line from a handwritten prescription: 'For Mr <first name> <surname>, age'. Look only at the FIRST NAME "
-                  "(the word after Mr). Which of these spellings is exactly what is written, letter by letter? "
-                  + " ".join(f"{i + 1}) {o}" for i, o in enumerate(opts)) + '. Answer with the number only as JSON {"choice": n}.')
         try:
-            resp, _ = client.vlm_json_ex(crop, prompt, CHOICE_SCHEMA, max_tokens=12, retries=1)
+            resp, _ = client.vlm_json_ex(crop, ask_text(opts), CHOICE_SCHEMA, max_tokens=12, retries=1)
             c = int((resp or {}).get("choice", 0))
         except Exception as exc:  # noqa: BLE001 - an extra look must never cost the document
             log.warning("name_choice_failed", error=str(exc)[:200])
@@ -396,6 +437,25 @@ def first_name_votes(client: Any, crops: list[bytes], options: list[str], shuffl
     with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
         picked = [p for p in pool.map(ask, jobs) if p]
     return dict(Counter(picked))
+
+
+def first_name_votes(client: Any, crops: list[bytes], options: list[str], shuffles: int = 3) -> dict[str, int]:
+    """The votes for each spelling of the FIRST name."""
+    def text(opts: list[str]) -> str:
+        return ("This is a line from a handwritten prescription: 'For Mr <first name> <surname>, age'. Look only at the FIRST NAME "
+                "(the word after Mr). Which of these spellings is exactly what is written, letter by letter? "
+                + " ".join(f"{i + 1}) {o}" for i, o in enumerate(opts)) + '. Answer with the number only as JSON {"choice": n}.')
+    return _choice_votes(client, crops, options, text, shuffles)
+
+
+def surname_votes(client: Any, crops: list[bytes], options: list[str], shuffles: int = 3) -> dict[str, int]:
+    """The votes for each spelling of the SURNAME; "none of these" is offered so that a surname the list does not hold is not forced."""
+    def text(opts: list[str]) -> str:
+        allo = [*opts, "none of these"]
+        return ("This is a line from a handwritten prescription: 'For Mr/Mrs <first name> <surname>, age'. Look only at the SURNAME "
+                "(the last word of the name, before the age or the date). Which of these is exactly what is written, letter by letter? "
+                + " ".join(f"{i + 1}) {o}" for i, o in enumerate(allo)) + '. Answer with the number only as JSON {"choice": n}.')
+    return _choice_votes(client, crops, options, text, shuffles)
 
 
 def name_reads(client: Any, image: bytes, blocks: list[dict[str, Any]] | None, name: str | None) -> list[str]:
