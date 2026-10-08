@@ -36,3 +36,28 @@ def test_upsert_rejects_empty_and_overlong_names():
         M.upsert(S(), "", "Creatinine", None, None)
     with pytest.raises(ValueError):
         M.upsert(S(), "x" * 90, "Creatinine", None, None)
+
+
+@pytest.mark.parametrize("written,canonical", [
+    ("CBC", "Complete blood count"), ("Complete blood picture", "Complete blood count"), ("hemogram", "Complete blood count"),
+    ("CRP", "C-reactive protein"), ("C-Reactive Protein", "C-reactive protein"), ("S. CRP", "C-reactive protein"),
+    ("LFT", "Liver function test"), ("Liver Function Tests", "Liver function test"),
+    ("FT4", "Free T4"), ("FT3", "Free T3"), ("ESR", "ESR"), ("Hb", "Haemoglobin"), ("SGPT", "ALT (SGPT)"), ("S. Lipase", "Lipase"),
+    ("Vit B12", "Vitamin B12"), ("Lipid profile", "Lipid profile"), ("Urine R/E", "Urine routine examination"), ("D-dimer", "D-dimer"),
+    ("S. Fructosamine", "Fructosamine"),
+])
+def test_the_common_tests_and_their_spellings_map_to_one_standard_test(written, canonical):
+    m = M.lookup(written)
+    assert m is not None and m.canonical == canonical
+
+
+def test_a_code_is_given_only_where_it_is_certain_and_every_alias_is_listed_once():
+    codes = {(r[1], r[2]) for r in M.SEED if r[2]}
+    assert ("Complete blood count", "58410-2") in codes and ("C-reactive protein", "1988-5") in codes and ("Liver function test", "24325-3") in codes
+    assert M.lookup("Lipid profile").loinc is None and M.lookup("Vitamin D").loinc is None            # not certain: name only
+    keys = [M.norm(r[0]) for r in M.SEED]
+    assert len(keys) == len(set(keys)), "an alias appears twice"
+    per_canonical = {}
+    for r in M.SEED:
+        per_canonical.setdefault(r[1], set()).add(r[2])
+    assert all(len(v) == 1 for v in per_canonical.values()), "one standard test, one code"
