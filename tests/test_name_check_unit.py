@@ -133,6 +133,13 @@ def test_a_word_the_writer_left_a_gap_in_is_offered_joined_and_the_shown_name_do
     assert payload["_name_reads"].count("Sayantani Sarkar") == 1
 
 
+def test_the_fragment_is_not_taken_into_the_surname_when_the_shown_reading_is_the_one_that_kept_it():
+    # MEASURED on the same page, second run: the first reading was "Sayanta ni Sarkar" and it was the shown name
+    payload = {"patient": {"name": "Sayanta ni Sarkar"}, "_name_reads": ["Sayanta ni Sarkar", "Sayanta Sarkey", "Sayanta Sarkar"]}
+    X._suggest_joined_name(payload)
+    assert payload["_name_reads"][-1] == "Sayantani Sarkar" and "Sayantani ni Sarkar" not in payload["_name_reads"]
+
+
 def test_a_short_middle_word_every_reading_agrees_on_is_a_real_part_of_the_name_and_is_not_joined():
     payload = {"patient": {"name": "Ram Kr Das"}, "_name_reads": ["Ram Kr Das", "Ram Kr Das"]}
     X._suggest_joined_name(payload)

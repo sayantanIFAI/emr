@@ -608,7 +608,10 @@ def _suggest_joined_name(payload: dict[str, Any]) -> None:
     mids = {t[1] for t in toks if len(t) == 3 and len(t[1]) <= 3 and t[1].isalpha()}
     if not mids or not any(len(t) == 2 for t in toks):
         return
-    surname = " ".join(_name_tokens(payload["patient"].get("name") or "")[1:])
+    shown = _name_tokens(payload["patient"].get("name") or "")
+    if len(shown) >= 3 and shown[1] in mids:
+        shown = [shown[0], *shown[2:]]                       # the shown reading may be the one that kept the fragment
+    surname = " ".join(shown[1:])
     firsts = Counter(t[0] for t in toks if len(t) >= 2 and len(t[0]) >= 4).most_common(1)
     have = {n.casefold() for n in reads}
     for first, _n in firsts:
