@@ -115,7 +115,7 @@ def test_a_slip_needs_other_listed_tests_beside_it_but_sodium_and_potassium_does
 def test_the_models_list_is_corrected_in_place_and_says_what_was_read():
     payload = {"investigations": [{"text": "Chest ECO", "evidence": []}, "CBC Test", {"text": "Nat & Kit Level Test"}, "Lipid Profile Test"]}
     notes = T.repair_investigations(payload)
-    assert [x["text"] if isinstance(x, dict) else x for x in payload["investigations"]] == ["Chest ECG", "CBC Test", "Na+ & K+", "Lipid Profile Test"]
+    assert [x["text"] if isinstance(x, dict) else x for x in payload["investigations"]] == ["Chest ECG", "CBC", "Na+ & K+", "Lipid Profile"]
     assert "ECG" in notes["Chest ECG"] and "'Chest ECO'" in notes["Chest ECG"] and "sodium and potassium" in notes["Na+ & K+"]
     alone = {"investigations": ["Chest ECO"]}
     assert T.repair_investigations(alone) == {} and alone["investigations"] == ["Chest ECO"]          # no other test beside it: not taken
@@ -141,3 +141,23 @@ def test_the_tests_inside_a_garbled_model_answer_are_taken_word_by_word(answer, 
 def test_the_models_nat_2_kit_entry_is_put_right():
     got = T.repair_piece("NAT-2 Kit Level Th", evidence=False)
     assert got and got[0] == "Na+ & K+" and "sodium and potassium" in got[1]
+
+
+# ---- MEASURED once the national lab list was loaded on the pod: printed form labels and the doctor's "Tr" after a test
+@pytest.mark.parametrize("line", ["Height:", "Weight: 77 kg", "Pulse:", "BP: 110/70 mmHg", "Blood", "Vital Signs", "Investigation:"])
+def test_a_printed_form_label_is_never_a_lab_test_even_when_the_national_list_holds_the_word(line):
+    assert T.scan([B(line, 3, 100, 160, 130)]) == []
+
+
+@pytest.mark.parametrize("piece,expected", [
+    ("lipid profile fr", "lipid profile"), ("Lipid Profile Tr", "Lipid Profile"), ("CBC Tr", "CBC"), ("Lipid Profile Test", "Lipid Profile"),
+    ("NAT Kit Level th", "Na+ & K+"), ("Nat Kit", "Na+ & K+"),
+])
+def test_the_doctors_abbreviated_test_after_a_name_is_not_part_of_the_name(piece, expected):
+    got = T.repair_piece(piece, evidence=False)
+    assert got and got[0] == expected
+
+
+def test_words_that_only_look_like_sodium_potassium_are_left_alone():
+    for word in ("Napkin", "Nakshatra", "Nature kit", "Panel"):
+        assert T.repair_piece(word, evidence=False) is None

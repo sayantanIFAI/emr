@@ -24,6 +24,11 @@ from .test_names import _STRONG, is_known_test, looks_like_medicine, split_tests
 # a line with the marks of a medicine order is not looked at (and is never part of a group)
 _MEDICINE_LINE = re.compile(r"(?i)\b(?:tabs?|tablets?|caps?|capsules?|syp|syr|inj|drops?|oint|cream|gel|susp)\b\.?"
                             r"|\d\s*(?:mg|mcg|ml|gm|iu)\b|\b\d+\s*tabs?\b")
+# words of the form itself (vital-sign labels, field names) and generic words: the national lab list holds some of them ("Height" is a
+# LOINC term, "Blood" is "Blood [Presence] in Urine"), but written on a prescription they are labels. MEASURED on a real page once the
+# national list was loaded: "Height" and "Blood" came out as lab tests.
+_FORM_LABELS = frozenset("height weight pulse bp temp temperature spo2 pr rr age sex date history vitals vital signs name complaint complaints "
+                         "diagnosis blood urine serum plasma stool fluid sample specimen".split())
 # a word that also names a supplement: the name is a test only beside other test evidence
 _WEAK_WORDS = frozenset("vitamin vit iron calcium zinc magnesium folic potassium sodium pt".split())      # "pt" is also "patient"
 # "25(OH)", "25 OH", "2OH" (the 5 lost): the vitamin D test is written, whatever else the line says
@@ -108,6 +113,8 @@ def _line_hits(line: str, long_rule: bool = True) -> list[_Hit]:
             for n in (3, 2, 1):
                 gram = " ".join(words[i:i + n])
                 got = placed_text(gram) if i + n <= len(words) else None
+                if got and all(w.casefold() in _FORM_LABELS for w in gram.split()):
+                    got = None                                  # a printed label of the form, not a test
                 if got:
                     weak = any(w.casefold() in _WEAK_WORDS for w in (*gram.split(), *got.split()))
                     if weak and sentence:
@@ -224,7 +231,7 @@ def scan(blocks: list[dict[str, Any]] | None) -> list[Found]:
 # "Na+ & K+ Level Test" was read "Nat & Kit Level Test"; neither was placed by the lab lists, so both showed as "outside the lab list".
 # Na+ & K+ as handwriting gets read: the + comes out as t ("Nat"), the & as "-2" / "+ q" / q, the N as NP; "Kit" for "K+".
 # MEASURED on a real page: "NAT & Kit Level Test", "NAT-2 Kit Level Th", "NAT + Q Kit Level Test", "NPT & K+ Level F".
-_ELECTROLYTE_CORE = r"(?:s[.\s]*)?n[ap]\s*[+t]?\s*(?:&|and|-?\s*2|\+\s*q|[+,/q])\s*k\s*[+it]{0,2}\b"
+_ELECTROLYTE_CORE = r"(?:s[.\s]*)?n[ap]\s*[+t]?\s*(?:(?:&|and|-?\s*2|\+\s*q|[+,/q])\s*)?k\s*[+it]{0,2}\b"
 _ELECTROLYTE = re.compile(r"(?i)^\W*" + _ELECTROLYTE_CORE)
 _ELECTROLYTE_IN = re.compile(r"(?i)\b" + _ELECTROLYTE_CORE)
 
@@ -254,6 +261,11 @@ def repair_piece(piece: str, evidence: bool) -> tuple[str, str] | None:
         return None
     if _ELECTROLYTE.match(piece):
         return "Na+ & K+", f"read as '{piece}' (sodium and potassium)"
+    words = piece.split()
+    if len(words) >= 2 and (len(words[-1].strip(".")) <= 3 or words[-1].casefold().strip(".") in ("test", "tests", "level")):
+        trimmed = " ".join(words[:-1]).strip(" .")
+        if trimmed and placed_text(trimmed):
+            return trimmed, f"read as '{piece}' (the doctor's \"Test\" abbreviation dropped)"      # "Lipid Profile Tr" -> Lipid Profile
     if not evidence:
         return None
     fixed: list[str] = []
