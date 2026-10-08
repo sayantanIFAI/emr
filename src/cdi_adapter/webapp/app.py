@@ -175,6 +175,26 @@ def patients_existing(phone: str) -> dict[str, Any]:
     return patients.existing(digits or "")
 
 
+@app.get("/api/intake/page-image")
+def intake_page_image(document_id: str, page: int = 1, view: str = "page", w: int | None = None) -> Response:
+    """One page of an uploaded prescription as a picture, for the screen's viewer (``view``: page | original; ``w``: thumbnail width)."""
+    from . import images
+    got = images.page_image(document_id, page, view, w)
+    if got is None:
+        raise HTTPException(404, "page not found")
+    return Response(content=got[0], media_type=got[1], headers={"Cache-Control": "private, max-age=300"})
+
+
+@app.get("/api/intake/name-crop")
+def intake_name_crop(document_id: str) -> Response:
+    """The patient's name line cut out of the page and enlarged, to compare with the typed name."""
+    from . import images
+    png = images.name_crop(document_id)
+    if png is None:
+        raise HTTPException(404, "the name line could not be found")
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "private, max-age=300"})
+
+
 @app.post("/api/intake/name")
 def intake_confirm_name(request: Request, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """The front desk confirms or corrects the patient's name read from a prescription. A handwritten name is never final

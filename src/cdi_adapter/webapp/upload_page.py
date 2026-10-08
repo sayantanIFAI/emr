@@ -62,6 +62,18 @@ details.sec>summary{font-weight:650;font-size:15px;min-height:40px}
 .nmbox .nmedit{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;align-items:center}
 .nmbox .nm-in{min-height:40px;min-width:220px;flex:1;max-width:360px}
 .nmbox .nmchips{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.docthumb{display:inline-flex;gap:12px;align-items:flex-start;margin:6px 0 10px;flex-wrap:wrap}
+.docthumb button{border:1px solid var(--line-strong,#cfd9ec);border-radius:10px;background:#fff;padding:4px;cursor:zoom-in;line-height:0}
+.docthumb img{max-width:150px;max-height:200px;border-radius:6px;display:block}
+.nmcrop{margin:6px 0}
+.nmcrop button{border:1px solid var(--line-strong,#cfd9ec);border-radius:10px;background:#fff;padding:4px;cursor:zoom-in;line-height:0;max-width:100%}
+.nmcrop img{max-width:100%;max-height:120px;display:block;border-radius:6px}
+#imgdlg{border:none;border-radius:16px;padding:0;width:min(98vw,1100px);height:min(94vh,900px);box-shadow:0 20px 60px rgba(0,0,0,.4)}
+#imgdlg::backdrop{background:rgba(15,23,42,.65)}
+#imgdlg .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--line,#e4eaf4);background:#fff}
+#imgdlg .bar .grow{flex:1}
+#imgdlg .imgwrap{overflow:auto;height:calc(100% - 58px);background:#111;text-align:center}
+#imgdlg img{display:block;margin:0 auto;max-width:none;background:#fff}
 .maptbl{width:100%;border-collapse:collapse;font-size:14px}
 .maptbl th,.maptbl td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line,#e4eaf4);vertical-align:top}
 .maptbl .off td{opacity:.5}
@@ -166,6 +178,22 @@ details.sec>summary{font-weight:650;font-size:15px;min-height:40px}
   </div>
   <p class="muted" style="text-align:center"><a href="/status">System status</a></p>
 </main>
+
+<dialog id="imgdlg" aria-label="Prescription image">
+  <div class="bar">
+    <b id="img-title">Prescription image</b>
+    <span class="grow"></span>
+    <button class="btn btn-ghost btn-sm" type="button" id="img-prev" aria-label="Previous page">‹ Page</button>
+    <span class="muted" id="img-pg"></span>
+    <button class="btn btn-ghost btn-sm" type="button" id="img-next" aria-label="Next page">Page ›</button>
+    <button class="btn btn-ghost btn-sm" type="button" id="img-out" aria-label="Zoom out">−</button>
+    <button class="btn btn-ghost btn-sm" type="button" id="img-in" aria-label="Zoom in">+</button>
+    <button class="btn btn-ghost btn-sm" type="button" id="img-fit">Fit</button>
+    <button class="btn btn-ghost btn-sm" type="button" id="img-view">Original photo</button>
+    <button class="btn btn-primary btn-sm" type="button" id="img-close">Close</button>
+  </div>
+  <div class="imgwrap"><img id="img-el" alt="The prescription page"/></div>
+</dialog>
 
 <dialog id="camdlg" aria-label="Camera">
   <video id="camvideo" autoplay playsinline muted></video>
@@ -474,7 +502,8 @@ function renderGroups(){
 }
 function docHtml(d){
   const r=d.result, st=r?(r.status==="complete"?'<span class="pill ok">all values accepted</span>':r.status==="needs_check"?'<span class="pill warn">needs a check</span>':'<span class="pill">'+esc(r.status||"")+'</span>'):"";
-  const body=r?summaryHtml(r)+jsonBlock(r):(d.err?'<p class="jerr">'+esc(d.err)+'</p>':'<p class="muted">Loading…</p>');
+  const thumb=r&&r.document_id?'<div class="docthumb"><button type="button" class="img-open" data-doc="'+esc(r.document_id)+'" data-pages="'+(r.page_count||1)+'" aria-label="Open the prescription image"><img src="api/intake/page-image?document_id='+encodeURIComponent(r.document_id)+'&w=300" alt="The prescription (click to enlarge)" loading="lazy"/></button><span class="muted">Click the picture to see the prescription full size.</span></div>':"";
+  const body=r?thumb+summaryHtml(r)+jsonBlock(r):(d.err?'<p class="jerr">'+esc(d.err)+'</p>':'<p class="muted">Loading…</p>');
   return '<details class="cf-det doc" data-d="'+esc(d.document_id)+'"'+(OPEN.has("d:"+d.document_id)?" open":"")+'><summary>Token <b>'+esc(d.token_no||"—")+'</b> · '
     +esc(fmtDate(d.uploaded))+' · '+esc(d.filename||"")+' '+st+'</summary><div class="det-body">'+body+'</div></details>';
 }
@@ -482,6 +511,27 @@ function jsonBlock(r){
   const dl=r.document_id?'<a class="btn btn-ghost btn-sm" href="api/documents/'+esc(r.document_id)+'/result.json?download=true" download>Download JSON</a>':"";
   return '<details class="cf-det sec"><summary>Result (JSON)</summary><div class="det-body">'+dl+'<pre class="resjson" tabindex="0" aria-label="Result JSON">'+esc(JSON.stringify(r,null,2))+'</pre></div></details>';
 }
+// ---- the prescription image viewer: any page, zoom, the page as read or the original photo
+const IMG={doc:null,pages:1,page:1,view:"page",zoom:100};
+function imgShow(){
+  const el=$("#img-el");
+  el.style.width=IMG.zoom+"%";
+  el.src="api/intake/page-image?document_id="+encodeURIComponent(IMG.doc)+"&page="+IMG.page+"&view="+IMG.view;
+  $("#img-pg").textContent=IMG.pages>1?("Page "+IMG.page+" of "+IMG.pages):"";
+  $("#img-prev").hidden=$("#img-next").hidden=IMG.pages<2;
+  $("#img-view").textContent=IMG.view==="page"?"Original photo":"Page as read";
+  $("#img-title").textContent=IMG.view==="page"?"Prescription (the page as read)":"Prescription (the photo as uploaded)";
+}
+function openImage(doc,pages){ IMG.doc=doc; IMG.pages=Math.max(1,+pages||1); IMG.page=1; IMG.zoom=100; IMG.view="page"; imgShow(); if(!$("#imgdlg").open) $("#imgdlg").showModal(); }
+$("#img-close").onclick=()=>$("#imgdlg").close();
+$("#img-in").onclick=()=>{ IMG.zoom=Math.min(400,IMG.zoom+25); $("#img-el").style.width=IMG.zoom+"%"; };
+$("#img-out").onclick=()=>{ IMG.zoom=Math.max(50,IMG.zoom-25); $("#img-el").style.width=IMG.zoom+"%"; };
+$("#img-fit").onclick=()=>{ IMG.zoom=100; $("#img-el").style.width="100%"; };
+$("#img-prev").onclick=()=>{ if(IMG.page>1){ IMG.page--; imgShow(); } };
+$("#img-next").onclick=()=>{ if(IMG.page<IMG.pages){ IMG.page++; imgShow(); } };
+$("#img-view").onclick=()=>{ IMG.view=IMG.view==="page"?"original":"page"; imgShow(); };
+$("#imgdlg").addEventListener("click",e=>{ if(e.target===$("#imgdlg")) $("#imgdlg").close(); });
+$("#groups").addEventListener("click",e=>{ const b=e.target.closest(".img-open"); if(b){ e.preventDefault(); openImage(b.dataset.doc,b.dataset.pages); } });
 $("#groups").addEventListener("click",async e=>{            // the patient's name: pick another reading, or confirm / correct it
   const cand=e.target.closest(".nm-cand"); if(cand){ cand.closest(".nmbox").querySelector(".nm-in").value=cand.dataset.name; return; }
   const ok=e.target.closest(".nm-ok"); if(!ok) return;
@@ -552,7 +602,9 @@ function nameCell(r){
   const pill=confirmed?'<span class="pill ok">confirmed'+(I.name_confirmed_by?' by '+esc(I.name_confirmed_by):'')+'</span>'
     :shown?'<span class="pill warn" title="'+esc(v.reason||"")+'">to confirm</span>':'<span class="pill warn">name not read: please type it</span>';
   const chips=(I.name_candidates||[]).map(c=>'<button type="button" class="btn btn-ghost btn-sm nm-cand" data-name="'+esc(c)+'">'+esc(c)+'</button>').join("");
-  return '<div class="nmbox" data-doc="'+esc(id)+'">'+(shown?'<b>'+esc(shown)+'</b> ':'')+pill
+  const crop='<div class="nmcrop"><div class="muted">As written on the paper (click to enlarge the page):</div><button type="button" class="img-open" data-doc="'+esc(id)+'" data-pages="'+(r.page_count||1)+'" aria-label="Open the prescription image">'
+    +'<img src="api/intake/name-crop?document_id='+encodeURIComponent(id)+'" alt="The patient name as written on the paper" loading="lazy" onerror="this.closest(\'.nmcrop\').hidden=true"/></button></div>';
+  return '<div class="nmbox" data-doc="'+esc(id)+'">'+crop+(shown?'<b>'+esc(shown)+'</b> ':'')+pill
     +'<div class="nmedit"><input type="text" class="nm-in" maxlength="80" value="'+esc(shown)+'" aria-label="Patient name as on the paper" placeholder="the name as on the paper"/> '
     +'<button type="button" class="btn btn-primary btn-sm nm-ok">'+(confirmed?'Change':'Confirm')+'</button></div>'
     +(chips&&!confirmed?'<div class="nmchips muted">Other readings of the name: '+chips+'</div>':'')

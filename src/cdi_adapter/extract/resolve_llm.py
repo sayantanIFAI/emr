@@ -307,6 +307,60 @@ def name_crops(image: bytes, blocks: list[dict[str, Any]] | None, name: str | No
     return out
 
 
+# letters handwriting makes look alike (what one is often read as): the first name's likely misreadings are one of these swaps away
+_CONFUSE = {"m": "nu", "n": "mur", "u": "nvo", "r": "nv", "a": "oe", "o": "ae", "e": "co", "c": "e", "l": "t", "t": "l", "i": "lj", "v": "u"}
+CHOICE_SCHEMA: dict[str, Any] = {"type": "object", "properties": {"choice": {"type": "integer"}}, "required": ["choice"]}
+
+
+def first_name_options(tokens: list[str], limit: int = 7) -> list[str]:
+    """Spellings to choose between: each reading of the first name, then the one-letter confusions of them. A spelling several readings
+    lead to ranks above one only a single reading leads to. No name list is used (none is known to be complete)."""
+    from collections import Counter
+
+    score: Counter[str] = Counter()
+    for t in {x for x in tokens if len(x) >= 3 and x.isalpha()}:
+        score[t] += 2
+        for i, ch in enumerate(t):
+            for rep in _CONFUSE.get(ch.lower(), ""):
+                score[t[:i] + (rep.upper() if ch.isupper() else rep) + t[i + 1:]] += 1
+    return [w for w, _ in score.most_common(limit)]
+
+
+def first_name_votes(client: Any, crops: list[bytes], options: list[str], shuffles: int = 3) -> dict[str, int]:
+    """How often the model picks each spelling when asked which one is written, over several crops and several orders of the
+    options (so the position in the list does not decide). Suggestions only: the votes decide nothing by themselves."""
+    import random
+    from collections import Counter
+    from concurrent.futures import ThreadPoolExecutor
+
+    if len(options) < 2 or not crops:
+        return {}
+    rnd = random.Random(11)
+    jobs: list[tuple[bytes, list[str]]] = []
+    for crop in crops:
+        for _ in range(shuffles):
+            opts = options[:]
+            rnd.shuffle(opts)
+            jobs.append((crop, opts))
+
+    def ask(job: tuple[bytes, list[str]]) -> str | None:
+        crop, opts = job
+        prompt = ("This is a line from a handwritten prescription: 'For Mr <first name> <surname>, age'. Look only at the FIRST NAME "
+                  "(the word after Mr). Which of these spellings is exactly what is written, letter by letter? "
+                  + " ".join(f"{i + 1}) {o}" for i, o in enumerate(opts)) + '. Answer with the number only as JSON {"choice": n}.')
+        try:
+            resp, _ = client.vlm_json_ex(crop, prompt, CHOICE_SCHEMA, max_tokens=12, retries=1)
+            c = int((resp or {}).get("choice", 0))
+        except Exception as exc:  # noqa: BLE001 - an extra look must never cost the document
+            log.warning("name_choice_failed", error=str(exc)[:200])
+            return None
+        return opts[c - 1] if 1 <= c <= len(opts) else None
+
+    with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
+        picked = [p for p in pool.map(ask, jobs) if p]
+    return dict(Counter(picked))
+
+
 def name_reads(client: Any, image: bytes, blocks: list[dict[str, Any]] | None, name: str | None) -> list[str]:
     """The patient's name read again from the name line at several sizes (at the same time). Failed or empty reads are left
     out. Nothing here decides the name: the caller compares the readings (``names.consensus``) and the front desk confirms it."""

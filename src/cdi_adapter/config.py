@@ -335,6 +335,7 @@ class Settings(BaseSettings):
     # the patient's name is read again from its own line at three sizes; readings that disagree are flagged (a name is never final
     # until the front desk confirms it)
     name_reread: bool = True
+    name_choice_votes: bool = True       # the first name is also put to the model as a choice among spellings (readings + letter confusions); suggestions only
     # medicines are not what this product is judged on (lab tests are): the model's choice among reference medicine names
     # costs a call per page, so it is off by default
     llm_resolve_medicines: bool = False

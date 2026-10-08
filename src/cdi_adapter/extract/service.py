@@ -552,7 +552,8 @@ _HANDLERS = {
 
 
 # --------------------------------------------------------------------------- #
-def _check_the_name(client: Any, image: bytes, blocks: list[dict[str, Any]], payload: dict[str, Any]) -> None:
+def _check_the_name(client: Any, image: bytes, blocks: list[dict[str, Any]], payload: dict[str, Any],
+                    images: list[bytes] | None = None) -> None:
     """Read the patient's name again from its own line at several sizes and compare with the first reading. When most readings
     agree on a name that is not the first reading, that name is used. ``payload['_name_reads']`` keeps every reading so the
     screen can show them; the name stays "to confirm" whatever happens (a person confirms it)."""
@@ -569,6 +570,42 @@ def _check_the_name(client: Any, image: bytes, blocks: list[dict[str, Any]], pay
     payload["_name_agreement"] = [agree, total]
     if chosen and agree >= 3 and (first is None or not alike(first, chosen, 0.85)):
         payload["patient"]["name"] = chosen                 # most readings agree on a different spelling than the first reading
+    if settings.name_choice_votes:
+        _suggest_first_names(client, images or [image], blocks, payload)
+
+
+_TITLE_WORDS = frozenset(("mr", "mrs", "ms", "miss", "master", "smt", "shri", "sri", "dr"))
+
+
+def _name_tokens(name: str) -> list[str]:
+    """The words of a person's name without a leading title ("Mr. Onkar Chowdhury" -> Onkar, Chowdhury)."""
+    toks = name.split()
+    return toks[1:] if toks and toks[0].rstrip(".").lower() in _TITLE_WORDS else toks
+
+
+def _suggest_first_names(client: Any, images: list[bytes], blocks: list[dict[str, Any]], payload: dict[str, Any]) -> None:
+    """Put the first name to the model as a choice among the readings and their one-letter confusions, and add the spellings it
+    picks most often to the readings the screen offers. Suggestions only: the shown name does not change here."""
+    from . import resolve_llm
+
+    shown = payload["patient"].get("name") or ""
+    surname = " ".join(_name_tokens(shown)[1:])
+    firsts = [t[0] for n in payload.get("_name_reads") or [] if isinstance(n, str) for t in [_name_tokens(n)] if t]
+    options = resolve_llm.first_name_options(firsts)
+    crops: list[bytes] = []
+    for img in images:
+        try:
+            crops += [c for c in resolve_llm.name_crops(img, blocks, shown)[:2]]
+        except Exception as exc:  # noqa: BLE001
+            log.warning("name_crop_failed", error=str(exc)[:200])
+    votes = resolve_llm.first_name_votes(client, crops, options)
+    payload["_name_votes"] = votes
+    have = {n.casefold() for n in payload.get("_name_reads") or [] if isinstance(n, str)}
+    for word, _n in sorted(votes.items(), key=lambda kv: -kv[1])[:3]:
+        full = f"{word} {surname}".strip()
+        if full.casefold() not in have:
+            payload.setdefault("_name_reads", []).append(full)
+            have.add(full.casefold())
 
 
 def _page_image(pg: dict[str, Any]) -> bytes:
@@ -578,6 +615,27 @@ def _page_image(pg: dict[str, Any]) -> bytes:
         pre = pg.get("preproc")
         uri = pre.get("src_uri") if isinstance(pre, dict) else None
     return storage.get_bytes(storage.key_from_uri(uri or pg["image_uri"]))
+
+
+def _both_pictures(pg: dict[str, Any], one: bytes) -> list[bytes]:
+    """The page as the colour source AND as the normalized grey copy (the name is looked at in both), or just ``one``."""
+    out = [one]
+    for key in ("image_uri",):
+        try:
+            other = storage.get_bytes(storage.key_from_uri(pg[key]))
+            if other != one:
+                out.append(other)
+        except Exception:  # noqa: BLE001
+            pass
+    pre = pg.get("preproc")
+    if isinstance(pre, dict) and pre.get("src_uri"):
+        try:
+            src = storage.get_bytes(storage.key_from_uri(pre["src_uri"]))
+            if src not in out:
+                out.append(src)
+        except Exception:  # noqa: BLE001
+            pass
+    return out[:2]
 
 
 def _unescape(x: Any) -> Any:
@@ -697,7 +755,7 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
         focus_blocks = [b for b in blocks if str(b.get("page_id")) == pid_latest] or blocks
 
     if isinstance(payload, dict) and isinstance(payload.get("patient"), dict) and cls["doc_type"] in ("prescription", "opd_note", "referral"):
-        _check_the_name(client, page1_image, page1_blocks, payload)          # the name is on the first page
+        _check_the_name(client, page1_image, page1_blocks, payload, _both_pictures(pages[0], page1_image))     # the name is on the first page
 
     if isinstance(payload, dict) and cls["doc_type"] in ("prescription", "opd_note", "referral"):
         # the hybrid step: a test the gate cannot place but that is close to reference names is put to the model

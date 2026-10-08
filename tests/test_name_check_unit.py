@@ -90,3 +90,39 @@ def test_the_same_bytes_for_another_patient_are_another_document_and_the_same_pa
     assert document_hash(raw, "9830011234|T-1") != document_hash(raw, "9830011234|T-2")   # another token: another document
     assert document_hash(raw, "9830011234|T-1") != document_hash(raw, "9831122334|T-1")   # another mobile: another document
     assert document_hash(raw, "9830011234|T-1") != document_hash(raw)
+
+
+# ---- the first name put to the model as a choice among spellings (suggestions only)
+def test_the_options_are_the_readings_then_their_one_letter_confusions_and_a_spelling_several_readings_lead_to_ranks_higher():
+    opts = R.first_name_options(["Omkar", "Oukan", "Oukar", "Oscar"])
+    assert {"Omkar", "Oukan", "Oukar", "Oscar"} <= set(opts) and "Onkar" in opts          # Omkar (m->n) and Oukar (u->n) both lead to Onkar
+    assert len(opts) <= 7 and R.first_name_options(["Al", "x1"]) == []                    # too short / not letters: nothing to vary
+
+
+def test_the_votes_count_each_picked_spelling_over_several_orders_and_crops():
+    # the real check: every call gets numbered options and the answer maps back to the option at that place
+    seen = []
+
+    class Rec:
+        def vlm_json_ex(self, image, prompt, schema, **kw):
+            seen.append(prompt)
+            return {"choice": 1}, "m"
+    got = R.first_name_votes(Rec(), [b"a", b"b"], ["Omkar", "Onkar", "Oukan"], shuffles=3)
+    assert sum(got.values()) == 6 and set(got) <= {"Omkar", "Onkar", "Oukan"}
+    assert len(seen) == 6 and all("1) " in p and "2) " in p and "3) " in p for p in seen)
+    assert R.first_name_votes(Rec(), [], ["a", "b"]) == {} and R.first_name_votes(Rec(), [b"x"], ["only"]) == {}
+
+
+def test_the_suggested_spellings_join_the_offered_readings_and_the_shown_name_does_not_change(monkeypatch):
+    monkeypatch.setattr(R, "first_name_votes", lambda client, crops, options, shuffles=3: {"Onkar": 5, "Omkar": 3, "Oukan": 1})
+    monkeypatch.setattr(R, "name_crops", lambda img, blocks, name: [b"c1", b"c2", b"c3"])
+    payload = {"patient": {"name": "Mr. Omkar Chowdhury"}, "_name_reads": ["Mr. Omkar Chowdhury", "Omkar Chaudhury", "Oukan Chowdhury"]}
+    X._suggest_first_names(object(), [b"img"], BLOCKS, payload)
+    assert payload["patient"]["name"] == "Mr. Omkar Chowdhury"                      # not changed here
+    assert "Onkar Chowdhury" in payload["_name_reads"] and payload["_name_votes"]["Onkar"] == 5
+    assert payload["_name_reads"].count("Omkar Chowdhury") == 1
+
+
+def test_a_title_is_not_part_of_the_name_words():
+    assert X._name_tokens("Mr. Onkar Chowdhury") == ["Onkar", "Chowdhury"] and X._name_tokens("Smt Asha Rao") == ["Asha", "Rao"]
+    assert X._name_tokens("Asha Rao") == ["Asha", "Rao"] and X._name_tokens("") == []

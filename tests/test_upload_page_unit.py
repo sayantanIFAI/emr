@@ -94,3 +94,15 @@ def test_the_name_is_to_confirm_until_a_person_confirms_and_the_other_readings_a
     assert ">to confirm<" in ADMIN_PAGE and "name not read: please type it" in ADMIN_PAGE and "Other readings of the name" in ADMIN_PAGE
     assert 'fetch("api/intake/name"' in ADMIN_PAGE and "function applyName" in ADMIN_PAGE
     assert '["Name",nameCell(r)]' in ADMIN_PAGE                                         # the patient table's Name row is the confirm box
+
+
+# ---- the prescription image can be clicked and shown; the name line is shown beside the confirm box
+def test_the_prescription_picture_opens_in_a_viewer_with_zoom_pages_and_the_original_photo():
+    assert 'id="imgdlg"' in ADMIN_PAGE and "function openImage" in ADMIN_PAGE and "api/intake/page-image" in ADMIN_PAGE
+    for control in ("img-in", "img-out", "img-fit", "img-prev", "img-next", "img-view", "img-close"):
+        assert f'id="{control}"' in ADMIN_PAGE
+    assert 'class="docthumb"' in ADMIN_PAGE and "Click the picture to see the prescription full size." in ADMIN_PAGE
+
+
+def test_the_name_as_written_is_shown_beside_the_confirm_box_and_opens_the_page():
+    assert "api/intake/name-crop" in ADMIN_PAGE and "As written on the paper" in ADMIN_PAGE and 'class="img-open"' in ADMIN_PAGE

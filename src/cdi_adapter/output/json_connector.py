@@ -232,7 +232,7 @@ def _intake(doc: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     return {"token_no": doc.get("token_no"), "phone": doc.get("phone"), "patient_name": shown,
             "name_read": doc.get("name_read") or shown, "name_confirmed": bool(doc.get("name_confirmed_at")),
             "name_confirmed_by": doc.get("name_confirmed_by") if doc.get("name_confirmed_at") else None,
-            "name_candidates": cands[:4]}
+            "name_candidates": cands[:6]}
 
 
 def _visits(payload: dict[str, Any]) -> list[dict[str, Any]]:
