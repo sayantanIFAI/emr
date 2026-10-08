@@ -235,10 +235,16 @@ def test_the_page_support_score_is_one_for_a_word_on_the_page_lower_for_run_toge
     assert page_support("HbA1c", page) < 0.5 and page_support("HbA1c", "") is None and page_support("", page) is None
 
 
-def test_a_test_the_gate_places_is_never_rejected_whatever_its_page_score():
+def test_a_test_the_lists_place_is_never_rejected_and_a_medicine_line_with_a_loose_test_word_still_is(monkeypatch):
     import test_json_connector_unit as T
+    from cdi_adapter.extract import lab_resolve
     from cdi_adapter.output import json_connector as jc
-    fact = T._fact("investigation_order", "HbA1c 7.2", state="in_review", code_status="unmapped", conf=0.4)      # a number after a known test
-    r = jc.build_result(T._inputs([fact], payload=T.PAYLOAD, blocks=[{"text": "unrelated words only", "page_id": "p1"}]))
-    t = r["lab_tests"][0]
+    blocks = [{"text": "unrelated words only", "page_id": "p1"}]
+    med = T._fact("investigation_order", "Tab Sompraz (40 mg) 1 tab OD AC x load", state="in_review", code_status="unmapped", conf=0.4)
+    r = jc.build_result(T._inputs([med], payload=T.PAYLOAD, blocks=blocks))
+    assert r["lab_tests"][0]["status"] == "rejected" and r["lab_tests"][0]["gate_recognised"] is False      # "load" (viral load) is not a lab-list hit
+    placed = lab_resolve.Resolved("test", "2160-0", "bound", ("2160-0",), "Creatinine", "mapping", False)
+    monkeypatch.setattr(lab_resolve, "resolve", lambda x: placed if "creat" in (x or "").lower() else None)
+    fact = T._fact("investigation_order", "Tab Creat 500 mg 1 tab OD", state="in_review", code_status="unmapped", conf=0.4)    # looks like a medicine
+    t = jc.build_result(T._inputs([fact], payload=T.PAYLOAD, blocks=blocks))["lab_tests"][0]
     assert t["gate_recognised"] is True and t["status"] != "rejected" and t["page_support"] is not None and t["page_support"] < 0.5

@@ -282,9 +282,10 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
         known = rz is not None or is_known_test(key) or (bool(alt) and is_known_test(alt))
         drug = None if known else indian_codes.drug_lookup(key)                # Common Drug Codes for India
         med = None if known else (drug.matched if drug else medicine_match(key))
-        t["gate_recognised"] = bool(known)                                       # the lab lists place this name (or a reference name the model chose)
+        placed = rz is not None and not getattr(rz, "fuzzy", False)                # the lab LISTS place this name (mapping table, national list, table)
+        t["gate_recognised"] = placed                                              # (a loose word match such as "load" in "Tab X 1 tab OD x load" is NOT this)
         t["page_support"] = page_support(key, page_text) if page_text else None   # a similarity score against the page's text, never a reason to reject
-        if t.get("status") != "rejected" and not known and (med or looks_like_medicine(key)):
+        if t.get("status") != "rejected" and not placed and (med or looks_like_medicine(key)):
             # a drug line the reader filed under the tests (a crowded handwritten page): never shown as a test
             t["status"] = "rejected"
             t["reason"] = f"looks like a medicine ('{med}'), not a test" if med else "looks like a medicine, not a test"
