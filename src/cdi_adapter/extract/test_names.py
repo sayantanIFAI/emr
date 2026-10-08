@@ -166,6 +166,42 @@ def _split_runs(piece: str) -> list[str]:
     return out if (len(out) >= 2 or out[0] != piece) else [piece]
 
 
+_SUGAR_WORD = frozenset(("sugar", "suger", "sugr", "glucose", "bs"))
+_BLOOD_TESTS = frozenset("picture film smear group grouping count culture gas pressure test tests examination report profile".split())
+_FAST_TOK = frozenset(("f", "fs", "fbs", "fbg"))              # fasting
+_PP_TOK = frozenset(("pp", "pps", "ppbs", "pp2bs"))           # post-prandial
+
+
+def _sugar_run(part: str) -> list[str] | None:
+    """``"Blood Sugar F PP"`` / ``"Sugar F/PP"`` / ``"BS Fs PPS"`` -> ``["Blood sugar F", "Blood sugar PP"]``: the doctor writes the
+    sugar once and the fasting (F, FS, FBS) and post-prandial (PP, PPS, PPBS) letters after it. When the word between "Blood" and the
+    letters is unreadable ("Blood Engn ? PP ?") it still counts as blood sugar, but ONLY when a post-prandial letter group follows (PP
+    is written for sugar and nothing else) and the word is not a test of its own (``Blood Urea PP`` is not cut). A letter that could
+    not be read is not added: only the letters that are there are named. ``None`` when the part is not this shape."""
+    words = re.findall(r"[A-Za-z0-9]+", part)
+    low = [w.casefold() for w in words]
+    if len(low) < 2:
+        return None
+    if low[0] == "blood" and len(low) >= 3:
+        rest = low[2:]
+        if low[1] not in _SUGAR_WORD and not (any(t in _PP_TOK for t in rest) and not _run_test(words[1]) and not _single_test(words[1])
+                                              and low[1] not in _GENERIC and low[1] not in _NOT_A_TEST_ALONE and low[1] not in _BLOOD_TESTS):
+            return None
+        tail = words[2:]
+    elif low[0] in _SUGAR_WORD:
+        rest, tail = low[1:], words[1:]
+    else:
+        return None
+    if not rest or any(t not in _FAST_TOK and t not in _PP_TOK for t in rest):
+        return None
+    out: list[str] = []
+    for w in tail:
+        one = f"Blood sugar {w}"
+        if one.casefold() not in {x.casefold() for x in out}:
+            out.append(one)
+    return out
+
+
 def _split_composite(part: str) -> list[str]:
     """One written part -> the tests in it. Cut on ``/ \\ | , ; + &`` (unless a piece is a single letter: ``"A/G ratio"``,
     ``"Urine R/E"``, ``"C/S"`` are one test), and on `` - `` / ``-`` / ``.`` only when every piece is itself a known test
@@ -191,6 +227,9 @@ def split_tests(text: str | None) -> list[str]:
     if not t:
         return []
     out: list[str] = []
+    whole = _sugar_run(re.sub(r"[/\\|,;+&\-]", " ", _MARKS.sub(" ", t)))     # "Blood Sugar F -> PP": one line, the letters kept with the sugar
+    if whole:
+        return whole
     t = _MARKS.sub(",", t)                                    # a tick / bullet / arrow written before each test is a separator
     for part in re.split(r"\s*[,;+]\s*(?=[A-Za-z0-9(\[{])|\s+and\s+", t):
         part = _LIST_NO.sub("", part).strip(" .")             # "(1) CBC" / "2. LFT" / "3) TSH" -> the test only
@@ -198,7 +237,8 @@ def split_tests(text: str | None) -> list[str]:
         part = _RESULT_TAIL.sub("", part).strip(" .")
         if not part:
             continue
-        out += [_RESULT_TAIL.sub("", b).strip(" .") for b in _split_composite(part)]
+        sugar = _sugar_run(part)
+        out += sugar if sugar else [_RESULT_TAIL.sub("", b).strip(" .") for b in _split_composite(part)]
     seen: set[str] = set()
     uniq = [x for x in out if x and not (x.casefold() in seen or seen.add(x.casefold()))]
     return uniq or [t]

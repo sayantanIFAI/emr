@@ -241,6 +241,8 @@ def _facts_prescription(c: _Ctx, p: dict[str, Any]) -> None:
                 continue
             if _test_key(one) in seen_tests:
                 continue
+            if _test_key(one) == "bloodsugar" and any(k.startswith("bloodsugar") for k in seen_tests):
+                continue                                     # "Blood sugar" with no letters is already said by "Blood sugar F" / "PP"
             seen_tests.add(_test_key(one))
             c.add(fact_type="investigation_order", local_text=one, value_code_display=resolved.get(one) or one,
                   value_text=one, evidence=ev)

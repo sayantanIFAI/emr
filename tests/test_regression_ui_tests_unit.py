@@ -144,18 +144,71 @@ def test_the_page_is_looked_at_in_the_lower_left_and_right_views_too():
     assert sizes[0] == (1000, 700, 3) and all(s[1] >= 1400 for s in sizes[1:])  # the pieces are enlarged
 
 
-def test_every_view_is_asked_and_the_answers_are_pooled():
+def _views_client(per_view):
+    """A client that answers by WHICH view of the page it is shown (the views are told apart by their bytes)."""
     import cv2
     import numpy as np
 
-    class Seq:
-        def __init__(self): self.n = 0
-        def vlm_json_ex(self, image, prompt, schema, **kw):
-            self.n += 1
-            return {"tests": [["HbA1c"], ["PPBS"], ["LFT", "HbA1c"], ["TSH"]][(self.n - 1) % 4]}, "m"
-    ok, png = cv2.imencode(".png", np.full((800, 600, 3), 255, np.uint8))
-    got = R.followup_tests(Seq(), png.tobytes(), None, known=[])
-    assert sorted(got) == ["HbA1c", "LFT", "PPBS", "TSH"]
+    page = np.random.default_rng(3).integers(0, 255, (800, 600, 3), dtype=np.uint8)      # not blank: every view must differ
+    ok, png = cv2.imencode(".png", page)
+    image = png.tobytes()
+    by_bytes = {v: per_view[i] for i, v in enumerate(R.page_views(image))}
+
+    class Cl:
+        def vlm_json_ex(self, img, prompt, schema, **kw):
+            return {"tests": by_bytes[img]}, "m"
+    return Cl(), image
+
+
+def test_a_test_read_in_two_views_is_kept_and_one_read_in_a_single_view_is_not():
+    # MEASURED on a real page: the whole-page view alone read "PT / APTT" as "PT/INR"; no enlarged view ever saw INR
+    cl, image = _views_client([["HbA1c", "INR", "LFT"], ["HbA1c", "TSH"], ["LFT", "PPBS"], ["PPBS"]])
+    got = R.followup_tests(cl, image, None, known=[])
+    assert sorted(got) == ["HbA1c", "LFT", "PPBS"]                       # TSH and INR were each read in one view only
+
+
+def test_spellings_of_one_test_in_different_views_count_as_two_views():
+    cl, image = _views_client([["S. Creatinine"], ["S.Creatin"], [], []])
+    assert R.followup_tests(cl, image, None, known=[]) == ["S. Creatinine"]      # one test, listed once
+
+
+def test_fasting_and_post_prandial_blood_sugar_are_never_taken_for_one_test():
+    cl, image = _views_client([["Blood sugar F", "Blood sugar PP"], ["Blood sugar F", "Blood sugar PP"], [], []])
+    assert sorted(R.followup_tests(cl, image, None, known=[])) == ["Blood sugar F", "Blood sugar PP"]
+    assert not R._same_test("blood sugar f", "blood sugar pp") and not R._same_test("blood sugar fs", "blood sugar ppbs")
+    assert R._same_test("blood sugar", "blood sugar pp")                       # no letters: the same sugar, said less
+
+
+def test_a_blood_sugar_with_no_letters_is_not_added_beside_the_one_that_has_them():
+    cl, image = _views_client([["Blood Sugar"], ["Blood Sugar"], [], []])
+    assert R.followup_tests(cl, image, None, known=["Blood sugar PP"]) == []
+    c = _Ctx()
+    X._facts_prescription(c, {"investigations": [{"text": "Blood Engn ? PP ?"}, {"text": "Blood Sugar"}]})
+    got = [a["local_text"] for a in c.added if a["fact_type"] == "investigation_order"]
+    assert got == ["Blood sugar PP"]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Blood Sugar F -> PP", ["Blood sugar F", "Blood sugar PP"]), ("Blood Sugar F/PP", ["Blood sugar F", "Blood sugar PP"]),
+    ("Blood sugar Fs PPS", ["Blood sugar Fs", "Blood sugar PPS"]), ("BS F PP", ["Blood sugar F", "Blood sugar PP"]),
+    ("Sugar PP", ["Blood sugar PP"]), ("Blood Engn ? PP ?", ["Blood sugar PP"]),      # the word between is unreadable; PP is there, F is not
+    ("Blood Urea PP", ["Blood Urea PP"]), ("Blood picture PP", ["Blood picture PP"]),  # a test of its own is never turned into sugar
+    ("FBS/PPBS", ["FBS", "PPBS"]), ("Blood sugar", ["Blood sugar"]),
+])
+def test_blood_sugar_written_with_its_fasting_and_post_prandial_letters(text, expected):
+    from cdi_adapter.extract.test_names import split_tests
+    assert split_tests(text) == expected
+
+
+@pytest.mark.parametrize("name,standard", [
+    ("Blood sugar F", "Fasting blood sugar"), ("Blood sugar Fs", "Fasting blood sugar"), ("FBS", "Fasting blood sugar"),
+    ("Blood sugar PP", "Post-prandial blood sugar"), ("PP", "Post-prandial blood sugar"), ("PPS", "Post-prandial blood sugar"),
+    ("PPBS", "Post-prandial blood sugar"), ("Blood sugar", "Blood glucose"), ("HBsAg", "Hepatitis B surface antigen"),
+    ("PT", "Prothrombin time"), ("INR", "INR"),
+])
+def test_blood_sugar_and_clotting_names_are_in_the_mapping_table(name, standard):
+    from cdi_adapter.extract import lab_mapping
+    assert lab_mapping.lookup(name).canonical == standard
 
 
 @pytest.mark.parametrize("text,expected", [

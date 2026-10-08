@@ -335,6 +335,8 @@ class Settings(BaseSettings):
     # a second, focused look at the page for tests written WITH the follow-up instruction ("review after 2 wks {HbA1c / FBS
     # / TSH}"): the full-page answer often misses them. One short extra call, only when a follow-up is written.
     followup_second_look: bool = True
+    second_look_min_views: int = 2       # a test the second look adds must be read in this many DIFFERENT views of the page (one view alone can
+                                         # make a test up: "PT / APTT" was read as "PT/INR" by the whole-page view alone, 5 of 6 times)
     second_look_repeats: int = 2         # each focused view is asked this many times and the answers are pooled: the model server does not
                                          # answer the same picture the same way twice, so one unlucky answer must not lose a test
     # the patient's name is read again from its own line at three sizes; readings that disagree are flagged (a name is never final

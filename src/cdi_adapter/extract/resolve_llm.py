@@ -201,6 +201,23 @@ def tests_from_lines(blocks: list[dict[str, Any]] | None, follow_up: str | None)
     return out
 
 
+_SUGAR_TAIL = re.compile(r"^bloodsugar(?:(f|fs|fbs)|(pp|pps|ppbs))$")
+
+
+def _sugar_kind(k: str) -> str | None:
+    m = _SUGAR_TAIL.match(k.replace(" ", ""))
+    return ("fasting" if m.group(1) else "post-prandial") if m else None
+
+
+def _same_test(a: str, b: str) -> bool:
+    """Two normalised test names that are the same test spelt differently: equal, or (long enough to judge) 80% alike. Fasting and
+    post-prandial blood sugar are 87% alike as text and are two tests, so they are never one."""
+    ka, kb = _sugar_kind(a), _sugar_kind(b)
+    if ka and kb and ka != kb:
+        return False
+    return a == b or (min(len(a), len(b)) >= 6 and difflib.SequenceMatcher(None, a, b).ratio() >= 0.8)
+
+
 def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list[str],
                    blocks: list[dict[str, Any]] | None = None) -> list[str]:
     """Tests the full-page answer missed. Lab tests are the point of the product and the doctor writes them anywhere (beside
@@ -213,16 +230,16 @@ def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list
 
     if not settings.followup_second_look:
         return []
-    jobs: list[tuple[bytes, str]] = [(v, anywhere_prompt()) for v in page_views(image)]
+    jobs: list[tuple[bytes, str, int]] = [(v, anywhere_prompt(), i) for i, v in enumerate(page_views(image))]     # (picture, question, view)
     if follow_up and str(follow_up).strip():
         try:
-            jobs.append((followup_region(image, blocks, str(follow_up)), followup_prompt(str(follow_up))))
+            jobs.append((followup_region(image, blocks, str(follow_up)), followup_prompt(str(follow_up)), len(jobs)))
         except Exception as exc:  # noqa: BLE001
             log.warning("followup_region_failed", error=str(exc)[:200])
 
     jobs = [j for j in jobs for _ in range(max(1, settings.second_look_repeats))]      # the same view, asked again: answers differ
 
-    def ask(job: tuple[bytes, str]) -> Any:
+    def ask(job: tuple[bytes, str, int]) -> Any:
         try:
             resp, _ = client.vlm_json_ex(job[0], job[1], FOLLOWUP_SCHEMA, max_tokens=120, retries=1)
             return (resp or {}).get("tests")
@@ -232,24 +249,44 @@ def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list
 
     with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
         answers = list(pool.map(ask, jobs))
-    got: list[Any] = []
-    for a in answers:
+    # a test the looks add must be read in at least ``second_look_min_views`` DIFFERENT views of the page: one view alone can make a
+    # test up (MEASURED on a real page: "PT / APTT" was read as "PT/INR" by the whole-page view alone, 5 of 6 times; no other view
+    # ever saw INR). A spelling counts for a view when that view read one within 80% alike (S.Creatin / S. Creatinine).
+    seen: list[tuple[str, int]] = []
+    items: list[tuple[str, bool]] = []                               # (a piece, True when it needs no second view)
+    for job, a in zip(jobs, answers):
         if isinstance(a, list):
-            got.extend(a)
-    got.extend(tests_from_lines(blocks, follow_up))                  # the tests written on the follow-up line itself
+            for item in a:
+                if isinstance(item, str):
+                    for one in split_tests(item):
+                        seen.append((norm(one), job[2]))
+                        items.append((one, False))
+    for item in tests_from_lines(blocks, follow_up):                 # the tests written on the follow-up line itself: read from text
+        items.extend((one, True) for one in split_tests(item))
+    answered = {job[2] for job, a in zip(jobs, answers) if isinstance(a, list)}
+    need = min(max(1, settings.second_look_min_views), len(answered)) if answered else 1
+
+    def support(one: str) -> int:
+        k = norm(one)
+        return len({v for n, v in seen if _same_test(k, n)})
+
     have = {norm(k) for k in known}
     out: list[str] = []
-    for item in got:
-        if not isinstance(item, str):
+    for one, exempt in items:
+        if not exempt and support(one) < need:
             continue
-        for one in split_tests(item):
-            # the lab gate: a name found by looking harder is kept ONLY if the test lists place it (a known test word, or
-            # the national lab list / gazetteer). A medicine line, a diagnosis or a misreading never gets in as a test.
-            if 2 <= len(one) <= 40 and any(ch.isalpha() for ch in one) and norm(one) not in have \
-                    and (is_known_test(one) or lab_resolve.resolve(one) is not None or lab_resolve.suggest(one, k=1, floor=0.72)) \
-                    and not medicine_resolve.advice_like(one) and not (medicine_resolve.known(one) and not is_known_test(one)):
-                have.add(norm(one))
-                out.append(one)
+        if any(_same_test(norm(one), h) for h in have):              # another spelling of a test already listed
+            continue
+        # the lab gate: a name found by looking harder is kept ONLY if the test lists place it (a known test word, or
+        # the national lab list / gazetteer). A medicine line, a diagnosis or a misreading never gets in as a test.
+        # A name the lists place EXACTLY is a test whatever else its words look like ("Blood sugar F" has the diet word "sugar").
+        rz = lab_resolve.resolve(one)
+        placed = rz is not None and not getattr(rz, "fuzzy", False)
+        if 2 <= len(one) <= 40 and any(ch.isalpha() for ch in one) \
+                and (placed or ((is_known_test(one) or rz is not None or lab_resolve.suggest(one, k=1, floor=0.72))
+                                and not medicine_resolve.advice_like(one) and not (medicine_resolve.known(one) and not is_known_test(one)))):
+            have.add(norm(one))
+            out.append(one)
     log.info("followup_second_look", views=len(jobs), found=len(out))
     return out[:12]
 
