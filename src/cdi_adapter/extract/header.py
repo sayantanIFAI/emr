@@ -57,8 +57,13 @@ def clinic_name(line: str) -> str | None:
     m = found[0]
     head = t[:m.end()]
     head = head[:m.start()] + (" " if m.start() > 0 and head[m.start() - 1].isalpha() else "") + head[m.start():]    # "KSHEALTHCARE" -> "KS HEALTHCARE"
-    name = " ".join(head.split()[-5:])
-    return name if len(name.split()) >= 2 and sum(c.isalpha() for c in name) >= 5 else None      # "Clinic" alone is not a name
+    words = head.split()
+    # a clinic's name is a few plain words ending at the organisation word; a long garbled line that happens to contain one
+    # ("Dr.Kumar Sourav MBBSPATMDPATalMine ConsuPyin/Nerndogist KSHEALTHCARE /") is not a name (MEASURED on a real page)
+    if not 2 <= len(words) <= 4 or not all(re.fullmatch(r"[A-Za-z&.'\-]+", w) for w in words):
+        return None
+    name = " ".join(words)
+    return name if sum(c.isalpha() for c in name) >= 5 else None
 
 
 def fill(payload: dict[str, Any], blocks: list[dict[str, Any]]) -> list[str]:

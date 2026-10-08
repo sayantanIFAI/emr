@@ -23,6 +23,9 @@ def test_the_doctors_name_is_the_name_words_after_dr_up_to_the_first_qualificati
     ("LIFE CENTRE POLYCLINIC", "LIFE CENTRE POLYCLINIC"),
     ("Sinus Vertigo Clinic|Ear Clinic|Allergy Clinic| Voice Clinic", None),                  # a list of clinics is not the organisation
     ("HORMONE SCIENCETO HEALTH", None), ("Contacts:+919836834614", None), ("Clinic", None),
+    # MEASURED on a real page: a long garbled line holding the word is not the clinic's name
+    ("Dr.Kumar Sourav MBBSPATMDPATalMine ConsuPyin/Nerndogist KSHEALTHCARE /", None),
+    ("Sugar & Thyroid Clinic", "Sugar & Thyroid Clinic"),
 ])
 def test_the_clinics_name_is_the_line_with_exactly_one_organisation_word(line, expected):
     assert H.clinic_name(line) == expected
@@ -55,3 +58,12 @@ def test_only_the_empty_part_is_filled():
     payload = {"prescriber": {"name": "Dr. A Banerjee", "clinic": {"name": None, "address": "Patna"}}}
     assert H.fill(payload, PAGE) == ["clinic"]
     assert payload["prescriber"]["clinic"] == {"name": "KS HEALTHCARE", "address": "Patna"} and payload["prescriber"]["name"] == "Dr. A Banerjee"
+
+
+def test_the_garbled_long_line_is_skipped_and_the_clean_printed_one_is_the_clinic():
+    page = [B("Dr. Kumar Sourav", 0, 60), B("Dr.Kumar Sourav MBBSPATMDPATalMine ConsuPyin/Nerndogist KSHEALTHCARE /", 40, 330), B("KSHEALTHCARE", 70, 100),
+            B("x", 1000, 1100)]
+    payload = {}
+    H.fill(payload, page)
+    assert payload["prescriber"]["clinic"]["name"] == "KS HEALTHCARE" and payload["prescriber"]["name"] == "Dr. Kumar Sourav"
+
