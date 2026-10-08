@@ -582,6 +582,7 @@ def _check_the_name(client: Any, image: bytes, blocks: list[dict[str, Any]], pay
     fuller = prefer_complete(now, [n for n in payload["_name_reads"] if isinstance(n, str) and not org_like(n)]) if now else now
     if fuller and fuller != now:
         payload["patient"]["name"] = fuller                 # a reading that goes on where the shown one stops (a long name cut short)
+    _suggest_joined_name(payload)
     if settings.name_choice_votes:
         _suggest_first_names(client, images or [image], blocks, payload)
 
@@ -593,6 +594,29 @@ def _name_tokens(name: str) -> list[str]:
     """The words of a person's name without a leading title ("Mr. Onkar Chowdhury" -> Onkar, Chowdhury)."""
     toks = name.split()
     return toks[1:] if toks and toks[0].rstrip(".").lower() in _TITLE_WORDS else toks
+
+
+def _suggest_joined_name(payload: dict[str, Any]) -> None:
+    """A word the writer left a gap in ("Sayanta ni Sarkar" for Sayantani Sarkar, MEASURED on a real page: the first reading kept "ni",
+    three re-reads dropped it). When one reading has a short word (up to 3 letters) between the first name and the surname and
+    another reading has no such word, the commonest first word + that fragment is offered as one more reading. Never the shown
+    name: a short middle word can also be a real part of a name."""
+    from collections import Counter
+
+    reads = [n for n in payload.get("_name_reads") or [] if isinstance(n, str)]
+    toks = [_name_tokens(n) for n in reads]
+    mids = {t[1] for t in toks if len(t) == 3 and len(t[1]) <= 3 and t[1].isalpha()}
+    if not mids or not any(len(t) == 2 for t in toks):
+        return
+    surname = " ".join(_name_tokens(payload["patient"].get("name") or "")[1:])
+    firsts = Counter(t[0] for t in toks if len(t) >= 2 and len(t[0]) >= 4).most_common(1)
+    have = {n.casefold() for n in reads}
+    for first, _n in firsts:
+        for mid in sorted(mids):
+            full = f"{first}{mid.lower()} {surname}".strip()
+            if surname and full.casefold() not in have:
+                payload["_name_reads"].append(full)
+                have.add(full.casefold())
 
 
 def _suggest_first_names(client: Any, images: list[bytes], blocks: list[dict[str, Any]], payload: dict[str, Any]) -> None:

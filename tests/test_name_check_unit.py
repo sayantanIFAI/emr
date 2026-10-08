@@ -123,6 +123,25 @@ def test_the_suggested_spellings_join_the_offered_readings_and_the_shown_name_do
     assert payload["_name_reads"].count("Omkar Chowdhury") == 1
 
 
+def test_a_word_the_writer_left_a_gap_in_is_offered_joined_and_the_shown_name_does_not_change():
+    # MEASURED on a real page: the first reading "Sayanla ni Saykay" kept the short word, three re-reads dropped it
+    payload = {"patient": {"name": "Sayanta Sarkar"}, "_name_reads": ["Sayanla ni Saykay", "Sayanta Sarkey", "Sayanta Sarkar", "Sayanta Sarkar"]}
+    X._suggest_joined_name(payload)
+    assert payload["patient"]["name"] == "Sayanta Sarkar"
+    assert payload["_name_reads"][-1] == "Sayantani Sarkar" and payload["_name_reads"].count("Sayantani Sarkar") == 1
+    X._suggest_joined_name(payload)                                                  # asked again: nothing is added twice
+    assert payload["_name_reads"].count("Sayantani Sarkar") == 1
+
+
+def test_a_short_middle_word_every_reading_agrees_on_is_a_real_part_of_the_name_and_is_not_joined():
+    payload = {"patient": {"name": "Ram Kr Das"}, "_name_reads": ["Ram Kr Das", "Ram Kr Das"]}
+    X._suggest_joined_name(payload)
+    assert payload["_name_reads"] == ["Ram Kr Das", "Ram Kr Das"]
+    none = {"patient": {"name": None}, "_name_reads": []}
+    X._suggest_joined_name(none)                                                     # nothing read: nothing to do
+    assert none["_name_reads"] == []
+
+
 def test_a_title_is_not_part_of_the_name_words():
     assert X._name_tokens("Mr. Onkar Chowdhury") == ["Onkar", "Chowdhury"] and X._name_tokens("Smt Asha Rao") == ["Asha", "Rao"]
     assert X._name_tokens("Asha Rao") == ["Asha", "Rao"] and X._name_tokens("") == []
