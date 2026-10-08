@@ -190,3 +190,8 @@ def test_the_screen_stops_a_token_already_used_today_for_another_mobile_number_b
     assert "api/intake/token-check" in ADMIN_PAGE and "TOKEN_CLASH" in ADMIN_PAGE
     gate = ADMIN_PAGE[ADMIN_PAGE.index("function gate()"):ADMIN_PAGE.index("const TOKEN_CLASH")]
     assert "const clash=" in gate and "&&!clash" in gate and 'form-card").hidden=!open' in gate        # the upload stays hidden while the token clashes
+
+
+def test_the_refusal_for_a_used_token_is_drawn_after_the_token_check_returns():
+    gate = ADMIN_PAGE[ADMIN_PAGE.index("function gate()"):ADMIN_PAGE.index("const TOKEN_CLASH")]
+    assert gate.index("if(clash&&!err) err=clash;") < gate.rindex('$("#pt-err").textContent=err;')       # the text is set again once the clash is known

@@ -269,6 +269,7 @@ function gate(){
   $("#pt-err").textContent=err;
   const clash=tOk&&pOk&&TOKEN_CLASH.get(t+"|"+d);          // the same token already used today for another mobile number
   if(clash&&!err) err=clash;
+  $("#pt-err").textContent=err;                           // (again: the token check came back after the first draw)
   const have=pOk&&EXIST_FOR===d&&EXIST&&!clash;          // the look-up for this number has come back, and the token is free
   const dup=have&&EXIST.count>0;
   $("#existing").hidden=!dup;
