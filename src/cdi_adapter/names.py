@@ -34,6 +34,21 @@ def alike(a: str | None, b: str | None, threshold: float) -> bool:
     return similarity(a, b) >= threshold
 
 
+def prefer_complete(chosen: str | None, readings: list[str], threshold: float = 0.85) -> str | None:
+    """A model often cuts a long name short ("Smita Gupta" for "Smita Gupta Gangopadhyay"). When another reading begins with the
+    same words as ``chosen`` and goes on, that fuller reading is the better suggestion. Never shortens, never invents: it only
+    picks among the readings made. Titles are ignored; the first of equally full readings wins."""
+    if not chosen:
+        return chosen
+    base = name_key(chosen).split()
+    best, best_n = chosen, len(base)
+    for r in readings:
+        toks = name_key(r).split()
+        if len(toks) > best_n and len(toks) <= best_n + 2 and all(alike(a, b, threshold) for a, b in zip(base, toks[:len(base)])):
+            best, best_n = r, len(toks)
+    return best
+
+
 def consensus(candidates: list[str], threshold: float = 0.85) -> tuple[str | None, int, int]:
     """``(the name most readings agree on, how many agree, how many readings)``. The shown name is the reading closest to the
     others in the winning group (its medoid); empty readings are ignored; ties go to the earlier reading."""

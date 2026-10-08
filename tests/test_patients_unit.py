@@ -34,3 +34,14 @@ def test_consensus_picks_the_name_most_readings_agree_on():
     got, n, total = consensus(["Asha Rao", "Ravi Das", "Kiran Paul"])
     assert (n, total) == (1, 3) and got == "Asha Rao"                      # no agreement: one each, the first reading is shown
     assert consensus([None, "", "  "]) == (None, 0, 0)
+
+
+def test_a_reading_that_goes_on_where_the_shown_one_stops_is_the_better_suggestion():
+    from cdi_adapter.names import prefer_complete
+    reads = ["Smita Gupta", "Smita Gupta Gangopadhyay", "Smith Gupta"]
+    assert prefer_complete("Smita Gupta", reads) == "Smita Gupta Gangopadhyay"
+    assert prefer_complete("Mr. Smita Gupta", reads) == "Smita Gupta Gangopadhyay"            # a title does not matter
+    assert prefer_complete("Smita Gupta Gangopadhyay", reads) == "Smita Gupta Gangopadhyay"   # never shortened
+    assert prefer_complete("Ravi Das", reads) == "Ravi Das"                                   # unrelated readings do not extend it
+    assert prefer_complete("Asha", ["Asha Rao Kumar Singh Verma"]) == "Asha"                  # not more than two extra words
+    assert prefer_complete(None, reads) is None

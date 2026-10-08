@@ -574,6 +574,12 @@ def _check_the_name(client: Any, image: bytes, blocks: list[dict[str, Any]], pay
     payload["_name_agreement"] = [agree, total]
     if chosen and ((first is None) or (agree >= 3 and not alike(first, chosen, 0.85))):
         payload["patient"]["name"] = chosen                 # no usable first reading, or most readings agree on a different spelling
+    from ..names import prefer_complete
+
+    now = payload["patient"].get("name")
+    fuller = prefer_complete(now, [n for n in payload["_name_reads"] if isinstance(n, str) and not org_like(n)]) if now else now
+    if fuller and fuller != now:
+        payload["patient"]["name"] = fuller                 # a reading that goes on where the shown one stops (a long name cut short)
     if settings.name_choice_votes:
         _suggest_first_names(client, images or [image], blocks, payload)
 
