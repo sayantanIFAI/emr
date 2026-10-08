@@ -638,6 +638,26 @@ def _both_pictures(pg: dict[str, Any], one: bytes) -> list[bytes]:
     return out[:2]
 
 
+def _collapse_repeats(x: Any) -> Any:
+    """A list in which the same entry is written again and again (a model loop) keeps its first copy: the same text, ignoring the
+    evidence it points at and its case, is one entry."""
+    if isinstance(x, dict):
+        return {k: _collapse_repeats(v) for k, v in x.items()}
+    if not isinstance(x, list):
+        return x
+    seen: set[str] = set()
+    out: list[Any] = []
+    for item in x:
+        key = (item.get("text") or item.get("name") or "") if isinstance(item, dict) else item
+        key = " ".join(str(key).casefold().split()) if isinstance(key, str) and key.strip() else None
+        if key is not None and key in seen:
+            continue
+        if key is not None:
+            seen.add(key)
+        out.append(_collapse_repeats(item))
+    return out
+
+
 def _unescape(x: Any) -> Any:
     """The model sometimes writes an ampersand as ``&amp;`` (and a quote as ``&quot;``): prescriptions never contain HTML,
     so every string in the answer is turned back into the plain characters."""
@@ -740,7 +760,7 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
         raise
 
     if isinstance(payload, dict):
-        payload = _unescape(payload)
+        payload = _collapse_repeats(_unescape(payload))
     if not settings.abha_enabled and isinstance(payload, dict) and isinstance(payload.get("patient"), dict):
         payload["patient"]["abha_id"] = None        # never used, whatever the model wrote: not for matching, not stored
 

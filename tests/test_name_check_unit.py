@@ -126,3 +126,16 @@ def test_the_suggested_spellings_join_the_offered_readings_and_the_shown_name_do
 def test_a_title_is_not_part_of_the_name_words():
     assert X._name_tokens("Mr. Onkar Chowdhury") == ["Onkar", "Chowdhury"] and X._name_tokens("Smt Asha Rao") == ["Asha", "Rao"]
     assert X._name_tokens("Asha Rao") == ["Asha", "Rao"] and X._name_tokens("") == []
+
+
+def test_a_loop_that_wrote_the_same_entry_again_and_again_keeps_one_copy():
+    loop = [{"text": "As Pantocid-DIR (40)-1 tab OD", "evidence": [f"b{i}"]} for i in range(31, 73)]
+    got = X._collapse_repeats({"investigations": loop + [{"text": "HbA1c", "evidence": ["b2"]}, {"text": "hba1c ", "evidence": ["b9"]}],
+                               "advice": ["rest", "Rest", "diet"], "patient": {"name": "Asha Rao"}, "n": 3})
+    assert [i["text"] for i in got["investigations"]] == ["As Pantocid-DIR (40)-1 tab OD", "HbA1c"]
+    assert got["advice"] == ["rest", "diet"] and got["patient"] == {"name": "Asha Rao"} and got["n"] == 3
+    assert X._collapse_repeats([{"a": 1}, {"a": 1}]) == [{"a": 1}, {"a": 1}]                  # entries without a text are left alone
+
+
+def test_the_extraction_has_a_lower_token_ceiling_and_a_stronger_retry_penalty():
+    assert settings.extract_max_tokens_mlp1 == 800 and settings.vllm_retry_repetition_penalty >= 1.15

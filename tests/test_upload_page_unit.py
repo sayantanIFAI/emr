@@ -106,3 +106,22 @@ def test_the_prescription_picture_opens_in_a_viewer_with_zoom_pages_and_the_orig
 
 def test_the_name_as_written_is_shown_beside_the_confirm_box_and_opens_the_page():
     assert "api/intake/name-crop" in ADMIN_PAGE and "As written on the paper" in ADMIN_PAGE and 'class="img-open"' in ADMIN_PAGE
+
+
+# ---- two tabs: capture & upload (the whole flow) and Extracted (collapsed list)
+def test_there_are_two_tabs_and_the_upload_flow_and_the_extracted_list_sit_in_their_own_panel():
+    assert 'role="tablist"' in ADMIN_PAGE and 'id="tab-up"' in ADMIN_PAGE and 'id="tab-ex"' in ADMIN_PAGE
+    up = ADMIN_PAGE[ADMIN_PAGE.index('id="panel-up"'):ADMIN_PAGE.index('id="panel-ex"')]
+    ex = ADMIN_PAGE[ADMIN_PAGE.index('id="panel-ex"'):ADMIN_PAGE.index("<dialog")]
+    for block in ('id="patient-card"', 'id="form-card"', 'id="emr-card"', 'id="jobs"', 'id="camera"'):
+        assert block in up and block not in ex                                              # token, capture, upload and progress: tab 1
+    for block in ('id="patients-card"', 'id="psearch"', 'id="groups"', 'id="map-card"'):
+        assert block in ex and block not in up                                              # the extracted list (and the mapping table): tab 2
+    assert 'id="panel-ex" role="tabpanel" aria-labelledby="tab-ex" hidden' in ADMIN_PAGE     # opens on the upload tab
+
+
+def test_a_read_prescription_goes_to_the_extracted_tab_collapsed_with_a_badge_and_a_link():
+    done = ADMIN_PAGE[ADMIN_PAGE.index("async function loadResultsOf"):ADMIN_PAGE.index("async function loadDoc")]
+    assert "OPEN.add" not in done                                                           # nothing is opened: the list stays collapsed
+    assert "NEWCOUNT++" in done and 'id="ex-badge"' in ADMIN_PAGE and "Read: open in Extracted" in ADMIN_PAGE
+    assert "function showTab" in ADMIN_PAGE and "ArrowRight" in ADMIN_PAGE                  # keyboard: arrow keys move between the tabs

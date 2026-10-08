@@ -74,6 +74,12 @@ details.sec>summary{font-weight:650;font-size:15px;min-height:40px}
 #imgdlg .bar .grow{flex:1}
 #imgdlg .imgwrap{overflow:auto;height:calc(100% - 58px);background:#111;text-align:center}
 #imgdlg img{display:block;margin:0 auto;max-width:none;background:#fff}
+.tabs{display:flex;gap:6px;border-bottom:2px solid var(--line,#e4eaf4);margin:0 0 16px;flex-wrap:wrap}
+.tabs button{appearance:none;border:none;background:transparent;font:inherit;font-weight:650;font-size:15px;color:var(--muted,#5b6b8c);
+  padding:12px 18px;min-height:48px;cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px;border-radius:10px 10px 0 0;display:inline-flex;gap:8px;align-items:center}
+.tabs button[aria-selected=true]{color:var(--blue-700,#1e40af);border-bottom-color:var(--blue-600,#1d4ed8)}
+.tabs button:hover{background:var(--blue-50,#eef4ff)}
+.tabs button:focus-visible{outline:none;box-shadow:var(--ring,0 0 0 3px rgba(29,78,216,.3))}
 .maptbl{width:100%;border-collapse:collapse;font-size:14px}
 .maptbl th,.maptbl td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line,#e4eaf4);vertical-align:top}
 .maptbl .off td{opacity:.5}
@@ -89,6 +95,11 @@ details.sec>summary{font-weight:650;font-size:15px;min-height:40px}
   <p class="cf-sub">Enter the token and mobile number, add the pages of the prescription, and read the result. Values marked <b>needs a check</b> are doubtful: nothing is guessed.</p>
 </div>
 <main class="cf-main">
+  <div class="tabs" role="tablist" aria-label="Prescription reader">
+    <button type="button" role="tab" id="tab-up" aria-selected="true" aria-controls="panel-up">Capture &amp; upload</button>
+    <button type="button" role="tab" id="tab-ex" aria-selected="false" aria-controls="panel-ex" tabindex="-1">Extracted <span class="pill ok" id="ex-badge" hidden></span></button>
+  </div>
+<section id="panel-up" role="tabpanel" aria-labelledby="tab-up">
   <div class="card" id="patient-card">
     <h2>1 · Token and mobile number</h2>
     <p class="hint">Both are needed before you can upload. The result is kept under this patient (name and mobile number).</p>
@@ -146,8 +157,10 @@ details.sec>summary{font-weight:650;font-size:15px;min-height:40px}
     <div id="jobs"></div>
   </div>
 
+</section>
+<section id="panel-ex" role="tabpanel" aria-labelledby="tab-ex" hidden>
   <div class="card" id="patients-card">
-    <h2>Patients and prescriptions</h2>
+    <h2>Extracted prescriptions</h2>
     <p class="hint">Type part of a mobile number (or a name) to find a patient. Results are grouped by patient, not by upload.</p>
     <div class="fld suggest" style="max-width:520px">
       <label for="psearch">Find a patient</label>
@@ -176,6 +189,7 @@ details.sec>summary{font-weight:650;font-size:15px;min-height:40px}
       </div>
     </details>
   </div>
+</section>
   <p class="muted" style="text-align:center"><a href="/status">System status</a></p>
 </main>
 
@@ -212,6 +226,22 @@ const STAGES=["ingest","classify","ocr","extract","terminology","validate"];
 const STAGE_LABEL={ingest:"Ingest",classify:"Classify",ocr:"OCR",extract:"Extract",terminology:"Terminology",validate:"Validate"};
 const TICK='<svg class="tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
 let TIMER=null,JOBS=[];
+// ---- two tabs: the whole capture / upload flow, and the Extracted list. A read prescription is sent to Extracted (collapsed).
+let NEWCOUNT=0;
+function showTab(name){
+  const ex=name==="ex";
+  $("#panel-up").hidden=ex; $("#panel-ex").hidden=!ex;
+  for(const [id,on] of [["#tab-up",!ex],["#tab-ex",ex]]){ const t=$(id); t.setAttribute("aria-selected",String(on)); t.tabIndex=on?0:-1; }
+  if(ex){ NEWCOUNT=0; badge(); }
+  try{ history.replaceState(null,"",ex?"#extracted":"#upload"); }catch(e){}
+}
+function badge(){ const b=$("#ex-badge"); b.hidden=!NEWCOUNT; b.textContent=NEWCOUNT?(NEWCOUNT+" new"):""; }
+$("#tab-up").onclick=()=>showTab("up");
+$("#tab-ex").onclick=()=>showTab("ex");
+$(".tabs").addEventListener("keydown",e=>{
+  if(e.key!=="ArrowLeft"&&e.key!=="ArrowRight") return;
+  const ex=$("#tab-ex").getAttribute("aria-selected")==="true"; showTab(ex?"up":"ex"); $(ex?"#tab-up":"#tab-ex").focus();
+});
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 // ---- token and mobile number: the upload appears only when both are filled --------------------------------
@@ -480,7 +510,8 @@ async function loadResultsOf(job){                     // the finished job's JSO
   for(const r of (j.results||[])){
     const it=r.intake||{}, name=it.patient_name||((r.patient||{}).name||{}).value||null, phone=it.phone||job.phone;
     const g=addDoc(phone,name,{document_id:r.document_id,token_no:it.token_no||job.token,filename:r.filename,status:r.status,result:r,uploaded:new Date().toISOString()});
-    OPEN.add("g:"+g.key); OPEN.add("d:"+r.document_id);
+    job.groupKey=g.key;                                            // collapsed in the Extracted tab; the badge says something new arrived
+    if($("#tab-ex").getAttribute("aria-selected")!=="true"){ NEWCOUNT++; badge(); }
   }
   renderGroups();
 }
@@ -715,9 +746,15 @@ function renderJobs(){
       +' · token '+esc(job.token)+' '+state+'</summary><div class="det-body">'
       +(job.err?'<div class="jerr" role="alert">'+esc(job.err)+'</div>':'')
       +(j?'<div style="overflow-x:auto"><table class="emr-grid">'+jobGrid(j)+'</table></div>':'<div class="muted">sent — waiting to start…</div>')
+      +(job.finished&&!job.err?'<div style="margin-top:8px"><button type="button" class="btn btn-primary btn-sm job-go" data-job="'+esc(job.id)+'">Read: open in Extracted ›</button></div>':'')
       +'<div class="muted" style="margin-top:6px">'+esc(job.names.join(", "))+'</div></div></details>';
   }).join("");
 }
+$("#jobs").addEventListener("click",e=>{
+  const b=e.target.closest(".job-go"); if(!b) return;
+  const job=JOBS.find(j=>j.id===b.dataset.job); showTab("ex");
+  if(job&&job.groupKey){ OPEN.add("g:"+job.groupKey); renderGroups(); const el=document.querySelector('details.grp[data-k="'+CSS.escape(job.groupKey)+'"]'); if(el) el.scrollIntoView({block:"nearest"}); }
+});
 $("#jobs").addEventListener("toggle",e=>{ const el=e.target; if(el instanceof HTMLDetailsElement&&el.dataset.j){ if(el.open) JOB_CLOSED.delete(el.dataset.j); else JOB_CLOSED.add(el.dataset.j); } },true);
 
 // ---- the lab test mapping table -------------------------------------------------------------------------
@@ -753,6 +790,7 @@ $("#m-add").onclick=async()=>{
   $("#m-err").textContent=""; for(const id of ["#m-alias","#m-canon","#m-loinc","#m-note"]) $(id).value=""; loadMap();
 };
 gate(); renderGroups();
+showTab(location.hash==="#extracted"?"ex":"up");
 </script>
 </body>
 </html>

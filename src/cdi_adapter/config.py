@@ -155,7 +155,7 @@ class Settings(BaseSettings):
                                             # adds grammar-mask cost per token; turn off to
                                             # rely on client-side repair + retry instead.
     vllm_retry_on_length: bool = True         # an answer that hits the token limit is retried once (a repetition loop)
-    vllm_retry_repetition_penalty: float = 1.05
+    vllm_retry_repetition_penalty: float = 1.2   # 1.05 did not break a loop that wrote the same line 42 times (MEASURED on a real page)
     vllm_guided_api: str = "structured_outputs"   # structured_outputs (vLLM >= 0.12) | guided_json (older: newer ones ignore it)
     vllm_guided_backend: str = "xgrammar"
 
@@ -356,7 +356,7 @@ class Settings(BaseSettings):
     #          stamp / signature are NOT asked for.
     #   full = everything the schema has (the earlier behaviour).
     extract_profile: str = "mlp1"
-    extract_max_tokens_mlp1: int = 1500
+    extract_max_tokens_mlp1: int = 800     # a normal answer is 300-600 tokens; a repetition loop is cut after ~9 s, not ~17 s
     extract_per_page: bool = True          # a paper of several pages: each page is read on its own, then the latest dated visit is picked
     extract_max_tokens: int = 1400       # base; long doc types get more (see extract/prompt.py)
 
