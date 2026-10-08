@@ -285,6 +285,8 @@ def test_html_entities_the_model_wrote_are_turned_back_into_plain_text():
     ("To review after 2 wks of HbA1c/PBS/PPBS/S. Lipase", ["HbA1c", "PBS", "PPBS", "S. Lipase"]),
     ("Review with {HbA1c / FBS / TSH}", ["HbA1c", "FBS", "TSH"]),
     ("F/U after 1 month with LFT, KFT & CBC", ["LFT", "KFT", "CBC"]),
+    ("Revisit with FBS, PPBS", ["FBS", "PPBS"]), ("Consult with CBC/LFT", ["CBC", "LFT"]), ("Visit after 1 month with HbA1c", ["HbA1c"]),
+    ("Consultation for TSH, FT4", ["TSH", "FT4"]), ("Rev with FBS", ["FBS"]),
     ("Take rest for 2 weeks", []),                                           # no follow-up word
     ("Review after 2 weeks", []),                                            # nothing after it
 ])

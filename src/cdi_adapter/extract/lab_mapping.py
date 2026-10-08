@@ -230,6 +230,23 @@ SEED: list[tuple[str, str, str | None, str]] = [
     ("fever profile", "Fever profile", None, "a panel; what it holds is the lab's"),
     ("blood for fever profile", "Fever profile", None, "a panel; what it holds is the lab's"),
     ("fever panel", "Fever profile", None, "a panel; what it holds is the lab's"),
+    # printed checklist names (MEASURED on a real pad: FPG, 2hr PPG, ACR were not in the lists at all)
+    ("fpg", "Fasting blood sugar", "1558-6", ""),
+    ("ppg", "Post-prandial blood sugar", None, ""),
+    ("2hr ppg", "Post-prandial blood sugar", None, ""),
+    ("2 hr ppg", "Post-prandial blood sugar", None, ""),
+    ("2hrs ppg", "Post-prandial blood sugar", None, ""),
+    ("ppg 2hr", "Post-prandial blood sugar", None, ""),
+    ("ppg 2 hr", "Post-prandial blood sugar", None, ""),
+    ("acr", "Urine albumin/creatinine ratio", None, ""),
+    ("urine acr", "Urine albumin/creatinine ratio", None, ""),
+    ("urine albumin creatinine ratio", "Urine albumin/creatinine ratio", None, ""),
+    # investigations written under "Adv" (MEASURED on a real page: "Digital OPG, FBS, BT, CT" was read by the model 6 of 6 times and still missed)
+    ("opg", "OPG (orthopantomogram)", None, "a dental panoramic X-ray"),
+    ("digital opg", "OPG (orthopantomogram)", None, "a dental panoramic X-ray"),
+    ("dental opg", "OPG (orthopantomogram)", None, "a dental panoramic X-ray"),
+    ("orthopantomogram", "OPG (orthopantomogram)", None, "a dental panoramic X-ray"),
+    ("ct", "CT (clotting time or CT scan)", None, "ambiguous: clotting time (with BT) or a CT scan; either is an order when it is listed, check which"),
     ("ekg", "ECG", None, ""),
     ("electrocardiogram", "ECG", None, ""),
 ]
@@ -291,6 +308,15 @@ def _load() -> dict[str, Mapped]:
     return rows
 
 
+def _flat(rows: dict[str, Mapped]) -> dict[str, Mapped]:
+    """The rows keyed by their name with the spaces taken out (rebuilt only when the rows were)."""
+    with _lock:
+        if _cache.get("flat_for") is not rows:
+            _cache["flat"] = {key.replace(" ", ""): m for key, m in rows.items() if " " in key and len(key.replace(" ", "")) >= 6}
+            _cache["flat_for"] = rows
+        return _cache["flat"]
+
+
 def lookup(name: str | None) -> Mapped | None:
     """The standard test this written name stands for, or None."""
     k = norm(name)
@@ -305,6 +331,9 @@ def lookup(name: str | None) -> Mapped | None:
             hit = rows.get(k[len(lead):])
             if hit is not None:
                 return hit
+    flat = k.replace(" ", "")
+    if len(flat) >= 6:                                      # "LIPIDPROFILE" / "FreeT4": the readers drop the spaces
+        return _flat(rows).get(flat)
     return None
 
 

@@ -178,14 +178,15 @@ def page_views(image: bytes) -> list[bytes]:
     return out
 
 
-def tests_from_text(blocks: list[dict[str, Any]] | None) -> list[str]:
+def tests_from_text(blocks: list[dict[str, Any]] | None, colour: Any = None) -> list[str]:
     """The tests the text of the page holds by where they are written (``test_cluster.scan``): a strong name anywhere, an ambiguous
     one (vitamin D) only beside other tests, a one-letter handwriting slip only inside a group of tests. Candidates only: each
     still has to pass the gate in ``followup_tests``."""
-    return [f.test for f in test_cluster.scan(blocks)]
+    return [f.test for f in test_cluster.scan(blocks, colour)]
 
 
-_REVIEW_LINE = re.compile(r"(?i)\b(?:review|receive|revisit|f/?u|follow[\s-]?up|come)\b")
+# the words a doctor writes for "come back with these tests": review, revisit, visit, consult / consultation, follow up, f/u, rv, rev
+_REVIEW_LINE = re.compile(r"(?i)\b(?:review|rev|rv|r/v|receive|revisit|visit|consult(?:ation)?|f/?u|follow[\s-]?up|come)\b")
 _AFTER_WORD = re.compile(r"(?i)\b(?:of|with|for)\b\s*[{\[(]?\s*|[{\[(]\s*")
 
 
@@ -226,7 +227,7 @@ def _same_test(a: str, b: str) -> bool:
 
 
 def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list[str],
-                   blocks: list[dict[str, Any]] | None = None) -> list[str]:
+                   blocks: list[dict[str, Any]] | None = None, colour: Any = None) -> list[str]:
     """Tests the full-page answer missed. Lab tests are the point of the product and the doctor writes them anywhere (beside
     the follow-up line, down the left or right side, at the bottom), so the page is looked at again in several enlarged
     views at once (plus the follow-up line's own region when there is one). Only plain strings with a letter, at most 12,
@@ -268,7 +269,7 @@ def followup_tests(client: Any, image: bytes, follow_up: str | None, known: list
                     for one in [*split_tests(item), *test_cluster.answer_tests(item)]:      # and the tests inside a garbled string, word by word
                         seen.append((norm(one), job[2]))
                         items.append((one, False))
-    for item in [*tests_from_lines(blocks, follow_up), *tests_from_text(blocks)]:     # read from the text of the page, not by the model
+    for item in [*tests_from_lines(blocks, follow_up), *tests_from_text(blocks, colour)]:     # read from the text of the page, not by the model
         items.extend((one, True) for one in split_tests(item))
     answered = {job[2] for job, a in zip(jobs, answers) if isinstance(a, list)}
     need = min(max(1, settings.second_look_min_views), len(answered)) if answered else 1

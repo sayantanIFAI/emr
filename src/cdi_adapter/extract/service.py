@@ -713,6 +713,24 @@ def _page_image(pg: dict[str, Any]) -> bytes:
     return storage.get_bytes(storage.key_from_uri(uri or pg["image_uri"]))
 
 
+def _colour_page(pg: dict[str, Any], model_image: bytes) -> Any:
+    """The colour source page as an array when it is the same size as the picture the readers saw (so the text blocks' boxes fit it); else
+    None. The picture the model reads may be a grey, contrast-normalised copy with no colour in it."""
+    try:
+        pre = pg.get("preproc")
+        uri = pre.get("src_uri") if isinstance(pre, dict) else None
+        if not uri:
+            return None
+        import cv2
+        import numpy as np
+
+        src = cv2.imdecode(np.frombuffer(storage.get_bytes(storage.key_from_uri(uri)), np.uint8), cv2.IMREAD_COLOR)
+        ref = cv2.imdecode(np.frombuffer(model_image, np.uint8), cv2.IMREAD_COLOR)
+        return src if src is not None and ref is not None and src.shape[:2] == ref.shape[:2] else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _both_pictures(pg: dict[str, Any], one: bytes) -> list[bytes]:
     """The page as the colour source AND as the normalized grey copy (the name is looked at in both), or just ``one``."""
     out = [one]
@@ -888,11 +906,25 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
         names = [one for io in payload.get("investigations") or [] for one in split_tests(_coded_text(io)[0])]
         fu = payload.get("follow_up")
         fu_text = fu if isinstance(fu, str) else (fu.get("text") if isinstance(fu, dict) else None)
-        extra = resolve_llm.followup_tests(client, image, fu_text, names, focus_blocks)    # looks even when no follow-up was found
+        # a list with one test the lists place is a list of tests (the follow-up text and the advice lines): the model wrote "Digital OPG, FBS, BJS CT" as the
+        # booking text and listed no test. The placed names go in by their standard name, the entries nothing places go in to be checked.
+        have_names = {re.sub(r"[^a-z0-9]", "", n.casefold()) for n in names}
+        for src in [fu_text, *[_coded_text(a)[0] for a in payload.get("advice") or []]]:
+            for name, as_read, placed in test_cluster.list_entries(src):
+                key = re.sub(r"[^a-z0-9]", "", name.casefold())
+                if key in have_names:
+                    continue
+                have_names.add(key)
+                payload.setdefault("investigations", []).append({"text": name, "evidence": [], "source": "list_context"})
+                payload["_text_scan"][name] = (f"listed together with a test the lists place ('{as_read}')" if placed else
+                                               f"written in a list with a test, not recognised (read as '{as_read}')")
+                names.append(name)
+        colour = None if not settings.marks_enabled else _colour_page(pages[latest_no - 1] if len(pages) > 1 and 1 <= latest_no <= len(pages) else pages[0], image)     # for the pen marks
+        extra = resolve_llm.followup_tests(client, image, fu_text, names, focus_blocks, colour=colour)    # looks even when no follow-up was found
         if extra:                          # tests written with the follow-up line, found by the focused second look
             payload.setdefault("investigations", []).extend({"text": t, "evidence": [], "source": "second_look"} for t in extra)
             payload["_second_look"] = list(extra)          # kept so the result can say where these tests came from
-            payload["_text_scan"].update({f.test: f.note for f in test_cluster.scan(focus_blocks) if f.test in extra})
+            payload["_text_scan"].update({f.test: f.note for f in test_cluster.scan(focus_blocks, colour) if f.test in extra})
             names += extra
         payload["_test_resolved"] = resolve_llm.resolve_tests(client, image, names)
         # the same for medicines: a name close to reference medicine names is a CHOICE among them, never free text

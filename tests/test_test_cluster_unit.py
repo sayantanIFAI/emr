@@ -161,3 +161,41 @@ def test_the_doctors_abbreviated_test_after_a_name_is_not_part_of_the_name(piece
 def test_words_that_only_look_like_sodium_potassium_are_left_alone():
     for word in ("Napkin", "Nakshatra", "Nature kit", "Panel"):
         assert T.repair_piece(word, evidence=False) is None
+
+
+# ---- MEASURED on a real page: the reader merged several lines into one; "Digital OPG, FBS, BT, CT" sat after "Adv"
+def test_the_words_after_a_heading_that_orders_tests_are_a_declared_test_region():
+    line = "4 Difficulty in ? 5 Gren or Strain Adv Digital OP? 2 FBS, BJS CT"
+    got = [f.test for f in T.scan([B(line, 60, 580, 403, 758)])]
+    assert "FBS" in got and "CT (clotting time or CT scan)" not in got and any(x.casefold().startswith("digital op") for x in got)
+    assert "FBS" not in [f.test for f in T.scan([B(line.replace("Adv ", ""), 60, 580, 403, 758)])]       # without the heading it is a long mixed line
+
+
+@pytest.mark.parametrize("line", ["Adv: FBS, BT, CT", "Inv - CBC, CRP", "Investigations: LFT", "Ix FBS"])
+def test_each_heading_word_that_orders_tests_opens_a_test_region(line):
+    assert T.scan([B("some words before this " + line, 3, 100, 600, 130)])
+
+
+def test_opg_and_ct_are_in_the_lists_with_their_ambiguity_said():
+    from cdi_adapter.extract import lab_mapping
+    assert lab_mapping.lookup("Digital OPG").canonical == "OPG (orthopantomogram)"
+    ct = lab_mapping.lookup("CT")
+    assert ct.canonical.startswith("CT (clotting time or CT scan") and "ambiguous" in ct.note
+
+
+# ---- a list with one test the lists place is a list of tests (MEASURED: the model wrote "Digital OPG, FBS, BJS CT" as the booking text)
+def test_every_entry_of_a_list_that_holds_one_placed_test_is_a_test():
+    got = T.list_entries("Digital OPG, FBS, BJS CT")
+    assert [(n, placed) for n, _a, placed in got] == [("Digital OPG", True), ("FBS", True), ("BJS", False), ("CT", True)]       # as read; the lists name them
+    assert T.list_entries("FBS, BP, OD, KT") == [("FBS", "FBS", True), ("KT", "KT", False)]            # BP and OD are labels, not entries
+    assert T.list_entries("Adv: 1) Digital OPG 2) FBS, BT, CT")[1][0] == "FBS"
+
+
+@pytest.mark.parametrize("text", ["Rest, drink water, avoid sugar", "Review after 2 weeks", "BJS, XYZ", "", None, "Take tablet after food"])
+def test_a_list_with_no_placed_test_is_not_a_list_of_tests(text):
+    assert T.list_entries(text) == []
+
+
+def test_ordinary_words_beside_a_test_are_not_entries_only_capital_abbreviations_are():
+    got = [n for n, _a, _p in T.list_entries("Adv: FBS, rest, Diet control, KT")]
+    assert got == ["FBS", "KT"]

@@ -18,8 +18,11 @@ import statistics
 from dataclasses import dataclass
 from typing import Any
 
+from ..logging import get_logger
 from . import lab_mapping, lab_resolve
 from .test_names import _STRONG, is_known_test, looks_like_medicine, split_tests
+
+log = get_logger(__name__)
 
 # a line with the marks of a medicine order is not looked at (and is never part of a group)
 _MEDICINE_LINE = re.compile(r"(?i)\b(?:tabs?|tablets?|caps?|capsules?|syp|syr|inj|drops?|oint|cream|gel|susp)\b\.?"
@@ -43,7 +46,7 @@ _CONFUSABLE: set[tuple[str, str]] = {p for a, b in _PAIRS for p in ((a, b), (b, 
 class Found:
     test: str          # the name to list (what the lab lists place)
     as_read: str       # what the readers wrote
-    why: str           # "exact" | "beside" | "near" | "marker"
+    why: str           # "exact" | "beside" | "near" | "marker" | "marked"
 
     @property
     def note(self) -> str:
@@ -51,7 +54,8 @@ class Found:
         return {"exact": "found in the page's text",
                 "beside": f"found in the page's text beside other tests (read as '{self.as_read}')",
                 "near": f"read as '{self.as_read}' (one letter from {self.test}), written beside other tests",
-                "marker": f"'{self.as_read}' is written: the vitamin D test"}[self.why]
+                "marker": f"'{self.as_read}' is written: the vitamin D test",
+                "marked": f"printed on the pad and marked by hand ('{self.as_read}')"}[self.why]
 
 
 def placed_text(gram: str) -> str | None:
@@ -102,8 +106,18 @@ class _Hit:
     kind: str          # "strong" | "weak" | "near" | "marker"
 
 
+# a heading that says what follows is ordered: "Adv" (advice), "Inv" / "Investigations", "Ix". The words after it, in the same line, are a
+# declared test region: a long line is no reason to doubt a test name there. MEASURED on a real page: the reader merged several lines into
+# "4 Difficulty in ? 5 Gren or Strain Adv Digital OP? 2 FBS, BJS CT", and FBS was dropped as a test name in a long mixed line.
+_HEADING = re.compile(r"(?i)\b(?:adv(?:ice|ised)?|inv(?:estigations?)?|ix)\b\s*[:\-\u2013\u2014]*")
+
+
 def _line_hits(line: str, long_rule: bool = True) -> list[_Hit]:
     """Every test-like thing in one line: the longest run of up to three words the lists place wins, and the line goes on."""
+    heading = _HEADING.search(line) if long_rule else None
+    if heading and line[heading.end():].strip():
+        before = _line_hits(line[:heading.start()], long_rule) if line[:heading.start()].strip() else []
+        return before + _line_hits(line[heading.end():], long_rule=False)       # the region after the heading: every word is checked
     out: list[_Hit] = []
     sentence = len(re.findall(r"[A-Za-z0-9?]+", line)) > 4
     for piece in split_tests(line):
@@ -189,8 +203,40 @@ def _groups(items: list[tuple[int, dict[str, Any]]]) -> list[list[int]]:
     return list(out.values())
 
 
-def scan(blocks: list[dict[str, Any]] | None) -> list[Found]:
-    """The tests the page's text holds, by position (see the module text). Medicine lines are never looked at. Candidates only."""
+def _by_pen_marks(found: list[tuple[int, Found]], blocks: list[dict[str, Any]] | None, colour: Any) -> list[tuple[int, Found]]:
+    """Among the tests found in PRINTED lines (the pad's own checklist), keep and mark the ones a pen mark touches, and drop the rest, but
+    only on a page where at least one printed name is marked. Anything else (no colour page, no printed line, no mark anywhere) is
+    returned unchanged."""
+    if colour is None or not blocks or not found:
+        return found
+    try:
+        from .marks import Marks
+
+        mk = Marks(colour, list(blocks))
+    except Exception as exc:  # noqa: BLE001 - the marks are an extra: never cost the page
+        log.warning("marks_failed", error=str(exc)[:200])
+        return found
+    verdict: dict[int, bool] = {}
+    for k, (idx, f) in enumerate(found):
+        b = blocks[idx]
+        if f.why == "exact" and mk.is_printed(b):
+            verdict[k] = mk.marked(b, str(b.get("text") or ""), f.as_read)
+    if not any(verdict.values()):
+        return found
+    out: list[tuple[int, Found]] = []
+    for k, (idx, f) in enumerate(found):
+        if k not in verdict:
+            out.append((idx, f))
+        elif verdict[k]:
+            out.append((idx, Found(f.test, f.as_read, "marked")))
+    return out
+
+
+def scan(blocks: list[dict[str, Any]] | None, colour: Any = None) -> list[Found]:
+    """The tests the page's text holds, by position (see the module text). Medicine lines are never looked at. Candidates only.
+    ``colour`` is the colour page (an array the size of the picture the text blocks were found in): with it, a test name in a PRE-PRINTED
+    list that has a pen mark by it is marked ("marked"), and when at least one printed name on the page is marked the printed names with
+    no mark are not orders and are dropped (``marks.py``). A page with no marked printed name is left exactly as it was."""
     items = [(i, b) for i, b in enumerate(blocks or []) if str(b.get("text") or "").strip()
              and not _MEDICINE_LINE.search(str(b["text"])) and not looks_like_medicine(str(b["text"]))]
     hits = [_line_hits(str(b["text"])) for _, b in items]
@@ -214,6 +260,7 @@ def scan(blocks: list[dict[str, Any]] | None) -> list[Found]:
                 else:
                     continue
                 found.append((items[g][0], f))
+    found = _by_pen_marks(found, blocks, colour)
     found.sort(key=lambda kv: kv[0])                                   # the page's reading order
     seen: set[str] = set()
     out: list[Found] = []
@@ -318,3 +365,48 @@ def repair_investigations(payload: dict[str, Any]) -> dict[str, str]:
             text = ", ".join(new)
             inv[i] = {**inv[i], "text": text} if isinstance(inv[i], dict) else text
     return notes
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# a LIST in which one entry is a test is a list of tests. MEASURED on a real page: the model wrote "Digital OPG, FBS, BJS CT" into the follow-up
+# text and left the investigations empty ("No lab test is written on this page"). FBS is a test the lists place, so the other entries beside
+# it (OPG, CT, and "BJS", which nothing places) are tests too: the placed ones by their standard name, the others as entries to check.
+# capital-letter abbreviations that are not tests (dose timings, forms, titles): never entries of a test list
+_NON_TEST_ABBR = frozenset("od bd tds qid sos hs pc ac stat prn tab cap inj syp mg ml iv im sc po rx dr mr mrs ms no yes ok wt ht fu rt lt rs".split())
+
+
+def list_entries(text: str | None) -> list[tuple[str, str, bool]]:
+    """``(name, as read, placed)`` for each entry of a list that holds at least one test the lists place EXACTLY; ``[]`` when none does. The
+    words after a heading that orders tests (Adv, Inv ...) are the list. An entry the lists do not place is kept only when it is a short
+    capital-letter abbreviation as read ("BJS": the shape of a test abbreviation); ordinary words (rest, diet, avoid) are not entries."""
+    if not text or not text.strip():
+        return []
+    heading = list(_HEADING.finditer(text))
+    region = text[heading[-1].end():] if heading else text
+    entries: list[tuple[str, str, bool]] = []
+    for piece in split_tests(region):
+        words = re.findall(r"[A-Za-z0-9?]+", piece)
+        i = 0
+        while i < len(words):
+            for n in (3, 2, 1):
+                gram = " ".join(words[i:i + n])
+                got = placed_text(gram) if i + n <= len(words) else None
+                if got and not all(w.casefold() in _FORM_LABELS for w in gram.split()):
+                    entries.append((got, gram, True))
+                    i += n
+                    break
+            else:
+                w = words[i]
+                if w.isalpha() and w.isupper() and 2 <= len(w) <= 5 and w.casefold() not in _NON_TEST_ABBR and w.casefold() not in _FORM_LABELS:
+                    entries.append((w, w, False))
+                i += 1
+    if not any(placed for _n, _a, placed in entries):
+        return []
+    out: list[tuple[str, str, bool]] = []
+    seen: set[str] = set()
+    for name, as_read, placed in entries:
+        key = re.sub(r"[^a-z0-9]", "", name.casefold())
+        if key not in seen:
+            seen.add(key)
+            out.append((name, as_read, placed))
+    return out

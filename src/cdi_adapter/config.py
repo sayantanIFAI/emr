@@ -335,6 +335,9 @@ class Settings(BaseSettings):
     # a second, focused look at the page for tests written WITH the follow-up instruction ("review after 2 wks {HbA1c / FBS
     # / TSH}"): the full-page answer often misses them. One short extra call, only when a follow-up is written.
     followup_second_look: bool = True
+    marks_enabled: bool = False          # pen marks on a pre-printed list of tests (extract/marks.py). OFF: MEASURED on one real page it credited a whole
+                                         # printed line as marked, missed a tick and took a handwritten result value for a mark; turn on only after it is
+                                         # measured on labelled pages
     name_surname_votes: bool = True      # the surname is put to the model as a choice among the readings and the closest common surnames
     second_look_min_views: int = 2       # a test the second look adds must be read in this many DIFFERENT views of the page (one view alone can
                                          # make a test up: "PT / APTT" was read as "PT/INR" by the whole-page view alone, 5 of 6 times)
