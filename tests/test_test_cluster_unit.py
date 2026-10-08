@@ -88,3 +88,10 @@ def test_a_test_name_inside_a_long_line_of_other_words_is_weak_evidence_not_a_te
 def test_a_line_the_reader_calls_printed_is_still_read_because_handwritten_tests_are_often_called_that():
     # MEASURED: "CBCCRP" and "VCRP" are handwritten and were labelled printed; skipping printed lines lost them on two real pages
     assert [f.test for f in T.scan([{"text": "CBCCRP", "bbox": [989, 917, 1065, 945], "recognition": {"state": "printed"}}])] == ["CBC", "CRP"]
+
+
+def test_a_handwritten_line_with_one_garbled_word_keeps_its_tests():
+    # MEASURED on a real page: "! CBC Blood Engn ? PP ?" is 6 words, 2 of them tests: taken (the printed footer is 1 of 8 or fewer)
+    line = B("! CBC Blood Engn ? PP ?", 6, 846, 413, 999)
+    assert [f.test for f in T.scan([line])] == ["CBC", "PP"]
+

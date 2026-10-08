@@ -863,6 +863,10 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
         _check_the_name(client, page1_image, page1_blocks, payload, _both_pictures(pages[0], page1_image))     # the name is on the first page
 
     if isinstance(payload, dict) and cls["doc_type"] in ("prescription", "opd_note", "referral"):
+        from . import header
+        header.fill(payload, page1_blocks)         # the printed header's doctor and clinic, when the model left them empty
+
+    if isinstance(payload, dict) and cls["doc_type"] in ("prescription", "opd_note", "referral"):
         # the hybrid step: a test the gate cannot place but that is close to reference names is put to the model
         # as a CHOICE among those names (never free text); what it picks is kept apart from what was written
         names = [one for io in payload.get("investigations") or [] for one in split_tests(_coded_text(io)[0])]

@@ -127,7 +127,7 @@ def _line_hits(line: str) -> list[_Hit]:
         for _ in range(written - 1):
             out.append(_Hit(slip_hit.test, slip_hit.as_read, "near"))
     total = len(re.findall(r"[A-Za-z0-9?]+", line))
-    if total >= 6 and sum(h.kind == "strong" for h in out) / total < 0.4:
+    if total >= 6 and sum(h.kind == "strong" for h in out) / total < 0.25:
         # a long line that is mostly other words (the clinic's printed list of services, a sentence): a test name inside it is weak
         # evidence, like an ambiguous name (MEASURED: "ECG" in a printed footer "Endoscopy Ultrasonography Echocardiography ...")
         out = [_Hit(h.test, h.as_read, "weak") if h.kind == "strong" else h for h in out]

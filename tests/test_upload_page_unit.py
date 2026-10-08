@@ -127,6 +127,8 @@ def test_a_read_prescription_is_shown_as_the_current_one_in_the_capture_tab_and_
     assert "function retireCurrent" in ADMIN_PAGE and "NEWCOUNT+=n" in ADMIN_PAGE and 'id="ex-badge"' in ADMIN_PAGE
     send = ADMIN_PAGE[ADMIN_PAGE.index("TOKEN_ASKED.clear(); TOKEN_CLASH.clear();"):ADMIN_PAGE.index("JOBS.unshift")]
     assert "retireCurrent()" in send                                                                 # the next prescription is sent: the current one moves
+    assert "JOBS=JOBS.filter(x=>!x.finished||x.err)" in send                                         # and its progress card leaves the Capture tab (a stopped one stays)
+    assert "JOBS=JOBS.filter(x=>x===job||!x.finished||x.err)" in done                                # also when the next one is read
     lst = ADMIN_PAGE[ADMIN_PAGE.index("function renderGroups"):ADMIN_PAGE.index("function docBody") if ADMIN_PAGE.index("function docBody") > ADMIN_PAGE.index("function renderGroups") else None]
     assert "!d.current" in lst                                                                       # the Extracted list shows only the history
     assert "function showTab" in ADMIN_PAGE and "ArrowRight" in ADMIN_PAGE                           # keyboard: arrow keys move between the tabs

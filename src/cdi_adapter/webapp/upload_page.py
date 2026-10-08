@@ -492,6 +492,7 @@ $("#go").onclick=async()=>{
   // mobile number are cleared so the next paper is never filed under this one by mistake.
   TOKEN_ASKED.clear(); TOKEN_CLASH.clear();                       // a token just used is looked up afresh next time
   retireCurrent();                                                 // the next prescription is on its way: the one shown moves to Extracted
+  JOBS=JOBS.filter(x=>!x.finished||x.err);                         // and its progress card goes with it (a stopped one stays: it needs a look)
   JOBS.unshift({id,token,phone,names:sent.map(p=>p.file.name),j:null,finished:false,err:""});
   for(const p of sent) if(p.url) URL.revokeObjectURL(p.url);
   PAGES=[]; SEND_KEY=null; SENDING=false; $("#hint").textContent="";
@@ -529,6 +530,7 @@ async function loadResultsOf(job){                     // the finished job's JSO
   for(const r of (j.results||[])){
     const it=r.intake||{}, name=it.patient_name||((r.patient||{}).name||{}).value||null, phone=it.phone||job.phone;
     retireCurrent();                                               // the one before moves to Extracted
+    JOBS=JOBS.filter(x=>x===job||!x.finished||x.err);              // its progress card leaves this tab with it
     const g=addDoc(phone,name,{document_id:r.document_id,token_no:it.token_no||job.token,filename:r.filename,status:r.status,result:r,uploaded:new Date().toISOString(),current:true});
     job.groupKey=g.key;
   }
