@@ -1,6 +1,8 @@
 """Which dated entry is the latest, across the pages and the entries below a ruled line (extract/visits.py)."""
 from __future__ import annotations
 
+import pytest
+
 from cdi_adapter.extract import visits as V
 
 
@@ -57,3 +59,9 @@ def test_dates_in_the_three_written_forms_are_compared_as_dates_not_text():
 def test_a_page_that_could_not_be_read_keeps_its_number():
     m = V.merge([_page("01/01/2026", ["A"]), None, _page("05/02/2026", ["B"])])
     assert m["_latest_page"] == 3 and [v["page"] for v in m["visits"]] == [3, 1]
+
+
+@pytest.mark.parametrize("word", ["None", "none", "null", "N/A", "nil", "-", "  "])
+def test_the_word_none_for_a_follow_up_is_nothing_not_a_follow_up(word):
+    m = V.merge([_page("05/01/2026", ["CBC"], word)])
+    assert m["follow_up"] is None and m["visits"][0]["follow_up"] is None

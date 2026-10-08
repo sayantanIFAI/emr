@@ -160,3 +160,28 @@ def test_the_result_does_not_list_a_test_the_page_does_not_support(monkeypatch):
     by = {t["as_written"]: t for t in res["lab_tests"]}
     assert not (by["CBC"].get("reason") or "").startswith(UNCONFIRMED)
     assert by["Holter monitoring"]["reason"].startswith(UNCONFIRMED)
+
+
+# ---- a list of tests written on one line is cut into its tests, never kept whole as well
+@pytest.mark.parametrize("written,expected", [
+    ("HbA1c/FBS/PPBS/S LIPASE TSH/FT4", ["HbA1c", "FBS", "PPBS", "S LIPASE", "TSH", "FT4"]),
+    ("HbA1c\FBS\PPBS", ["HbA1c", "FBS", "PPBS"]),
+    ("HbA1c|FBS|TSH", ["HbA1c", "FBS", "TSH"]),
+    ("TSH + FT4 + FT3", ["TSH", "FT4", "FT3"]),
+    ("CBC, LFT; KFT & TSH", ["CBC", "LFT", "KFT", "TSH"]),
+    ("HbA1c - FBS - PPBS", ["HbA1c", "FBS", "PPBS"]),
+    ("HbA1c-FBS-TSH", ["HbA1c", "FBS", "TSH"]),
+    ("HbA1c. FBS. PPBS", ["HbA1c", "FBS", "PPBS"]),
+    ("S LIPASE TSH", ["S LIPASE", "TSH"]),
+    ("HbA1c FBS PPBS", ["HbA1c", "FBS", "PPBS"]),
+])
+def test_a_list_of_tests_on_one_line_is_cut_into_its_tests(written, expected):
+    from cdi_adapter.extract.test_names import split_tests
+    assert split_tests(written) == expected
+
+
+@pytest.mark.parametrize("written", ["A/G ratio", "Urine R/E", "Urine R/E & C/S", "C/S", "CK-MB", "D-dimer", "Vitamin B-12", "S. Lipase",
+                                     "X-ray LS spine", "Blood urea nitrogen", "Lipid profile", "Urine culture", "Serum creatinine"])
+def test_a_name_that_is_one_test_is_never_cut(written):
+    from cdi_adapter.extract.test_names import split_tests
+    assert split_tests(written) == [written]

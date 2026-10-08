@@ -88,9 +88,73 @@ _RESULT_TAIL = re.compile(r"(?<=[A-Za-z]{3})\s*[-–:=]\s*\d{3,}(?:\.\d+)?\s*$|(
 _BRACKETS = re.compile(r"[{}\[\]]")
 
 
+_STRONG_SEP = re.compile(r"\s*[/\\|,;+&]\s*")                   # a list written with / \ | , ; + &
+_WEAK_SEP = re.compile(r"\s*(?:\s-\s|(?<=[A-Za-z0-9])-(?=[A-Za-z0-9])|\.(?=\s*[A-Za-z0-9]))\s*")   # " - ", "-", "." between names
+_SPECIMEN = frozenset("s sr serum plasma".split())
+# words that can be part of a test's own name: never taken as "another test" on their own
+_NOT_A_TEST_ALONE = frozenset("urine stool culture sensitivity sugar profile panel test tests routine function blood count "
+                              "examination exam general study scan screen".split())
+
+
+def _single_test(x: str) -> bool:
+    """True when ``x`` as a whole is ONE test the lists know (the mapping table, the national list, the abbreviation table).
+    A fuzzy match does not count: a long list must never "match" as if it were one test."""
+    from . import lab_resolve
+
+    rz = lab_resolve.resolve(x)
+    return rz is not None and not getattr(rz, "fuzzy", False)
+
+
+_RUN_EXTRA = frozenset("lipase amylase fructosamine ft3 ft4 hdl ldl vldl sgot sgpt alp ggt".split())
+
+
+def _run_test(w: str) -> bool:
+    """A single word that is a test on its own, for cutting ``"S LIPASE TSH"``: a test-only word (``_STRONG``) or one the lists
+    know; never a word that is also part of other names (urine, culture, profile ...)."""
+    k = w.casefold().strip(".")
+    return k not in _NOT_A_TEST_ALONE and (k in _STRONG or k in _RUN_EXTRA or _single_test(w))
+
+
+def _split_runs(piece: str) -> list[str]:
+    """``"S LIPASE TSH"`` -> ``"S LIPASE"``, ``"TSH"``: a piece made ONLY of an optional specimen word and known single tests
+    written one after another. Any other word in it (``"Blood urea nitrogen"``) leaves it whole."""
+    words = piece.split()
+    if len(words) < 2 or _single_test(piece):
+        return [piece]
+    out: list[str] = []
+    pending: list[str] = []
+    for w in words:
+        if w.casefold().strip(".") in _SPECIMEN:
+            pending.append(w)
+        elif _run_test(w):
+            out.append(" ".join([*pending, w]))
+            pending = []
+        else:
+            return [piece]
+    return out if len(out) >= 2 and not pending else [piece]
+
+
+def _split_composite(part: str) -> list[str]:
+    """One written part -> the tests in it. Cut on ``/ \\ | , ; + &`` (unless a piece is a single letter: ``"A/G ratio"``,
+    ``"Urine R/E"``, ``"C/S"`` are one test), and on `` - `` / ``-`` / ``.`` only when every piece is itself a known test
+    (``"HbA1c-FBS"`` yes, ``"CK-MB"`` / ``"S. Lipase"`` / ``"D-dimer"`` no). A piece that is several tests in a row is cut again."""
+    if _single_test(part):
+        return [part]
+    bits = [b.strip(" .") for b in _STRONG_SEP.split(part) if b.strip(" .")]
+    if len(bits) > 1:
+        if any(len(re.sub(r"[^A-Za-z]", "", b)) < 2 for b in bits):
+            return [part]                                  # "A/G", "R/E", "C/S": a slash inside ONE test's name
+        return [x for b in bits for x in _split_composite(b)]
+    weak = [b.strip(" .") for b in _WEAK_SEP.split(part) if b.strip(" .")]
+    if len(weak) > 1 and all(_single_test(b) for b in weak):
+        return weak
+    return _split_runs(part)
+
+
 def split_tests(text: str | None) -> list[str]:
-    """One entry per test: ``"CBC/KFT/LFT"`` -> CBC, KFT, LFT; ``"Blood: CBC, Urea, FBS"`` -> CBC, Urea, FBS. A name that
-    contains a space or a one-letter part (``"Urine R/E"``, ``"X-ray LS spine"``) is never cut."""
+    """One entry per test: ``"CBC/KFT/LFT"`` -> CBC, KFT, LFT; ``"HbA1c/FBS/PPBS/S LIPASE TSH/FT4"`` -> six tests;
+    ``"Blood: CBC, Urea, FBS"`` -> CBC, Urea, FBS. A name that is one test (``"Urine R/E"``, ``"A/G ratio"``, ``"CK-MB"``,
+    ``"X-ray LS spine"``) is never cut."""
     t = re.sub(r"^\s*(?:blood|serum|urine|adv(?:ice|ised)?|inv(?:estigations?)?|ix)\s*[:\-]\s*", "", (text or "").strip(), flags=re.I)
     if not t:
         return []
@@ -101,15 +165,7 @@ def split_tests(text: str | None) -> list[str]:
         part = _RESULT_TAIL.sub("", part).strip(" .")
         if not part:
             continue
-        spaced = [b.strip() for b in re.split(r"\s+/\s+", part)]               # "HbA1c / FBS / PPBS": a list, whatever the names
-        if len(spaced) > 1 and all(len(b) >= 2 for b in spaced):
-            out += [_RESULT_TAIL.sub("", b).strip(" .") for b in spaced]
-            continue
-        bits = part.split("/")
-        if len(bits) > 1 and " " not in part and all(len(b) >= 2 for b in bits):
-            out += [b for b in bits]
-        else:
-            out.append(part)
+        out += [_RESULT_TAIL.sub("", b).strip(" .") for b in _split_composite(part)]
     seen: set[str] = set()
     uniq = [x for x in out if x and not (x.casefold() in seen or seen.add(x.casefold()))]
     return uniq or [t]

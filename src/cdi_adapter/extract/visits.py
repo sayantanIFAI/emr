@@ -40,10 +40,16 @@ def _date(s: Any) -> datetime | None:
     return d
 
 
+_EMPTY_WORDS = frozenset(("none", "null", "nil", "n/a", "na", "-", "--", "not written", "not mentioned"))
+
+
 def _follow_text(v: Any) -> str | None:
+    """The follow-up text, or None. The model sometimes answers the word "None" for "nothing is written": that is nothing."""
     if isinstance(v, dict):
         v = v.get("text") or v.get("value")
-    return v.strip() if isinstance(v, str) and v.strip() else None
+    if not isinstance(v, str) or not v.strip() or v.strip().casefold() in _EMPTY_WORDS:
+        return None
+    return v.strip()
 
 
 def entries_of(payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -108,8 +114,7 @@ def merge(payloads: list[dict[str, Any]]) -> dict[str, Any]:
     if "investigation_preparation" in src:
         merged["investigation_preparation"] = copy.deepcopy(src["investigation_preparation"])
     merged["investigations"] = copy.deepcopy(latest["investigations"])
-    fu = latest["follow_up"]
-    merged["follow_up"] = _follow_text(fu) if not isinstance(fu, str) else (fu.strip() or None)
+    merged["follow_up"] = _follow_text(latest["follow_up"])
     merged["encounter_date"] = latest["date_text"]
     merged.pop("earlier_entries", None)
     if any(p.get("_partial") for p in pages):
