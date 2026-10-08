@@ -180,10 +180,10 @@ def test_fasting_and_post_prandial_blood_sugar_are_never_taken_for_one_test():
 
 
 @pytest.mark.parametrize("line,expected", [
-    ("vitam?? D", ["Vitamin d"]),                                    # MEASURED: the page's own text had it, nothing checked the text
+    ("vitam?? D", []),                                               # vitamin D on its own may be a supplement: not taken (beside tests it is)
     ("25(OH) vitamin D", ["vitamin D"]), ("CBC FBS PPBS", ["CBC", "FBS", "PPBS"]), ("PT ?/ATI", ["PT"]),
     ("Tabs. Glimepiride 10?/Generic", []), ("Tab. Sitaglin (10) 1tab a jor", []), ("Cap. Vitamin D3 60000 IU", []),
-    ("MR. Debabrata San?ar(63/M) DATE 16/03/24", []), ("STOP SMOKING", []), ("fas, fas", []), ("??? D", []),
+    ("MR. Debabrata San?ar(63/M) DATE 16/03/24", []), ("STOP SMOKING", []), ("fas, fas", ["FBS"]), ("??? D", []),
 ])
 def test_every_line_of_the_page_text_is_checked_word_by_word_against_the_lab_lists(line, expected):
     assert R.tests_from_text([{"text": line}]) == expected
@@ -191,8 +191,8 @@ def test_every_line_of_the_page_text_is_checked_word_by_word_against_the_lab_lis
 
 def test_a_test_in_the_page_text_is_listed_even_when_the_model_sees_nothing():
     cl = _Client({"tests": []})                                      # MEASURED: the tests prompt answered [] 24 of 24 times on this page
-    got = R.followup_tests(cl, b"img", None, known=["Tab. Glimepiride"], blocks=[{"text": "vitam?? D"}, {"text": "STOP SMOKING"}])
-    assert got == ["Vitamin d"]
+    got = R.followup_tests(cl, b"img", None, known=["Tab. Glimepiride"], blocks=[{"text": "CBC"}, {"text": "vitam?? D"}, {"text": "STOP SMOKING"}])
+    assert got == ["CBC", "Vitamin d"]                               # vitamin D is written beside CBC: a test
 
 
 def test_a_question_mark_for_an_unread_letter_fits_exactly_one_standard_test_or_nothing():

@@ -273,6 +273,7 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
     page_text = " ".join(str(b.get("text") or "") for b in inp.blocks)       # what the page readers saw
     facts_by_id = {str(f.get("id")): f for f in inp.facts}
     second_look = {_norm_name(x) for x in payload.get("_second_look") or [] if isinstance(x, str)}
+    text_scan = {_norm_name(k): v for k, v in (payload.get("_text_scan") or {}).items() if isinstance(k, str) and isinstance(v, str)}
     for t in buckets["lab_tests"]:
         key = t["as_written"]
         t["context"] = context.get(key, [])
@@ -306,6 +307,9 @@ def build_result(inp: ResultInputs) -> dict[str, Any]:
                 t["reason"] = SECOND_LOOK + (f": {t['reason']}" if t.get("reason") else "")
             else:
                 t["reason"] = UNCONFIRMED + (f": {t['reason']}" if t.get("reason") else "")
+        if _norm_name(key) in text_scan and t.get("status") != "rejected":
+            t["status"] = "needs_check"
+            t["reason"] = text_scan[_norm_name(key)] + ": please check it" + (f" ({t['reason']})" if t.get("reason") else "")
         if alt and rz is not None and t.get("status") != "rejected":
             t["status"] = "needs_check"
             t["reason"] = f"read as '{alt}' (chosen from the reference list by the model; check the page)" + (

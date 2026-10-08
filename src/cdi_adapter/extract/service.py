@@ -872,6 +872,8 @@ def extract_document(document_id: str, *, patient_id: str | None = None,
         if extra:                          # tests written with the follow-up line, found by the focused second look
             payload.setdefault("investigations", []).extend({"text": t, "evidence": [], "source": "second_look"} for t in extra)
             payload["_second_look"] = list(extra)          # kept so the result can say where these tests came from
+            from . import test_cluster
+            payload["_text_scan"] = {f.test: f.note for f in test_cluster.scan(focus_blocks) if f.test in extra}
             names += extra
         payload["_test_resolved"] = resolve_llm.resolve_tests(client, image, names)
         # the same for medicines: a name close to reference medicine names is a CHOICE among them, never free text

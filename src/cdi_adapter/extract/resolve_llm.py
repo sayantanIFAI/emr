@@ -17,7 +17,7 @@ from typing import Any
 
 from ..config import settings
 from ..logging import get_logger
-from . import lab_resolve, medicine_resolve
+from . import lab_resolve, medicine_resolve, test_cluster
 from .indian_codes import norm
 from .test_names import is_known_test, looks_like_medicine
 
@@ -178,47 +178,11 @@ def page_views(image: bytes) -> list[bytes]:
     return out
 
 
-_MEDICINE_LINE = re.compile(r"(?i)\b(?:tabs?|tablets?|caps?|capsules?|syp|syr|inj|drops?|oint|cream|gel|susp)\b\.?|\d\s*(?:mg|mcg|ml|gm|iu)\b|\b\d+\s*tabs?\b")
-
-
-def _placed_text(gram: str) -> str | None:
-    """The name to list when the lab lists place these words EXACTLY (the mapping table, the national list, the gazetteer), or when a
-    reading with ``?`` for unreadable letters fits exactly one standard test; otherwise None. A fuzzy match never counts."""
-    if sum(ch.isalpha() for ch in gram) < 2:
-        return None
-    if "?" in gram:
-        from . import lab_mapping
-
-        hit = lab_mapping.fit(gram)
-        return hit.alias.capitalize() if hit else None
-    rz = lab_resolve.resolve(gram)
-    return gram if rz is not None and not getattr(rz, "fuzzy", False) else None
-
-
 def tests_from_text(blocks: list[dict[str, Any]] | None) -> list[str]:
-    """Every line of text the readers produced, from every area of the page, checked word by word against the lab lists: the
-    longest run of up to three words the lists place wins, and the rest of the line goes on. Lines that carry the marks of a
-    medicine (Tab, Cap, mg, 1tab ...) are not looked at. Candidates only: each still has to pass the gate in ``followup_tests``."""
-    from .test_names import split_tests
-
-    out: list[str] = []
-    for b in blocks or []:
-        line = str(b.get("text") or "")
-        if not line.strip() or _MEDICINE_LINE.search(line) or looks_like_medicine(line):
-            continue
-        for piece in split_tests(line):
-            words = re.findall(r"[A-Za-z0-9?]+", piece)
-            i = 0
-            while i < len(words):
-                for n in (3, 2, 1):
-                    got = _placed_text(" ".join(words[i:i + n])) if i + n <= len(words) else None
-                    if got:
-                        out.append(got)
-                        i += n
-                        break
-                else:
-                    i += 1
-    return out
+    """The tests the text of the page holds by where they are written (``test_cluster.scan``): a strong name anywhere, an ambiguous
+    one (vitamin D) only beside other tests, a one-letter handwriting slip only inside a group of tests. Candidates only: each
+    still has to pass the gate in ``followup_tests``."""
+    return [f.test for f in test_cluster.scan(blocks)]
 
 
 _REVIEW_LINE = re.compile(r"(?i)\b(?:review|receive|revisit|f/?u|follow[\s-]?up|come)\b")

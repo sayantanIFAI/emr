@@ -1,0 +1,213 @@
+"""Tests are written together: find them in the page's own text by where they sit, with no model involved.
+
+A doctor writes the tests as a list, in one place (a box, a margin, the bottom of the page), often with no heading at all. So a
+name's NEIGHBOURS are evidence about it:
+
+- a STRONG test name (CBC, FBS, LFT, TSH ...) the lab lists place exactly is a test wherever it is written;
+- an AMBIGUOUS name (vitamin D, calcium, iron ...) is also a supplement: it is a test only beside other test evidence, or when
+  "25(OH)" is written with it. On its own, or among medicine lines, it is not taken;
+- a ONE-LETTER slip of a strong abbreviation ("fas" for FBS: handwriting makes b look like a) is taken only inside a group of
+  lines that also holds other test evidence, and is always marked "read as ...".
+
+Position decides what is "beside": lines whose boxes are close (a line or so apart, and near in width) form one group. Every
+name still has to pass the lab-test gate afterwards, and nothing found here is ever accepted without a person."""
+from __future__ import annotations
+
+import re
+import statistics
+from dataclasses import dataclass
+from typing import Any
+
+from . import lab_mapping, lab_resolve
+from .test_names import _STRONG, looks_like_medicine, split_tests
+
+# a line with the marks of a medicine order is not looked at (and is never part of a group)
+_MEDICINE_LINE = re.compile(r"(?i)\b(?:tabs?|tablets?|caps?|capsules?|syp|syr|inj|drops?|oint|cream|gel|susp)\b\.?"
+                            r"|\d\s*(?:mg|mcg|ml|gm|iu)\b|\b\d+\s*tabs?\b")
+# a word that also names a supplement: the name is a test only beside other test evidence
+_WEAK_WORDS = frozenset("vitamin vit iron calcium zinc magnesium folic potassium sodium".split())
+# "25(OH)", "25 OH", "2OH" (the 5 lost): the vitamin D test is written, whatever else the line says
+_MARKER = re.compile(r"(?i)(?<![0-9])(?:25|2)\s*[\(\[]?\s*oh\b")
+
+# letters handwriting makes look alike (one can be read as another); both directions
+_PAIRS = ("ab", "ao", "ae", "bh", "b6", "ce", "co", "eo", "hn", "il", "lt", "mn", "nu", "nr", "ps", "pb", "rs", "s5", "uv", "vy", "tf")
+_CONFUSABLE: set[tuple[str, str]] = {p for a, b in _PAIRS for p in ((a, b), (b, a))}
+
+
+@dataclass(frozen=True)
+class Found:
+    test: str          # the name to list (what the lab lists place)
+    as_read: str       # what the readers wrote
+    why: str           # "exact" | "beside" | "near" | "marker"
+
+    @property
+    def note(self) -> str:
+        """Where it came from, in words for the screen."""
+        return {"exact": "found in the page's text",
+                "beside": f"found in the page's text beside other tests (read as '{self.as_read}')",
+                "near": f"read as '{self.as_read}' (one letter from {self.test}), written beside other tests",
+                "marker": f"'{self.as_read}' is written: the vitamin D test"}[self.why]
+
+
+def placed_text(gram: str) -> str | None:
+    """The name to list when the lab lists place these words EXACTLY (the mapping table, the national list, the gazetteer), or when
+    a reading with ``?`` for unreadable letters fits exactly one standard test; otherwise None. A fuzzy match never counts."""
+    if sum(ch.isalpha() for ch in gram) < 2:
+        return None
+    if "?" in gram:
+        hit = lab_mapping.fit(gram)
+        return hit.alias.capitalize() if hit else None
+    rz = lab_resolve.resolve(gram)
+    return gram if rz is not None and not getattr(rz, "fuzzy", False) else None
+
+
+def _abbreviations() -> frozenset[str]:
+    """The strong abbreviations a slip is compared with: 3 to 6 letters, a test and nothing else."""
+    out = {w for w in _STRONG if 3 <= len(w) <= 6 and w.isalpha()}
+    for key in lab_mapping._load():                                   # noqa: SLF001 - the table's own keys
+        if " " not in key and 3 <= len(key) <= 6 and key.isalpha() and key not in _WEAK_WORDS:
+            out.add(key)
+    return frozenset(out)
+
+
+def near_miss(token: str) -> str | None:
+    """The ONE strong abbreviation this word is a single handwriting-confusable letter away from (``fas`` -> ``FBS``), else None.
+    Words that already are a test, and words with two or more differing letters, are not slips."""
+    w = token.casefold()
+    if not (3 <= len(w) <= 6 and w.isalpha()):
+        return None
+    abbr = _abbreviations()
+    if w in abbr:
+        return None
+    hits = []
+    for a in abbr:
+        if len(a) != len(w):
+            continue
+        diff = [(x, y) for x, y in zip(w, a) if x != y]
+        if len(diff) == 1 and diff[0] in _CONFUSABLE:
+            hits.append(a)
+    return hits[0].upper() if len(hits) == 1 else None
+
+
+@dataclass
+class _Hit:
+    test: str
+    as_read: str
+    kind: str          # "strong" | "weak" | "near" | "marker"
+
+
+def _line_hits(line: str) -> list[_Hit]:
+    """Every test-like thing in one line: the longest run of up to three words the lists place wins, and the line goes on."""
+    out: list[_Hit] = []
+    sentence = len(re.findall(r"[A-Za-z0-9?]+", line)) > 4
+    for piece in split_tests(line):
+        words = re.findall(r"[A-Za-z0-9?]+", piece)
+        i = 0
+        while i < len(words):
+            for n in (3, 2, 1):
+                gram = " ".join(words[i:i + n])
+                got = placed_text(gram) if i + n <= len(words) else None
+                if got:
+                    weak = any(w.casefold() in _WEAK_WORDS for w in (*gram.split(), *got.split()))
+                    if weak and sentence:
+                        i += n                                  # an ambiguous name inside a sentence ("calcium rich diet ...") is not a list entry
+                        break
+                    out.append(_Hit(got, gram, "weak" if weak else "strong"))
+                    i += n
+                    break
+            else:
+                slip = near_miss(words[i])
+                if slip:
+                    out.append(_Hit(slip, words[i], "near"))
+                i += 1
+    # the same slip written twice in a list ("fas, fas") is two entries: split_tests listed it once, so the repeats are added back
+    for slip_hit in [x for x in out if x.kind == "near"]:
+        written = len(re.findall(r"(?i)(?<![a-z])" + re.escape(slip_hit.as_read) + r"(?![a-z])", line))
+        for _ in range(written - 1):
+            out.append(_Hit(slip_hit.test, slip_hit.as_read, "near"))
+    m = _MARKER.search(line)
+    if m:
+        out.append(_Hit("Vitamin D", m.group(0), "marker"))               # beside or not, "25(OH)" is the vitamin D test
+    return out
+
+
+def _box(b: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    try:
+        x0, y0, x1, y1 = (float(v) for v in b["bbox"][:4])
+    except (KeyError, TypeError, ValueError, IndexError):
+        return None
+    return (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
+
+
+def _groups(items: list[tuple[int, dict[str, Any]]]) -> list[list[int]]:
+    """Groups of lines (indexes into ``items``) that sit close together. Close = centres within 1.6 line heights vertically and the
+    boxes within 3 line heights sideways; a box more than 3 line heights tall (a loose box around a whole paragraph) joins nothing.
+    Lines without a box are grouped with the line before and after them in reading order."""
+    boxes = [_box(b) for _, b in items]
+    heights = [bb[3] - bb[1] for bb in boxes if bb]
+    lh = min(60.0, max(12.0, statistics.median(heights))) if heights else 30.0
+    parent = list(range(len(items)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def join(i: int, j: int) -> None:
+        parent[find(i)] = find(j)
+
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            a, b = boxes[i], boxes[j]
+            if a is None or b is None:
+                if j == i + 1:
+                    join(i, j)                                    # reading order is all there is
+                continue
+            if (a[3] - a[1]) > 3 * lh or (b[3] - b[1]) > 3 * lh:
+                continue
+            dy = abs((a[1] + a[3]) / 2 - (b[1] + b[3]) / 2)
+            gap = max(0.0, max(a[0], b[0]) - min(a[2], b[2]))
+            if dy <= 1.6 * lh and gap <= 3 * lh:
+                join(i, j)
+    out: dict[int, list[int]] = {}
+    for i in range(len(items)):
+        out.setdefault(find(i), []).append(i)
+    return list(out.values())
+
+
+def scan(blocks: list[dict[str, Any]] | None) -> list[Found]:
+    """The tests the page's text holds, by position (see the module text). Medicine lines are never looked at. Candidates only."""
+    items = [(i, b) for i, b in enumerate(blocks or []) if str(b.get("text") or "").strip()
+             and not _MEDICINE_LINE.search(str(b["text"])) and not looks_like_medicine(str(b["text"]))]
+    hits = [_line_hits(str(b["text"])) for _, b in items]
+    found: list[tuple[int, Found]] = []
+    for group in _groups(items):
+        allh = [h for g in group for h in hits[g]]
+        strong = sum(h.kind == "strong" for h in allh)
+        marker = sum(h.kind == "marker" for h in allh)
+        weak = sum(h.kind == "weak" for h in allh)
+        near = sum(h.kind == "near" for h in allh)
+        for g in group:
+            for h in hits[g]:
+                if h.kind == "strong":
+                    f = Found(h.test, h.as_read, "exact")
+                elif h.kind == "marker":
+                    f = Found(h.test, h.as_read, "marker")
+                elif h.kind == "weak" and strong + near + marker >= 1:
+                    f = Found(h.test, h.as_read, "beside")
+                elif h.kind == "near" and strong + marker + weak + (near - 1) >= 1:
+                    f = Found(h.test, h.as_read, "near")
+                else:
+                    continue
+                found.append((items[g][0], f))
+    found.sort(key=lambda kv: kv[0])                                   # the page's reading order
+    seen: set[str] = set()
+    out: list[Found] = []
+    for _, f in found:
+        mapped = lab_mapping.lookup(f.test)                              # "vit D" and "Vitamin D" are one test
+        k = (mapped.canonical if mapped else re.sub(r"[^a-z0-9]", "", f.test.casefold())).casefold()
+        if k not in seen:
+            seen.add(k)
+            out.append(f)
+    return out
